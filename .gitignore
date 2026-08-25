@@ -41,3 +41,6 @@ yarn-error.log*
 /.wrangler/
 /outputs/
 /work/
+
+# typescript incremental build state
+tsconfig.tsbuildinfo
