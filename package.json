@@ -16,7 +16,7 @@
     "desktop:open": "npm run desktop:build && electron .",
     "desktop:mac": "npm run desktop:build && electron-builder --mac",
     "desktop:windows": "npm run desktop:build && electron-builder --win --x64",
-    "desktop:release": "npm run desktop:build && electron-builder --mac --win --x64",
+    "desktop:release": "npm run desktop:build && electron-builder --mac && electron-builder --win --x64",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
