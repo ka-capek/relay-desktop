@@ -4,7 +4,7 @@ This document is the authoritative engineering guide for coding agents working
 on Relay. Read it before changing code, running release commands, modifying Git
 or GitHub authentication, or publishing anything.
 
-It describes the repository as implemented at Relay `0.4.0`. When this document
+It describes the repository as implemented at Relay `0.5.0`. When this document
 and the code disagree, treat the code as the immediate source of truth and
 update this document in the same change.
 
@@ -80,7 +80,7 @@ must also be checked manually.
 
 - Public repository: <https://github.com/ka-capek/relay-desktop>
 - Default branch: `main`
-- Current release line: `v0.4.0`
+- Current release line: `v0.5.0`
 - Release page: <https://github.com/ka-capek/relay-desktop/releases>
 - App ID: `dev.relay.gitclient`
 - Electron product name: `Relay`

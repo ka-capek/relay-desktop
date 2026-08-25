@@ -469,7 +469,7 @@ test("keeps native repository and multi-account workflows wired", async () => {
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
-  assert.match(packageJson, /"version": "0\.4\.0"/);
+  assert.match(packageJson, /"version": "0\.5\.0"/);
   // The menu labels now live in the shared definition both the native menu and
   // the Windows in-window menu bar are built from.
   assert.match(applicationMenu, /Clone Repository…/);

@@ -9,8 +9,8 @@ with Git and GitHub CLI bundled in the installer.
 Download the ready-to-use installers from the
 [latest GitHub release](https://github.com/ka-capek/relay-desktop/releases/latest):
 
-- Windows 64-bit: `Relay-Setup-0.4.0-x64.exe`
-- macOS Apple Silicon: `Relay-0.4.0-arm64.dmg`
+- Windows 64-bit: `Relay-Setup-0.5.0-x64.exe`
+- macOS Apple Silicon: `Relay-0.5.0-arm64.dmg`
 
 The builds are currently unsigned, so Windows SmartScreen or macOS Gatekeeper
 may ask for confirmation the first time Relay is opened.
