@@ -59,6 +59,152 @@ Nothing below has been seen running on Windows.
 - A **real non-GitHub SSH host** has not been used. The clone, fetch, and push
   tests run against a local Git SSH transport, not a live server.
 
+## Header and chrome refinements
+
+**Problem:** Feedback from a packaged Windows x64 run: the header reads poorly
+next to macOS, and the "Current repository" caption is noise on both platforms.
+On macOS the window controls now share the single action row, which pushes every
+control right by the width of the traffic lights.
+
+### Work
+
+- Remove the "Current repository" caption from the repository picker on both
+  platforms. The repository name and owner are the content; the label is not.
+- On macOS, give the traffic lights their own slim row again and let the
+  repository action row start flush at the left edge, with no indent reserved
+  for them. This is the opposite of the consolidation done for 0.5.0 and is
+  deliberate: the indent costs more than the row it saved.
+- Keep Windows at one title row carrying the Relay name, the menus, and the
+  native window controls.
+- Replace the "R" placeholder mark with Relay's actual application icon, drawn
+  slightly larger than the current mark.
+- Re-audit the Windows header against macOS once the above lands, since the
+  original report was that Windows looks clearly worse.
+
+### Acceptance criteria
+
+- Neither platform shows a "Current repository" caption.
+- On macOS the traffic lights sit on their own row and the action row content
+  is flush left.
+- The app icon appears in place of the "R" mark at a larger size, and stays
+  crisp on a HiDPI display.
+- Nothing clips or overlaps at the 820px minimum window width on either
+  platform.
+
+## Repository row refinements
+
+**Problem:** The selected repository row carries a green bar down its left edge,
+and the change count sits inline after the pinned-account avatar rather than at
+a consistent right edge, so counts do not line up down the list.
+
+### Work
+
+- Remove the green selection bar. The selected row keeps its background tint.
+- Right-align the change count so counts line up down the list regardless of
+  repository name length or whether a pinned-account avatar is present.
+- Keep the count clear of the remove button that appears on hover.
+
+### Acceptance criteria
+
+- No green bar on the selected row.
+- Change counts share a right edge down the whole list.
+- The count and the hover remove button never overlap.
+
+## Show only repositories the account can push to
+
+**Problem:** The clone browser lists every repository the account can see,
+including ones it can only read. Cloning a repository that cannot be pushed to
+is rarely what the user wants, and it makes the list much longer than useful.
+
+### Work
+
+- Use the `permissions` object the GitHub REST API returns for each repository
+  and keep only those with `push` (or `maintain`/`admin`).
+- Decide explicitly whether this is a filter the user can turn off or an
+  unconditional rule, and make the UI say which.
+- Do not add a second API round trip per repository; `/user/repos` already
+  returns `permissions`.
+- Archived repositories cannot be pushed to even with push permission; decide
+  and document how they are treated.
+- Say clearly in the picker when repositories were hidden, so a user looking
+  for a specific read-only repository is not left confused.
+
+### Acceptance criteria
+
+- The clone browser lists only repositories the active account can push to.
+- The behaviour is discoverable rather than silent.
+- No extra API request per repository, and pagination still works.
+
+## GitHub profile pictures
+
+**Problem:** Account avatars are generated initials on a flat colour. GitHub
+already has the user's avatar.
+
+### Work
+
+- Read `avatar_url` from the GitHub profile response and persist it with the
+  account. It is a public URL, not a credential.
+- Fetch avatars in the main process, not the renderer, and pass them to the
+  renderer as data rather than letting the renderer make network requests.
+  The renderer must not gain network access to do this.
+- Cache them on disk under the Electron user-data folder so the app does not
+  refetch on every launch or depend on being online.
+- Keep the initials avatar as the fallback for a failed fetch, an offline
+  start, or an account with no avatar. Do not show a broken image.
+- Apply them everywhere an avatar appears: the account switcher, the account
+  menu, Manage accounts, the commit identity line, and the pinned-account mark
+  on repository rows.
+
+### Acceptance criteria
+
+- Connected accounts show their real GitHub picture.
+- The app still works offline and falls back to initials cleanly.
+- No avatar request is made from the renderer.
+
+## Choose the commit email when adding an account
+
+**Problem:** Connecting an account picks a commit email automatically and the
+user only finds out later, under Manage accounts. The choice belongs in the
+connect flow.
+
+### Work
+
+- After a successful OAuth login, ask which email the new account should use
+  for commits, before returning to the main window.
+- Offer the addresses GitHub actually knows for the account, including the
+  numeric-ID noreply address, rather than only a free-text field. This needs
+  the `user:email` scope; if the scope is unavailable, fall back to the
+  noreply address plus a free-text field rather than failing.
+- Keep the existing rule that a blank value means the noreply address.
+- Reuse the existing validation and the existing email modal where practical
+  instead of building a second one.
+- Do not block the login on it: if the user dismisses the prompt, the account
+  is still connected with the noreply default.
+
+### Acceptance criteria
+
+- Connecting an account asks for the commit email as part of the flow.
+- Known GitHub addresses are offered, with noreply always among them.
+- Dismissing the prompt still leaves a working, connected account.
+
+## Resizable panes
+
+**Problem:** Every pane is a fixed width: the repository sidebar, the file list,
+the commit list. On a wide display the diff is cramped while the sidebar wastes
+space, and on a narrow one the reverse.
+
+Deliberately deferred. Raised together with the items above but not wanted yet,
+and it interacts with the native rewrite, which would have to implement it a
+second time.
+
+### Work
+
+- Make the repository sidebar, the changes file pane, and the history commit
+  pane resizable by dragging their dividers.
+- Persist each width, and clamp to sensible minimums so a pane cannot be
+  dragged shut by accident.
+- Provide a keyboard-accessible way to resize, and reset-to-default.
+
 ## Replace Electron with a native C++ client
 
 **Problem:** Relay is an Electron application, and the cost is visible in the
