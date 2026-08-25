@@ -1,0 +1,120 @@
+{
+  "name": "relay-desktop",
+  "version": "0.4.0",
+  "description": "A multi-account Git desktop client.",
+  "author": "Relay",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
+    "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
+    "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
+    "desktop:build": "vite build --config vite.desktop.config.ts",
+    "desktop:open": "npm run desktop:build && electron .",
+    "desktop:mac": "npm run desktop:build && electron-builder --mac",
+    "desktop:windows": "npm run desktop:build && electron-builder --win --x64",
+    "desktop:release": "npm run desktop:build && electron-builder --mac --win --x64",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "db:generate": "drizzle-kit generate"
+  },
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "dev.relay.gitclient",
+    "productName": "Relay",
+    "asar": true,
+    "directories": {
+      "output": "outputs/installers"
+    },
+    "files": [
+      "desktop-dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png",
+      "extraResources": [
+        {
+          "from": "runtime/git/mac-arm64",
+          "to": "git"
+        },
+        {
+          "from": "runtime/gh/mac-arm64",
+          "to": "gh"
+        }
+      ],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "artifactName": "Relay-${version}-${arch}.${ext}"
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "extraResources": [
+        {
+          "from": "runtime/git/win-x64",
+          "to": "git"
+        },
+        {
+          "from": "runtime/gh/win-x64",
+          "to": "gh"
+        }
+      ],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Relay-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.2",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.37.1",
+    "@eslint/js": "9.39.4",
+    "@next/eslint-plugin-next": "16.2.6",
+    "@tailwindcss/postcss": "4.2.1",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "@vitejs/plugin-rsc": "0.5.26",
+    "drizzle-kit": "0.31.10",
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3",
+    "eslint": "9.39.4",
+    "eslint-plugin-jsx-a11y": "6.10.2",
+    "eslint-plugin-react": "7.37.5",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "16.4.0",
+    "react-server-dom-webpack": "19.2.6",
+    "tailwindcss": "4.2.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.59.3",
+    "vinext": "1.0.0-beta.2",
+    "vite": "8.0.13",
+    "wrangler": "4.92.0"
+  },
+  "type": "module"
+}
