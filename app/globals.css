@@ -246,20 +246,48 @@ input[type="checkbox"] { width: 13px; height: 13px; accent-color: var(--green); 
 .diff-empty { padding: 36px 18px; color: #8a938f; font-size: var(--text-sm); }
 .diff-empty-state { min-width: 420px; }
 
-.history-view { padding: 18px 24px; overflow: auto; background: #fafbf9; }
-.history-date { padding: 0 0 12px 36px; color: #748079; font-size: var(--text-sm); }
-.history-item { width: 100%; min-height: 62px; display: flex; align-items: center; gap: 14px; padding: 0 13px; border: 0; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; }
-.history-item:hover { background: white; box-shadow: 0 2px 9px rgba(29,40,34,.07); }
-.timeline { width: 16px; align-self: stretch; display: grid; place-items: center; position: relative; }
-.timeline::before { content: ""; position: absolute; top: 0; bottom: 0; width: 1px; background: #d7ddd8; }
-.timeline i { position: relative; width: 9px; height: 9px; border-radius: 50%; border: 2px solid #6e8d7c; background: #fafbf9; }
-.history-copy { flex: 1; }
-.history-copy strong, .history-copy small { display: block; }
-.history-copy strong { font-size: var(--text-body); }
-.history-copy small { margin-top: 4px; color: #84908a; font: var(--text-meta) var(--font-geist-mono); }
-.history-author { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 50%; background: #dae4dd; color: #43584c; font-size: var(--text-badge); font-weight: 700; }
-.history-arrow { color: #939b97; font-size: 20px; }
-.history-empty { margin: 20px 36px; color: #7f8984; font-size: var(--text-sm); }
+.history-layout { display: grid; grid-template-columns: 330px minmax(0, 1fr); min-height: 0; background: #fafbf9; }
+.commit-pane { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); border-right: 1px solid var(--line); background: white; }
+.commit-search { display: flex; align-items: center; gap: 7px; height: 40px; padding: 0 12px; border-bottom: 1px solid var(--line-soft); color: #89928e; }
+.commit-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; font-size: var(--text-sm); color: var(--ink); }
+.commit-list { min-height: 0; overflow-y: auto; }
+.commit-day { position: sticky; top: 0; z-index: 1; padding: 8px 13px; background: #f4f6f3; border-bottom: 1px solid var(--line-soft); color: #5f6a64; font-size: var(--text-meta); font-weight: 650; }
+.commit-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 13px; border: 0; border-bottom: 1px solid #f0f2ef; background: white; text-align: left; cursor: pointer; }
+.commit-row:hover { background: #f7f9f7; }
+.commit-row.selected { background: #eef3ef; box-shadow: inset 3px 0 var(--green); }
+.commit-row:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+.commit-copy { flex: 1; min-width: 0; }
+.commit-copy strong { display: block; font-size: var(--text-body); font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit-copy small { display: block; margin-top: 4px; color: #7d8782; font: var(--text-meta) var(--font-geist-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit-refs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.commit-refs i { padding: 2px 6px; border: 1px solid #cfdcd4; border-radius: 5px; background: #eef5f0; color: #3d6551; font-size: var(--text-badge); font-style: normal; }
+.history-author { width: 26px; height: 26px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: #dae4dd; color: #43584c; font-size: var(--text-badge); font-weight: 700; }
+.history-state { display: flex; align-items: center; justify-content: center; gap: 9px; padding: 26px 16px; color: #7f8984; font-size: var(--text-sm); text-align: center; }
+.history-state.compact { padding: 14px; font-size: var(--text-meta); }
+.history-state.error { flex-wrap: wrap; color: #a04e43; }
+.history-state.error button { border: 1px solid #d9ded9; border-radius: 6px; padding: 5px 10px; background: white; color: #4f7562; cursor: pointer; font-size: var(--text-meta); }
+.history-end { padding: 14px; color: #8a938f; font-size: var(--text-meta); text-align: center; }
+
+.commit-detail { min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.commit-heading { padding: 16px 18px 12px; border-bottom: 1px solid var(--line-soft); }
+.commit-heading-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.commit-heading h3 { margin: 0; font-size: var(--text-md); font-weight: 650; letter-spacing: -.01em; }
+.commit-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.commit-actions button { display: flex; align-items: center; gap: 5px; border: 1px solid #d9ded9; border-radius: 6px; padding: 5px 9px; background: white; color: #4f7562; cursor: pointer; font-size: var(--text-meta); }
+.commit-actions button:hover { background: #f0f5f1; }
+.commit-body { margin: 10px 0 0; padding: 10px 11px; border-radius: 7px; background: #f5f7f4; color: #46534d; font: var(--text-sm)/1.55 var(--font-geist-mono); white-space: pre-wrap; word-break: break-word; }
+.commit-meta { display: grid; gap: 5px; margin: 12px 0 0; }
+.commit-meta > div { display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: 10px; }
+.commit-meta dt { color: #7b8580; font-size: var(--text-meta); }
+.commit-meta dd { margin: 0; color: #46534d; font-size: var(--text-meta); overflow-wrap: anywhere; }
+.commit-meta code { font: var(--text-meta) var(--font-geist-mono); }
+.commit-detail .modal-note { margin: 12px 0 0; }
+.commit-files-heading { display: flex; align-items: center; justify-content: space-between; padding: 9px 18px; border-bottom: 1px solid var(--line-soft); background: #f7f9f6; color: #6d7772; font-size: var(--text-meta); }
+.commit-files { flex: 0 0 auto; max-height: 230px; overflow-y: auto; border-bottom: 1px solid var(--line); }
+.commit-files .file-item { min-height: 46px; }
+.commit-files .file-item:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+.commit-diff { flex: 1; min-height: 0; overflow: auto; background: #fcfcfb; padding-bottom: 24px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 .empty-workspace { min-height: 100%; display: grid; align-content: center; justify-items: center; padding: 30px; color: #77827c; text-align: center; }
 .empty-workspace .empty-glyph { width: 45px; height: 45px; display: grid; place-items: center; margin-bottom: 11px; border-radius: 13px; background: #e5eee8; color: var(--green); font-size: 22px; }

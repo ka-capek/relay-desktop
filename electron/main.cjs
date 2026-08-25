@@ -7,6 +7,9 @@ const {
   fetchOrigin,
   getFileDiff,
   pushOrigin,
+  readCommitDetail,
+  readCommitFileDiff,
+  readHistoryPage,
   readRepository,
   readRepositorySummary,
   switchBranch,
@@ -415,6 +418,19 @@ function registerIpc() {
   });
 
   ipcMain.handle("relay:get-file-diff", (_event, repositoryPath, filePath) => getFileDiff(repositoryPath, filePath));
+
+  // History is fetched on demand rather than shipped inside the repository
+  // payload, so opening a repository does not pay for its whole history.
+  ipcMain.handle("relay:read-history", (_event, repositoryPath, options) => readHistoryPage(repositoryPath, {
+    skip: options?.skip,
+    limit: options?.limit,
+    anchor: options?.anchor,
+  }));
+
+  ipcMain.handle("relay:read-commit", (_event, repositoryPath, hash) => readCommitDetail(repositoryPath, hash));
+
+  ipcMain.handle("relay:read-commit-diff", (_event, repositoryPath, hash, filePath) =>
+    readCommitFileDiff(repositoryPath, hash, filePath));
 
   ipcMain.handle("relay:commit", async (_event, input) => {
     const store = readStore();

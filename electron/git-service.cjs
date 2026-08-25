@@ -209,6 +209,167 @@ async function readRepositorySummary(repositoryPath) {
   };
 }
 
+const HISTORY_BATCH_LIMIT = 200;
+
+// Commit hashes and file paths arrive over IPC and are therefore untrusted.
+// A hash is checked for shape here and for membership of this repository by
+// commitExists below; paths always travel after a "--" separator.
+function assertCommitHash(hash) {
+  const value = String(hash || "").trim();
+  if (!/^[0-9a-f]{7,40}$/i.test(value)) throw new Error("Invalid commit hash.");
+  return value;
+}
+
+// Proves the object is a commit in this repository, so a hash copied from an
+// unrelated clone cannot be inspected through an open repository.
+async function assertCommitInRepository(repositoryPath, hash) {
+  await git(repositoryPath, ["cat-file", "-e", `${hash}^{commit}`]).catch(() => {
+    throw new Error("That commit is not in this repository.");
+  });
+  return hash;
+}
+
+function parseHistoryPage(logText) {
+  return logText.split("\x1e").map((record) => record.trim()).filter(Boolean).map((record) => {
+    const [fullHash, hash, parents, title, author, email, date, refs] = record.split("\x1f");
+    return {
+      fullHash,
+      hash,
+      parents: (parents || "").split(" ").filter(Boolean),
+      title,
+      author,
+      email,
+      date,
+      refs: (refs || "").split(", ").map((value) => value.trim()).filter(Boolean),
+    };
+  });
+}
+
+/**
+ * Reads one page of history.
+ *
+ * Paging is anchored to an explicit commit rather than to HEAD. If HEAD moves
+ * while the user is scrolling, later pages still come from the same history,
+ * so commits are neither skipped nor repeated at a batch boundary.
+ */
+async function readHistoryPage(repositoryPath, options = {}) {
+  const root = await git(repositoryPath, ["rev-parse", "--show-toplevel"]);
+  const head = await git(root, ["rev-parse", "HEAD"]).catch(() => "");
+  if (!head) return { commits: [], head: null, anchor: null, endOfHistory: true };
+
+  const skip = Math.max(0, Math.trunc(Number(options.skip) || 0));
+  const limit = Math.min(HISTORY_BATCH_LIMIT, Math.max(1, Math.trunc(Number(options.limit) || 50)));
+  const anchor = options.anchor ? await assertCommitInRepository(root, assertCommitHash(options.anchor)) : head;
+
+  const logText = await git(root, [
+    "log",
+    anchor,
+    `--skip=${skip}`,
+    "-n", String(limit),
+    "--pretty=format:%H%x1f%h%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%aI%x1f%D%x1e",
+  ]).catch(() => "");
+
+  const commits = parseHistoryPage(logText);
+  return { commits, head, anchor, endOfHistory: commits.length < limit };
+}
+
+function parseNameStatus(text) {
+  const statuses = new Map();
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    const parts = line.split("\t");
+    const code = parts[0]?.[0];
+    // A rename or copy reports both sides; the new path is what is shown.
+    const filePath = parts.length > 2 ? parts[2] : parts[1];
+    if (filePath) statuses.set(filePath, code === "A" ? "A" : code === "D" ? "D" : "M");
+  }
+  return statuses;
+}
+
+/**
+ * Reads a commit's metadata and the files it changed.
+ *
+ * A merge is compared against its first parent, which is the ordinary
+ * "what did landing this branch change" view. A root commit has no parent, so
+ * it is compared against the empty tree and every file reads as added.
+ */
+async function readCommitDetail(repositoryPath, requestedHash) {
+  const root = await git(repositoryPath, ["rev-parse", "--show-toplevel"]);
+  const hash = await assertCommitInRepository(root, assertCommitHash(requestedHash));
+
+  const record = await git(root, [
+    "show", "--no-patch",
+    "--format=%H%x1f%h%x1f%P%x1f%s%x1f%b%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI%x1f%D",
+    hash,
+  ]);
+  const [fullHash, shortHash, parents, title, body, author, authorEmail, authorDate, committer, committerEmail, committerDate, refs] =
+    record.split("\x1f");
+
+  const parentHashes = (parents || "").trim().split(" ").filter(Boolean);
+  const isRoot = parentHashes.length === 0;
+  const compareArgs = isRoot
+    ? ["diff-tree", "--root", "-r", "--no-commit-id", "-M", fullHash]
+    : ["diff", "-M", parentHashes[0], fullHash];
+
+  const [numstatText, nameStatusText] = await Promise.all([
+    git(root, [...compareArgs, "--numstat", "--"]).catch(() => ""),
+    git(root, [...compareArgs, "--name-status", "--"]).catch(() => ""),
+  ]);
+
+  const statuses = parseNameStatus(nameStatusText);
+  const files = numstatText.split("\n").filter(Boolean).map((line) => {
+    const [added, removed, ...rest] = line.split("\t");
+    const filePath = rest.length > 1 ? rest[rest.length - 1] : rest[0];
+    const status = statuses.get(filePath) || "M";
+    return {
+      path: filePath,
+      name: path.basename(filePath),
+      directory: path.dirname(filePath) === "." ? "Repository root" : path.dirname(filePath),
+      status,
+      tone: status === "A" ? "added" : status === "D" ? "deleted" : "modified",
+      // A dash means Git treated the file as binary.
+      added: Number.isFinite(Number(added)) ? Number(added) : 0,
+      removed: Number.isFinite(Number(removed)) ? Number(removed) : 0,
+      binary: added === "-" || removed === "-",
+    };
+  });
+
+  return {
+    fullHash,
+    hash: shortHash,
+    title,
+    body: (body || "").trim(),
+    author,
+    authorEmail,
+    authorDate,
+    committer,
+    committerEmail,
+    committerDate,
+    parents: parentHashes,
+    refs: (refs || "").split(", ").map((value) => value.trim()).filter(Boolean),
+    isRoot,
+    isMerge: parentHashes.length > 1,
+    files,
+    added: files.reduce((total, file) => total + file.added, 0),
+    removed: files.reduce((total, file) => total + file.removed, 0),
+  };
+}
+
+/** Diff of one file in one commit, against the same parent readCommitDetail used. */
+async function readCommitFileDiff(repositoryPath, requestedHash, filePath) {
+  const root = await git(repositoryPath, ["rev-parse", "--show-toplevel"]);
+  const hash = await assertCommitInRepository(root, assertCommitHash(requestedHash));
+  const target = String(filePath || "");
+  if (!target) throw new Error("Choose a file to compare.");
+
+  const parents = (await git(root, ["show", "--no-patch", "--format=%P", hash])).trim().split(" ").filter(Boolean);
+  const args = parents.length === 0
+    ? ["diff-tree", "--root", "-r", "--no-commit-id", "-M", "--no-ext-diff", "--unified=3", "-p", hash]
+    : ["diff", "-M", "--no-ext-diff", "--unified=3", parents[0], hash];
+
+  return git(root, ["-c", "core.quotepath=false", ...args, "--", target]);
+}
+
 async function getFileDiff(repositoryPath, filePath) {
   const absolutePath = path.join(repositoryPath, filePath);
   const status = await git(repositoryPath, ["-c", "core.quotepath=false", "status", "--porcelain=v1", "--", filePath]);
@@ -300,6 +461,9 @@ module.exports = {
   commitFiles,
   fetchOrigin,
   getFileDiff,
+  readCommitDetail,
+  readCommitFileDiff,
+  readHistoryPage,
   pushOrigin,
   readRepository,
   readRepositorySummary,

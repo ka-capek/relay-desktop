@@ -61,6 +61,57 @@ type HistoryItem = {
   date: string;
 };
 
+type HistoryCommit = {
+  fullHash: string;
+  hash: string;
+  parents: string[];
+  title: string;
+  author: string;
+  email: string;
+  date: string;
+  /** Branch, remote and tag decorations, as Git reports them. */
+  refs: string[];
+};
+
+type HistoryPage = {
+  commits: HistoryCommit[];
+  head: string | null;
+  /** The commit paging is anchored to, so later pages stay consistent. */
+  anchor: string | null;
+  endOfHistory: boolean;
+};
+
+type CommitFile = {
+  path: string;
+  name: string;
+  directory: string;
+  status: "A" | "M" | "D";
+  tone: "added" | "modified" | "deleted";
+  added: number;
+  removed: number;
+  binary: boolean;
+};
+
+type CommitDetail = {
+  fullHash: string;
+  hash: string;
+  title: string;
+  body: string;
+  author: string;
+  authorEmail: string;
+  authorDate: string;
+  committer: string;
+  committerEmail: string;
+  committerDate: string;
+  parents: string[];
+  refs: string[];
+  isRoot: boolean;
+  isMerge: boolean;
+  files: CommitFile[];
+  added: number;
+  removed: number;
+};
+
 type Repository = {
   path: string;
   name: string;
@@ -107,6 +158,9 @@ type RelayDesktop = {
   openRepository: (repositoryPath: string) => Promise<Repository>;
   refreshRepository: (repositoryPath: string) => Promise<Repository>;
   getFileDiff: (repositoryPath: string, filePath: string) => Promise<string>;
+  readHistory: (repositoryPath: string, options: { skip?: number; limit?: number; anchor?: string | null }) => Promise<HistoryPage>;
+  readCommit: (repositoryPath: string, hash: string) => Promise<CommitDetail>;
+  readCommitDiff: (repositoryPath: string, hash: string, filePath: string) => Promise<string>;
   commit: (input: CommitInput) => Promise<Repository>;
   fetchOrigin: (repositoryPath: string, accountId: string | null) => Promise<Repository>;
   pushOrigin: (repositoryPath: string, accountId: string | null) => Promise<Repository>;
@@ -188,6 +242,8 @@ const emptyAppState: AppState = {
   repositoryOrder: { mode: "manual", direction: "asc" },
   manualOrder: [],
 };
+
+const HISTORY_PAGE_SIZE = 50;
 
 const repositoryCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
@@ -271,6 +327,44 @@ function relativeTime(value: string) {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function absoluteDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+// History is grouped by calendar day, which is the label people scan for, with
+// relative time kept on the row itself.
+function dayLabel(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown date";
+  return date.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+}
+
+function groupCommitsByDay(commits: HistoryCommit[]) {
+  const groups: { label: string; commits: HistoryCommit[] }[] = [];
+  for (const commit of commits) {
+    const label = dayLabel(commit.date);
+    const last = groups.at(-1);
+    if (last?.label === label) last.commits.push(commit);
+    else groups.push({ label, commits: [commit] });
+  }
+  return groups;
+}
+
+// Only a recognizable GitHub origin gets a link; anything else hides the action
+// rather than guessing a URL.
+function githubCommitUrl(remote: string, fullHash: string) {
+  const match = remote.replace(/\\/g, "/").match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/i);
+  return match ? `https://github.com/${match[1]}/${match[2]}/commit/${fullHash}` : null;
+}
+
+const DIFF_HEADER_PREFIXES = [
+  "diff --git", "index ", "--- ", "+++ ",
+  "new file mode", "deleted file mode", "old mode", "new mode",
+  "similarity index", "dissimilarity index",
+  "rename from", "rename to", "copy from", "copy to",
+];
+
 function parseDiff(diff: string): DiffLine[] {
   if (!diff) return [];
   const lines = diff.split("\n");
@@ -286,7 +380,9 @@ function parseDiff(diff: string): DiffLine[] {
       parsed.push({ old: "", next: "", kind: "hunk", text: line });
       continue;
     }
-    if (line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ")) continue;
+    // Git's file headers are metadata, not content. Rendering them as code
+    // lines gives them meaningless line numbers in the gutter.
+    if (DIFF_HEADER_PREFIXES.some((prefix) => line.startsWith(prefix))) continue;
     if (line.startsWith("+") && !line.startsWith("+++")) {
       parsed.push({ old: "", next: String(nextLine++), kind: "add", text: line });
     } else if (line.startsWith("-") && !line.startsWith("---")) {
@@ -333,6 +429,25 @@ export default function Home() {
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const menuActionsRef = useRef<Record<MenuAction, () => void> | null>(null);
   const savingEmailRef = useRef(false);
+  const [historyCommits, setHistoryCommits] = useState<HistoryCommit[]>([]);
+  const [historyAnchor, setHistoryAnchor] = useState<string | null>(null);
+  const [historyEnd, setHistoryEnd] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const [historySearch, setHistorySearch] = useState("");
+  const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(null);
+  const [commitDetail, setCommitDetail] = useState<CommitDetail | null>(null);
+  const [commitDetailLoading, setCommitDetailLoading] = useState(false);
+  const [commitDetailError, setCommitDetailError] = useState("");
+  const [commitFile, setCommitFile] = useState("");
+  const [commitDiff, setCommitDiff] = useState("");
+  const [commitDiffLoading, setCommitDiffLoading] = useState(false);
+  const [copiedHash, setCopiedHash] = useState(false);
+  // Every history request carries an id; a response whose id is stale is
+  // dropped, so overlapping requests cannot interleave into the list.
+  const historyRequestRef = useRef(0);
+  const historyCountRef = useRef(0);
   const [draggingRepositoryPath, setDraggingRepositoryPath] = useState<string | null>(null);
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
   const loginCodeRef = useRef<string | null>(null);
@@ -431,6 +546,88 @@ export default function Home() {
     window.addEventListener("focus", refreshOnFocus);
     return () => window.removeEventListener("focus", refreshOnFocus);
   }, [repository, busy]);
+
+  const openRepositoryPath = repository?.path ?? null;
+  // Used to re-anchor history when HEAD moves under an open repository.
+  const repositoryHead = repository?.history[0]?.fullHash ?? null;
+
+  // Switching repositories must not leave another repository's commits, detail
+  // or diff on screen for even one frame.
+  useEffect(() => {
+    let cancelled = false;
+    historyRequestRef.current += 1;
+    historyCountRef.current = 0;
+    // Deferred the same way the working-tree diff effect defers its reset. The
+    // microtask still runs before paint, so no stale commit is ever displayed.
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setHistoryCommits([]);
+      setHistoryAnchor(null);
+      setHistoryEnd(false);
+      setHistoryError("");
+      setHistorySearch("");
+      setSelectedCommitHash(null);
+      setCommitDetail(null);
+      setCommitDetailError("");
+      setCommitFile("");
+      setCommitDiff("");
+    });
+    return () => { cancelled = true; };
+  }, [openRepositoryPath]);
+
+  // Re-anchors when HEAD moves, so a commit, fetch or branch switch reloads
+  // from the current tip instead of paging through a history that shifted.
+  useEffect(() => {
+    if (!repository || activeTab !== "history") return;
+    loadHistory(true);
+    // loadHistory closes over state that would re-run this on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRepositoryPath, repositoryHead, activeTab]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!openRepositoryPath || !selectedCommitHash || !window.relayDesktop) {
+      // The superseded request is cancelled, so its finally block cannot clear
+      // these. Without clearing them here the pane stays on "Loading commit…"
+      // forever after switching repositories.
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setCommitDetail(null);
+        setCommitDetailLoading(false);
+        setCommitDetailError("");
+      });
+      return () => { cancelled = true; };
+    }
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setCommitDetailLoading(true);
+      setCommitDetailError("");
+    });
+    window.relayDesktop.readCommit(openRepositoryPath, selectedCommitHash)
+      .then((detail) => {
+        if (cancelled) return;
+        setCommitDetail(detail);
+        setCommitFile((current) => (detail.files.some((file) => file.path === current) ? current : detail.files[0]?.path || ""));
+      })
+      .catch((error) => { if (!cancelled) { setCommitDetail(null); setCommitDetailError(messageFrom(error)); } })
+      .finally(() => { if (!cancelled) setCommitDetailLoading(false); });
+    return () => { cancelled = true; };
+  }, [openRepositoryPath, selectedCommitHash]);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setCommitDiff(""); });
+    if (!openRepositoryPath || !selectedCommitHash || !commitFile || !window.relayDesktop) {
+      queueMicrotask(() => { if (!cancelled) setCommitDiffLoading(false); });
+      return () => { cancelled = true; };
+    }
+    queueMicrotask(() => { if (!cancelled) setCommitDiffLoading(true); });
+    window.relayDesktop.readCommitDiff(openRepositoryPath, selectedCommitHash, commitFile)
+      .then((value) => { if (!cancelled) setCommitDiff(value); })
+      .catch((error) => { if (!cancelled) showNotice(messageFrom(error), true); })
+      .finally(() => { if (!cancelled) setCommitDiffLoading(false); });
+    return () => { cancelled = true; };
+  }, [openRepositoryPath, selectedCommitHash, commitFile]);
 
   function applyRepository(next: Repository, preserveSelection = true) {
     setRepository(next);
@@ -713,6 +910,94 @@ export default function Home() {
     } finally {
       savingEmailRef.current = false;
       setBusy("");
+    }
+  }
+
+  const visibleCommits = useMemo(() => {
+    const needle = historySearch.trim().toLowerCase();
+    if (!needle) return historyCommits;
+    // Searches what has been loaded so far, by message, author, email or hash.
+    return historyCommits.filter((commit) =>
+      `${commit.title} ${commit.author} ${commit.email} ${commit.fullHash}`.toLowerCase().includes(needle));
+  }, [historyCommits, historySearch]);
+  const commitGroups = useMemo(() => groupCommitsByDay(visibleCommits), [visibleCommits]);
+  const commitDiffLines = useMemo(() => parseDiff(commitDiff), [commitDiff]);
+  const commitUrl = repository && commitDetail ? githubCommitUrl(repository.remote, commitDetail.fullHash) : null;
+
+  async function loadHistory(reset: boolean) {
+    const api = window.relayDesktop;
+    if (!api || !repository) return;
+    if (!reset && (historyEnd || historyLoadingMore || historyLoading)) return;
+
+    const requestId = ++historyRequestRef.current;
+    if (reset) {
+      setHistoryLoading(true);
+      setHistoryError("");
+    } else {
+      setHistoryLoadingMore(true);
+    }
+
+    try {
+      const page = await api.readHistory(repository.path, {
+        skip: reset ? 0 : historyCountRef.current,
+        limit: HISTORY_PAGE_SIZE,
+        anchor: reset ? null : historyAnchor,
+      });
+      if (requestId !== historyRequestRef.current) return;
+      setHistoryAnchor(page.anchor);
+      setHistoryEnd(page.endOfHistory);
+      setHistoryCommits((current) => {
+        // Deduplicates at the batch boundary in case history shifted underneath.
+        const merged = reset
+          ? page.commits
+          : [...current, ...page.commits.filter((commit) => !current.some((item) => item.fullHash === commit.fullHash))];
+        historyCountRef.current = merged.length;
+        return merged;
+      });
+    } catch (error) {
+      if (requestId !== historyRequestRef.current) return;
+      setHistoryError(messageFrom(error));
+    } finally {
+      if (requestId === historyRequestRef.current) {
+        setHistoryLoading(false);
+        setHistoryLoadingMore(false);
+      }
+    }
+  }
+
+  function selectCommit(hash: string) {
+    setSelectedCommitHash(hash);
+    setCommitFile("");
+    setCommitDiff("");
+  }
+
+  function commitKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    const next = visibleCommits[index + (event.key === "ArrowUp" ? -1 : 1)];
+    if (!next) return;
+    selectCommit(next.fullHash);
+    // Moving focus with the selection is what makes the list usable without a
+    // pointer; the row is addressed by hash so it survives re-ordering.
+    document.querySelector<HTMLButtonElement>(`[data-commit="${next.fullHash}"]`)?.focus();
+  }
+
+  function commitFileKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    const next = commitDetail?.files[index + (event.key === "ArrowUp" ? -1 : 1)];
+    if (!next) return;
+    setCommitFile(next.path);
+    document.querySelector<HTMLButtonElement>(`[data-commit-file="${CSS.escape(next.path)}"]`)?.focus();
+  }
+
+  async function copyCommitHash(fullHash: string) {
+    try {
+      await navigator.clipboard.writeText(fullHash);
+      setCopiedHash(true);
+      window.setTimeout(() => setCopiedHash(false), 1600);
+    } catch {
+      showNotice("Relay could not write to the clipboard. Select the hash to copy it manually.", true);
     }
   }
 
@@ -1084,16 +1369,131 @@ export default function Home() {
               </section>
             </div>
           ) : (
-            <div className="history-view">
-              <div className="history-date">Recent commits on <strong>{repository.branch}</strong></div>
-              {repository.history.length === 0 && <div className="history-empty">This repository does not have any commits yet.</div>}
-              {repository.history.map((item) => (
-                <div className="history-item" key={item.fullHash}>
-                  <span className="timeline"><i /></span>
-                  <span className="history-copy"><strong>{item.title}</strong><small>{item.hash} · {relativeTime(item.date)} · {item.author}</small></span>
-                  <span className="history-author" title={item.email}>{initials(item.author)}</span>
+            <div className="history-layout">
+              <section className="commit-pane">
+                <label className="commit-search">
+                  <Icon name="search" size={15} />
+                  <input value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} placeholder="Search message, author, or hash" aria-label="Search commits" />
+                </label>
+                <div
+                  className="commit-list"
+                  onScroll={(event) => {
+                    const list = event.currentTarget;
+                    if (list.scrollHeight - list.scrollTop - list.clientHeight < 240) loadHistory(false);
+                  }}
+                >
+                  {historyLoading && <div className="history-state"><Icon name="refresh" className="spin" size={17} />Loading history…</div>}
+                  {!historyLoading && historyError && (
+                    <div className="history-state error">
+                      <Icon name="alert" size={17} />
+                      <span>{historyError}</span>
+                      <button onClick={() => loadHistory(true)}>Try again</button>
+                    </div>
+                  )}
+                  {!historyLoading && !historyError && visibleCommits.length === 0 && (
+                    <div className="history-state">{historySearch.trim() ? "No commits match that search." : "This repository does not have any commits yet."}</div>
+                  )}
+                  {commitGroups.map((group) => (
+                    <div className="commit-group" key={group.label}>
+                      <div className="commit-day">{group.label}</div>
+                      {group.commits.map((commit) => (
+                        <button
+                          key={commit.fullHash}
+                          data-commit={commit.fullHash}
+                          className={`commit-row ${selectedCommitHash === commit.fullHash ? "selected" : ""}`}
+                          aria-current={selectedCommitHash === commit.fullHash}
+                          onClick={() => selectCommit(commit.fullHash)}
+                          onKeyDown={(event) => commitKeyDown(event, visibleCommits.indexOf(commit))}
+                        >
+                          <span className="commit-copy">
+                            <strong>{commit.title}</strong>
+                            <small>{commit.hash} · {relativeTime(commit.date)} · {commit.author}</small>
+                            {commit.refs.length > 0 && (
+                              <span className="commit-refs">{commit.refs.map((ref) => <i key={ref}>{ref.replace(/^tag: /, "")}</i>)}</span>
+                            )}
+                          </span>
+                          <span className="history-author" title={commit.email}>{initials(commit.author)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+                  {historyLoadingMore && <div className="history-state compact"><Icon name="refresh" className="spin" size={15} />Loading more commits…</div>}
+                  {historyEnd && !historyLoading && historyCommits.length > 0 && (
+                    <div className="history-end">End of history · {historyCommits.length} commit{historyCommits.length === 1 ? "" : "s"}</div>
+                  )}
                 </div>
-              ))}
+              </section>
+
+              <section className="commit-detail">
+                {commitDetailLoading && !commitDetail && <div className="history-state"><Icon name="refresh" className="spin" size={17} />Loading commit…</div>}
+                {!commitDetailLoading && commitDetailError && <div className="history-state error"><Icon name="alert" size={17} /><span>{commitDetailError}</span></div>}
+                {!commitDetail && !commitDetailLoading && !commitDetailError && (
+                  <div className="empty-workspace"><span className="empty-glyph"><Icon name="branch" size={24} /></span><h2>Select a commit</h2><p>Choose a commit to see its message, changed files, and diffs.</p></div>
+                )}
+                {commitDetail && (
+                  <>
+                    <div className="commit-heading">
+                      <div className="commit-heading-top">
+                        <h3>{commitDetail.title}</h3>
+                        <div className="commit-actions">
+                          <button onClick={() => copyCommitHash(commitDetail.fullHash)} aria-label={`Copy the full commit hash for ${commitDetail.hash}`}>
+                            <Icon name={copiedHash ? "check" : "clone"} size={14} />{copiedHash ? "Copied" : "Copy hash"}
+                          </button>
+                          {commitUrl && (
+                            <button onClick={() => window.relayDesktop?.openExternal(commitUrl)} aria-label="Open this commit on GitHub">
+                              <Icon name="external" size={14} />GitHub
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <span aria-live="polite" className="visually-hidden">{copiedHash ? "Commit hash copied to the clipboard." : ""}</span>
+                      {commitDetail.body && <pre className="commit-body">{commitDetail.body}</pre>}
+                      <dl className="commit-meta">
+                        <div><dt>Commit</dt><dd><code>{commitDetail.fullHash}</code></dd></div>
+                        <div><dt>Author</dt><dd>{commitDetail.author} &lt;{commitDetail.authorEmail}&gt; · {absoluteDate(commitDetail.authorDate)}</dd></div>
+                        <div><dt>Committer</dt><dd>{commitDetail.committer} &lt;{commitDetail.committerEmail}&gt; · {absoluteDate(commitDetail.committerDate)}</dd></div>
+                        <div>
+                          <dt>Parents</dt>
+                          <dd>{commitDetail.isRoot ? "None — this is the root commit" : commitDetail.parents.map((parent) => parent.slice(0, 7)).join(", ")}</dd>
+                        </div>
+                        {commitDetail.refs.length > 0 && <div><dt>Refs</dt><dd>{commitDetail.refs.join(", ")}</dd></div>}
+                      </dl>
+                      {commitDetail.isMerge && <div className="modal-note"><Icon name="info" size={16} />Merge commit. Changes are shown against its first parent.</div>}
+                    </div>
+
+                    <div className="commit-files-heading">
+                      <span>{commitDetail.files.length} changed file{commitDetail.files.length === 1 ? "" : "s"}</span>
+                      <span className="delta"><i>+{commitDetail.added}</i><b>−{commitDetail.removed}</b></span>
+                    </div>
+                    <div className="commit-files">
+                      {commitDetail.files.length === 0 && <div className="history-state compact">This commit does not change any files.</div>}
+                      {commitDetail.files.map((file, index) => (
+                        <button
+                          key={file.path}
+                          data-commit-file={file.path}
+                          className={`file-item ${commitFile === file.path ? "selected" : ""}`}
+                          aria-current={commitFile === file.path}
+                          onClick={() => setCommitFile(file.path)}
+                          onKeyDown={(event) => commitFileKeyDown(event, index)}
+                        >
+                          <span className="file-copy"><strong>{file.name}</strong><small>{file.directory}</small></span>
+                          <span className="delta">{file.binary ? <i>binary</i> : <>{file.added > 0 && <i>+{file.added}</i>}{file.removed > 0 && <b>−{file.removed}</b>}</>}</span>
+                          <span className={`file-state ${file.tone}`}>{file.status}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="commit-diff">
+                      {commitDiffLoading && <div className="history-state compact"><Icon name="refresh" className="spin" size={15} />Loading diff…</div>}
+                      {!commitDiffLoading && commitDiffLines.length === 0 && commitFile && <div className="diff-empty">No textual diff available for this file.</div>}
+                      {!commitDiffLoading && commitDiffLines.map((line, index) => line.kind === "hunk"
+                        ? <div key={index} className="diff-hunk">{line.text}</div>
+                        : <div key={index} className={`code-line ${line.kind}`}><span>{line.old}</span><span>{line.next}</span><code>{line.text || " "}</code></div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </section>
             </div>
           )}
         </section>

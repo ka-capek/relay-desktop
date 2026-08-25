@@ -1,17 +1,55 @@
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
-import { readFile } from "node:fs/promises";
-import test from "node:test";
-
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import test from "node:test";
 
 const require = createRequire(import.meta.url);
 const { GITHUB_DEVICE_URL, loginProgressFromOutput } = require("../electron/github-auth.cjs");
 const { applyManualOrder, normalizeOrdering } = require("../electron/repository-order.cjs");
-const { readRepositorySummary } = require("../electron/git-service.cjs");
+const {
+  readCommitDetail,
+  readCommitFileDiff,
+  readHistoryPage,
+  readRepositorySummary,
+} = require("../electron/git-service.cjs");
+
+/** Builds a fixture with a root commit, a branch, a merge, a tag and a deletion. */
+async function historyFixture() {
+  const root = await mkdtemp(path.join(tmpdir(), "relay-history-"));
+  const git = (args) => execFileSync("git", args, {
+    cwd: root,
+    stdio: "pipe",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Ada Lovelace", GIT_AUTHOR_EMAIL: "ada@example.com",
+      GIT_COMMITTER_NAME: "Grace Hopper", GIT_COMMITTER_EMAIL: "grace@example.com",
+    },
+  });
+
+  git(["init", "-q", "-b", "main", "."]);
+  await writeFile(path.join(root, "root.txt"), "root\n");
+  git(["add", "."]);
+  git(["commit", "-q", "-m", "Root commit", "-m", "Body of the root commit."]);
+  await writeFile(path.join(root, "gone.txt"), "temporary\n");
+  git(["add", "."]);
+  git(["commit", "-q", "-m", "Add a file that will be removed"]);
+  git(["checkout", "-q", "-b", "side"]);
+  await writeFile(path.join(root, "side.txt"), "side\n");
+  git(["add", "."]);
+  git(["commit", "-q", "-m", "Side branch work"]);
+  git(["checkout", "-q", "main"]);
+  await writeFile(path.join(root, "main.txt"), "main\n");
+  git(["add", "."]);
+  git(["commit", "-q", "-m", "Main only change"]);
+  git(["merge", "-q", "--no-ff", "side", "-m", "Merge side into main"]);
+  git(["tag", "v1.0.0"]);
+  git(["rm", "-q", "gone.txt"]);
+  git(["commit", "-q", "-m", "Remove the temporary file"]);
+  return root;
+}
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -114,6 +152,94 @@ test("reads the HEAD commit date used to sort the sidebar", async () => {
     assert.equal(empty.latestCommit, null);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("pages through history without gaps, duplicates or an artificial cap", async () => {
+  const root = await historyFixture();
+  try {
+    const first = await readHistoryPage(root, { limit: 3 });
+    assert.equal(first.commits.length, 3);
+    assert.equal(first.endOfHistory, false);
+
+    // Later pages are anchored to the same commit, so a moving HEAD cannot
+    // make the list skip or repeat a commit at a batch boundary.
+    const collected = [...first.commits];
+    let page = first;
+    while (!page.endOfHistory) {
+      page = await readHistoryPage(root, { skip: collected.length, limit: 3, anchor: first.anchor });
+      collected.push(...page.commits);
+    }
+
+    assert.equal(collected.length, 6);
+    assert.equal(new Set(collected.map((commit) => commit.fullHash)).size, 6);
+    assert.equal(collected.at(-1).title, "Root commit");
+    // Decorations reach the renderer so branches and tags can be shown.
+    assert.ok(collected[0].refs.some((ref) => ref.includes("main")));
+    assert.ok(collected.some((commit) => commit.refs.includes("tag: v1.0.0")));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("describes root, merge and deletion commits correctly", async () => {
+  const root = await historyFixture();
+  try {
+    const { commits } = await readHistoryPage(root, { limit: 20 });
+    const find = (title) => commits.find((commit) => commit.title === title).fullHash;
+
+    const rootCommit = await readCommitDetail(root, find("Root commit"));
+    assert.equal(rootCommit.isRoot, true);
+    assert.deepEqual(rootCommit.parents, []);
+    assert.equal(rootCommit.body, "Body of the root commit.");
+    assert.deepEqual(rootCommit.files.map((file) => `${file.status} ${file.path}`), ["A root.txt"]);
+    // The author and committer are genuinely different people here.
+    assert.equal(rootCommit.author, "Ada Lovelace");
+    assert.equal(rootCommit.committer, "Grace Hopper");
+
+    // A merge is reported against its first parent, so it shows what landing
+    // the branch brought in rather than the whole combined tree.
+    const merge = await readCommitDetail(root, find("Merge side into main"));
+    assert.equal(merge.isMerge, true);
+    assert.equal(merge.parents.length, 2);
+    assert.deepEqual(merge.files.map((file) => `${file.status} ${file.path}`), ["A side.txt"]);
+
+    const removal = await readCommitDetail(root, find("Remove the temporary file"));
+    assert.deepEqual(removal.files.map((file) => `${file.status} ${file.path}`), ["D gone.txt"]);
+    assert.equal(removal.removed, 1);
+
+    // A root commit has no parent to diff against, so it compares to the empty tree.
+    assert.match(await readCommitFileDiff(root, rootCommit.fullHash, "root.txt"), /^@@|\+root/m);
+    assert.match(await readCommitFileDiff(root, merge.fullHash, "side.txt"), /\+side/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("refuses commit hashes that are malformed or from another repository", async () => {
+  const [root, other] = await Promise.all([historyFixture(), historyFixture()]);
+  try {
+    for (const bad of ["", "--output=/tmp/relay-pwn", "abc123; rm -rf /", "../../etc/passwd"]) {
+      await assert.rejects(() => readCommitDetail(root, bad), /Invalid commit hash/);
+    }
+
+    // Well formed but absent, and a real commit belonging to a different clone.
+    await assert.rejects(() => readCommitDetail(root, "0".repeat(40)), /not in this repository/);
+
+    // The two fixtures are built identically, so Git gives them identical
+    // commit hashes. This extra commit makes the second repository genuinely
+    // distinct, which is the case worth guarding.
+    await writeFile(path.join(other, "unique.txt"), `unique ${Date.now()} ${Math.random()}\n`);
+    execFileSync("git", ["add", "."], { cwd: other, stdio: "pipe" });
+    execFileSync("git", ["-c", "user.name=Other", "-c", "user.email=other@example.com", "commit", "-q", "-m", "Only in the other repository"], { cwd: other, stdio: "pipe" });
+
+    const foreign = (await readHistoryPage(other, { limit: 1 })).commits[0].fullHash;
+    await assert.rejects(() => readCommitDetail(root, foreign), /not in this repository/);
+
+    const head = (await readHistoryPage(root, { limit: 1 })).commits[0].fullHash;
+    await assert.rejects(() => readCommitFileDiff(root, head, ""), /Choose a file to compare/);
+  } finally {
+    await Promise.all([rm(root, { recursive: true, force: true }), rm(other, { recursive: true, force: true })]);
   }
 });
 
