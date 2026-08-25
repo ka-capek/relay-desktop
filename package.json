@@ -26,6 +26,7 @@
     "appId": "dev.relay.gitclient",
     "productName": "Relay",
     "asar": true,
+    "afterPack": "build/after-pack.cjs",
     "directories": {
       "output": "outputs/installers"
     },

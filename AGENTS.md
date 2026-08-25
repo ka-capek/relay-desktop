@@ -1160,6 +1160,13 @@ creates desktop and Start Menu shortcuts.
     blobs.
 13. Verify release asset names, sizes, upload state, and GitHub-reported digest.
 
+The macOS app is ad-hoc re-signed by `build/after-pack.cjs`. Without it the
+bundle keeps the prebuilt Electron binary's signature, which electron-builder
+invalidates by renaming the executable and adding resources; the app then
+reports `Sealed Resources=none`, fails `codesign --verify`, and Apple Silicon
+refuses to launch it as damaged. Ad-hoc signing does not make the build signed
+or notarized.
+
 Current builds are unsigned. Do not claim otherwise. macOS Gatekeeper and
 Windows SmartScreen may display first-run warnings. Proper signing requires:
 

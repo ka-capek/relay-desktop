@@ -12,8 +12,10 @@ Download the ready-to-use installers from the
 - Windows 64-bit: `Relay-Setup-0.5.0-x64.exe`
 - macOS Apple Silicon: `Relay-0.5.0-arm64.dmg`
 
-The builds are currently unsigned, so Windows SmartScreen or macOS Gatekeeper
-may ask for confirmation the first time Relay is opened.
+The builds are currently unsigned. On macOS, right-click Relay in Applications
+and choose **Open** the first time; Windows SmartScreen may also ask for
+confirmation. The macOS app is ad-hoc signed during packaging, which is what
+stops Apple Silicon reporting it as damaged.
 
 ## Prerequisites
 
