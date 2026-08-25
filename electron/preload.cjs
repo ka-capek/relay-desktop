@@ -37,6 +37,8 @@ contextBridge.exposeInMainWorld("relayDesktop", {
     ipcRenderer.on("relay:menu-action", listener);
     return () => ipcRenderer.removeListener("relay:menu-action", listener);
   },
+  getMenu: () => ipcRenderer.invoke("relay:get-menu"),
+  runMenuCommand: (command) => ipcRenderer.invoke("relay:menu-command", command),
   openExternal: (url) => ipcRenderer.invoke("relay:open-external", url),
 });
 

@@ -15,6 +15,7 @@ const {
   switchBranch,
 } = require("./git-service.cjs");
 const { scanForRepositories } = require("./repository-discovery.cjs");
+const { commandIds, menuDescriptor, menuTemplate } = require("./application-menu.cjs");
 const {
   DEFAULT_ORDER,
   REPOSITORY_ORDER_DIRECTIONS,
@@ -32,6 +33,10 @@ const {
 } = require("./github-auth.cjs");
 
 const isMac = process.platform === "darwin";
+
+// Matches the .titlebar height in app/globals.css. The Windows title bar
+// overlay has to be told the same number or the window controls sit off-row.
+const WINDOWS_CHROME_HEIGHT = 38;
 
 function dataFile() {
   return path.join(app.getPath("userData"), "relay-data.json");
@@ -261,66 +266,47 @@ function sendMenuAction(action) {
 }
 
 function installApplicationMenu() {
-  const fileSubmenu = [
-    {
-      label: isMac ? "Add Local Repository…" : "Add &Local Repository…",
-      accelerator: "CmdOrCtrl+O",
-      click: () => sendMenuAction("open-repository"),
-    },
-    {
-      label: isMac ? "Clone Repository…" : "&Clone Repository…",
-      accelerator: "CmdOrCtrl+Shift+O",
-      click: () => sendMenuAction("clone-repository"),
-    },
-    {
-      label: isMac ? "Scan Folder for Repositories…" : "&Scan Folder for Repositories…",
-      click: () => sendMenuAction("scan-folder"),
-    },
-    { type: "separator" },
-    {
-      label: isMac ? "Remove Current Repository from Relay" : "&Remove Current Repository from Relay",
-      click: () => sendMenuAction("remove-repository"),
-    },
-  ];
-  if (!isMac) fileSubmenu.push({ type: "separator" }, { role: "quit", label: "E&xit" });
+  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({
+    isMac,
+    appName: app.name,
+    onAction: (action) => sendMenuAction(action),
+  })));
+}
 
-  const template = [];
-  if (isMac) {
-    template.push({
-      label: app.name,
-      submenu: [
-        { role: "about" },
-        { type: "separator" },
-        { role: "services" },
-        { type: "separator" },
-        { role: "hide" },
-        { role: "hideOthers" },
-        { role: "unhide" },
-        { type: "separator" },
-        { role: "quit" },
-      ],
-    });
+const MENU_COMMAND_IDS = commandIds();
+
+// Windows hides the native menu bar and draws Relay's own on the title row, so
+// the renderer needs a way to invoke the commands that menu bar shows. The
+// native menu stays installed either way, which is what keeps accelerators
+// working; only its visibility changes.
+function runMenuCommand(window, command) {
+  if (!MENU_COMMAND_IDS.has(command)) throw new Error("Unknown menu command.");
+  if (["open-repository", "clone-repository", "scan-folder", "remove-repository"].includes(command)) {
+    sendMenuAction(command);
+    return;
   }
-  template.push(
-    { label: isMac ? "File" : "&File", submenu: fileSubmenu },
-    {
-      label: isMac ? "Edit" : "&Edit",
-      submenu: [
-        { role: "undo" }, { role: "redo" }, { type: "separator" },
-        { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" },
-      ],
-    },
-    {
-      label: isMac ? "View" : "&View",
-      submenu: [
-        { role: "reload" }, { role: "forceReload" }, { role: "toggleDevTools" },
-        { type: "separator" }, { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" },
-        { type: "separator" }, { role: "togglefullscreen" },
-      ],
-    },
-    { label: isMac ? "Window" : "&Window", submenu: [{ role: "minimize" }, { role: "close" }] },
-  );
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  if (command === "quit") { app.quit(); return; }
+  if (!window || window.isDestroyed()) return;
+
+  const contents = window.webContents;
+  switch (command) {
+    case "undo": contents.undo(); break;
+    case "redo": contents.redo(); break;
+    case "cut": contents.cut(); break;
+    case "copy": contents.copy(); break;
+    case "paste": contents.paste(); break;
+    case "selectAll": contents.selectAll(); break;
+    case "reload": contents.reload(); break;
+    case "forceReload": contents.reloadIgnoringCache(); break;
+    case "toggleDevTools": contents.toggleDevTools(); break;
+    case "resetZoom": contents.setZoomLevel(0); break;
+    case "zoomIn": contents.setZoomLevel(contents.getZoomLevel() + 0.5); break;
+    case "zoomOut": contents.setZoomLevel(contents.getZoomLevel() - 0.5); break;
+    case "togglefullscreen": window.setFullScreen(!window.isFullScreen()); break;
+    case "minimize": window.minimize(); break;
+    case "close": window.close(); break;
+    default: break;
+  }
 }
 
 function registerIpc() {
@@ -538,6 +524,14 @@ function registerIpc() {
     return syncGitHubAccounts();
   });
 
+  // The renderer draws the menu bar on Windows, so it needs the same structure
+  // the native menu was built from.
+  ipcMain.handle("relay:get-menu", () => ({ isMac, menus: menuDescriptor({ isMac }) }));
+
+  ipcMain.handle("relay:menu-command", (event, command) => {
+    runMenuCommand(BrowserWindow.fromWebContents(event.sender), String(command || ""));
+  });
+
   ipcMain.handle("relay:open-external", (_event, url) => {
     if (typeof url === "string" && url.startsWith("https://")) return shell.openExternal(url);
   });
@@ -552,9 +546,20 @@ function createWindow() {
     show: false,
     backgroundColor: "#e9ece7",
     title: "Relay",
-    titleBarStyle: isMac ? "hiddenInset" : "default",
+    // macOS folds the window controls into Relay's single action row.
+    // Windows draws its own title row with the menus on it, and keeps the real
+    // minimize/maximize/close through the title bar overlay.
+    titleBarStyle: "hidden",
+    // Centres the traffic lights in the 58px repository action row.
     trafficLightPosition: isMac ? { x: 18, y: 23 } : undefined,
-    autoHideMenuBar: false,
+    titleBarOverlay: isMac ? undefined : {
+      color: "#fbfcfa",
+      symbolColor: "#3b4741",
+      height: WINDOWS_CHROME_HEIGHT,
+    },
+    // The native menu stays installed so its accelerators keep working; only
+    // the bar itself is hidden, because the renderer draws it instead.
+    autoHideMenuBar: !isMac,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -563,6 +568,7 @@ function createWindow() {
     },
   });
 
+  if (!isMac) window.setMenuBarVisibility(false);
   window.once("ready-to-show", () => window.show());
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://")) shell.openExternal(url);

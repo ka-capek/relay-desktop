@@ -175,9 +175,17 @@ type RelayDesktop = {
   removeAccount: (accountId: string) => Promise<AppState>;
   onMenuAction: (callback: (action: MenuAction) => void) => () => void;
   openExternal: (url: string) => Promise<void>;
+  getMenu: () => Promise<{ isMac: boolean; menus: MenuDescriptor[] }>;
+  runMenuCommand: (command: string) => Promise<void>;
 };
 
 type MenuAction = "open-repository" | "clone-repository" | "scan-folder" | "remove-repository";
+
+type MenuDescriptorItem =
+  | { type: "separator" }
+  | { id: string; label: string; mnemonic: string | null; accelerator: string | null; role: string | null };
+
+type MenuDescriptor = { id: string; label: string; mnemonic: string; items: MenuDescriptorItem[] };
 
 type GitHubLoginProgress = {
   code: string | null;
@@ -429,6 +437,9 @@ export default function Home() {
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const menuActionsRef = useRef<Record<MenuAction, () => void> | null>(null);
   const savingEmailRef = useRef(false);
+  const [appMenus, setAppMenus] = useState<MenuDescriptor[]>([]);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const menuBarRef = useRef<HTMLDivElement>(null);
   const [historyCommits, setHistoryCommits] = useState<HistoryCommit[]>([]);
   const [historyAnchor, setHistoryAnchor] = useState<string | null>(null);
   const [historyEnd, setHistoryEnd] = useState(false);
@@ -546,6 +557,46 @@ export default function Home() {
     window.addEventListener("focus", refreshOnFocus);
     return () => window.removeEventListener("focus", refreshOnFocus);
   }, [repository, busy]);
+
+  // Only Windows renders a menu bar in the window; macOS keeps its system menu.
+  useEffect(() => {
+    const api = window.relayDesktop;
+    if (!api?.getMenu) return;
+    let cancelled = false;
+    api.getMenu()
+      .then((result) => { if (!cancelled && !result.isMac) setAppMenus(result.menus); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!openMenuId) return;
+    function dismiss(event: PointerEvent) {
+      if (!menuBarRef.current?.contains(event.target as Node)) setOpenMenuId(null);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpenMenuId(null);
+    }
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [openMenuId]);
+
+  // Alt focuses the menu bar, matching how Windows menus normally behave.
+  useEffect(() => {
+    if (appMenus.length === 0) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Alt" || event.repeat) return;
+      event.preventDefault();
+      setOpenMenuId((current) => (current ? null : appMenus[0].id));
+      menuBarRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [appMenus]);
 
   const openRepositoryPath = repository?.path ?? null;
   // Used to re-anchor history when HEAD moves under an open repository.
@@ -1059,6 +1110,23 @@ export default function Home() {
     nudgeRepository(repositoryPath, event.key === "ArrowUp" ? -1 : 1);
   }
 
+  async function runMenuCommand(command: string) {
+    setOpenMenuId(null);
+    try {
+      await window.relayDesktop?.runMenuCommand(command);
+    } catch (error) {
+      showNotice(messageFrom(error), true);
+    }
+  }
+
+  function menuBarKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const next = appMenus[(index + (event.key === "ArrowLeft" ? -1 : 1) + appMenus.length) % appMenus.length];
+    setOpenMenuId((current) => (current ? next.id : current));
+    menuBarRef.current?.querySelector<HTMLButtonElement>(`[data-menu="${next.id}"]`)?.focus();
+  }
+
   async function saveRepositoryAccount() {
     if (!window.relayDesktop || !repository) return;
     try {
@@ -1177,12 +1245,63 @@ export default function Home() {
     <main className="app-shell">
       <header className="titlebar">
         <div className="window-controls" aria-hidden="true"><i /><i /><i /></div>
+        <span className="app-title">Relay</span>
+        {appMenus.length > 0 && (
+          <div className="app-menubar" role="menubar" aria-label="Application" ref={menuBarRef}>
+            {appMenus.map((menu, index) => (
+              <div className="app-menu" key={menu.id}>
+                <button
+                  data-menu={menu.id}
+                  role="menuitem"
+                  aria-haspopup="menu"
+                  aria-expanded={openMenuId === menu.id}
+                  className={openMenuId === menu.id ? "open" : ""}
+                  onClick={() => setOpenMenuId(openMenuId === menu.id ? null : menu.id)}
+                  onMouseEnter={() => openMenuId && setOpenMenuId(menu.id)}
+                  onKeyDown={(event) => menuBarKeyDown(event, index)}
+                >
+                  {/* The mnemonic letter is underlined the way Windows shows it. */}
+                  {menu.mnemonic && menu.label.includes(menu.mnemonic)
+                    ? <>{menu.label.slice(0, menu.label.indexOf(menu.mnemonic))}<u>{menu.mnemonic}</u>{menu.label.slice(menu.label.indexOf(menu.mnemonic) + 1)}</>
+                    : menu.label}
+                </button>
+                {openMenuId === menu.id && (
+                  <div className="app-menu-popup panel-float" role="menu" aria-label={menu.label}>
+                    {menu.items.map((item, itemIndex) => ("type" in item
+                      ? <div className="menu-divider" key={`separator-${itemIndex}`} role="separator" />
+                      : (
+                        <button key={item.id} role="menuitem" onClick={() => runMenuCommand(item.id)}>
+                          <span>{item.label}</span>
+                          {item.accelerator && <em>{item.accelerator}</em>}
+                        </button>
+                      )
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </header>
+
+      <section className="repo-bar">
         <button className="repo-picker" aria-label="Open repository" onClick={chooseRepository}>
           <span className="repo-mark">R</span>
           <span><small>Current repository</small>{repository ? <>{repository.owner} / <strong>{repository.name}</strong></> : <strong>Open a repository</strong>}</span>
           <Icon name="chevron" className="chevron" />
         </button>
-        <div className="titlebar-center" aria-hidden="true">Relay</div>
+        <label className={`branch-control ${!repository ? "disabled" : ""}`}>
+          <Icon name="branch" className="branch-symbol" size={20} />
+          <span><small>Current branch</small><strong>{repository?.branch || "No repository open"}</strong></span>
+          <Icon name="chevron" className="chevron" />
+          {repository && <select value={repository.branch} onChange={(event) => changeBranch(event.target.value)} disabled={Boolean(busy)} aria-label="Switch branch">
+            {repository.branches.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
+          </select>}
+        </label>
+        {/* The remote control stays with the branch rather than being pushed
+            to the far right by the spacer. */}
+        <button className="fetch-button" onClick={syncRemote} disabled={!repository || !repository.remote || Boolean(busy)}><Icon name={shouldPush ? "upload" : "refresh"} className={busy === "fetch" ? "spin" : ""} size={16} />{syncLabel}</button>
+        <div className="toolbar-spacer" />
         <div className="account-wrap" ref={accountMenuRef}>
           <button className={`account-trigger ${accountMenuOpen ? "active" : ""}`} onClick={() => setAccountMenuOpen(!accountMenuOpen)} aria-expanded={accountMenuOpen} aria-label="Switch GitHub account">
             {activeAccount ? <span className={`avatar ${activeAccount.tone}`}>{activeAccount.initials}</span> : <span className="avatar empty-avatar"><Icon name="plus" size={15} /></span>}
@@ -1206,24 +1325,6 @@ export default function Home() {
             </div>
           )}
         </div>
-      </header>
-
-      <section className="toolbar">
-        <label className={`branch-control ${!repository ? "disabled" : ""}`}>
-          <Icon name="branch" className="branch-symbol" size={22} />
-          <span><small>Current branch</small><strong>{repository?.branch || "No repository open"}</strong></span>
-          <Icon name="chevron" className="chevron" />
-          {repository && <select value={repository.branch} onChange={(event) => changeBranch(event.target.value)} disabled={Boolean(busy)} aria-label="Switch branch">
-            {repository.branches.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
-          </select>}
-        </label>
-        <div className="toolbar-spacer" />
-        {repository && repositoryAccount && <div className="identity-pill" title="The identity used for this repository">
-          <span className={`mini-avatar ${repositoryAccount.tone}`}>{repositoryAccount.initials}</span>
-          <span>Using <strong>@{repositoryAccount.handle}</strong></span>
-          {boundAccountId && <em>Pinned</em>}
-        </div>}
-        <button className="fetch-button" onClick={syncRemote} disabled={!repository || !repository.remote || Boolean(busy)}><Icon name={shouldPush ? "upload" : "refresh"} className={busy === "fetch" ? "spin" : ""} size={16} />{syncLabel}</button>
       </section>
 
       <div className="workspace">

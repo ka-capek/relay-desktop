@@ -49,7 +49,7 @@ body {
   height: calc(100vh - 36px);
   min-height: 620px;
   display: grid;
-  grid-template-rows: 62px 64px minmax(0, 1fr) 31px;
+  grid-template-rows: 38px 58px minmax(0, 1fr) 31px;
   overflow: hidden;
   background: var(--panel);
   border: 1px solid #cfd5cf;
@@ -59,17 +59,29 @@ body {
 
 .titlebar {
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(300px, 1fr) auto minmax(300px, 1fr);
-  align-items: stretch;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--line);
   background: #fbfcfa;
 }
+.app-title { font-weight: 700; font-size: var(--text-sm); letter-spacing: -.01em; color: #33403a; }
 
 .window-controls { display: flex; align-items: center; gap: 8px; padding-left: 18px; position: absolute; z-index: 2; height: 100%; }
 .window-controls i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; border: 1px solid rgba(0,0,0,.08); }
 .window-controls i:nth-child(2) { background: #febc2e; }
 .window-controls i:nth-child(3) { background: #28c840; }
+
+.app-menubar { display: flex; align-items: center; gap: 1px; }
+.app-menu { position: relative; }
+.app-menubar > .app-menu > button { border: 0; border-radius: 5px; padding: 4px 9px; background: transparent; color: #46534d; cursor: pointer; font-size: var(--text-sm); }
+.app-menubar > .app-menu > button:hover, .app-menubar > .app-menu > button.open { background: #e8ebe7; }
+.app-menubar u { text-underline-offset: 2px; }
+.app-menu-popup { position: absolute; z-index: 40; top: calc(100% + 4px); left: 0; min-width: 268px; padding: 5px; }
+.app-menu-popup button { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 24px; border: 0; border-radius: 6px; padding: 7px 9px; background: transparent; color: var(--ink); cursor: pointer; text-align: left; font-size: var(--text-sm); }
+.app-menu-popup button:hover { background: #f0f4f1; }
+.app-menu-popup em { color: #8a938f; font-style: normal; font-size: var(--text-meta); }
 
 .repo-picker, .account-trigger, .branch-control, .fetch-button {
   border: 0;
@@ -78,25 +90,29 @@ body {
 }
 
 .repo-picker {
-  justify-self: start;
-  margin-left: 74px;
+  flex: 0 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 14px;
+  padding: 7px 10px;
+  border-radius: 8px;
   text-align: left;
 }
+/* Long owner, repository, branch and account names all truncate rather than
+   pushing the row wider than the window. */
+.repo-picker > span:nth-child(2), .branch-control > span:nth-child(2), .account-copy { min-width: 0; }
+.repo-picker strong, .branch-control strong, .account-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .repo-picker:hover, .account-trigger:hover, .account-trigger.active { background: #f0f2ef; }
-.repo-picker small, .account-copy small, .branch-control small { display: block; color: #7b8580; font-size: var(--text-sm); line-height: 1.2; margin-bottom: 2px; letter-spacing: .02em; }
-.repo-picker span:nth-child(2) { font-size: var(--text-body); color: #6a746f; white-space: nowrap; }
+.repo-picker small, .account-copy small, .branch-control small { display: block; color: #7b8580; font-size: var(--text-sm); line-height: 1.2; margin-bottom: 2px; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.repo-picker span:nth-child(2) { font-size: var(--text-body); color: #6a746f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .repo-picker strong { color: var(--ink); font-weight: 650; }
 .repo-mark { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 7px; color: white; background: var(--ink); font-weight: 750; font-size: var(--text-body); }
 .chevron { color: #74807a; margin-left: 3px; }
-.titlebar-center { align-self: center; font-weight: 730; font-size: var(--text-md); letter-spacing: -.02em; }
-.account-wrap { justify-self: end; position: relative; }
-.account-trigger { height: 100%; display: flex; align-items: center; gap: 9px; min-width: 218px; padding: 0 18px; text-align: left; border-left: 1px solid var(--line-soft); }
-.account-copy { min-width: 126px; }
+.account-wrap { position: relative; flex: 0 0 auto; }
+.account-trigger { flex: 0 1 auto; min-width: 0; max-width: 240px; display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; text-align: left; }
+.account-copy { min-width: 0; }
 .account-copy strong { display: block; font-size: var(--text-body); font-weight: 670; }
 
 .avatar, .mini-avatar { display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; color: white; font-weight: 720; }
@@ -108,7 +124,7 @@ body {
 .blue { background: #46779e; }
 
 .panel-float { background: white; border: 1px solid #d8ddd8; border-radius: 12px; box-shadow: var(--shadow); }
-.account-menu { position: absolute; z-index: 30; top: 54px; right: 12px; width: 328px; padding: 8px; }
+.account-menu { position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; width: 328px; padding: 8px; }
 .menu-heading { padding: 8px 9px 9px; display: flex; justify-content: space-between; color: #707b75; font-size: var(--text-body); font-weight: 620; }
 .account-option, .menu-action { width: 100%; border: 0; background: transparent; cursor: pointer; border-radius: 8px; }
 .account-option { padding: 9px; display: flex; align-items: center; gap: 10px; text-align: left; }
@@ -121,18 +137,15 @@ body {
 .menu-action { padding: 8px 10px; display: flex; align-items: center; gap: 10px; font-size: var(--text-body); text-align: left; }
 .menu-action:hover { background: #f2f4f1; }
 
-.toolbar { min-width: 0; display: flex; align-items: center; padding: 0 14px 0 21px; border-bottom: 1px solid var(--line); background: white; box-shadow: 0 2px 6px rgba(24, 33, 29, .035); }
-.branch-control { position: relative; display: flex; align-items: center; gap: 9px; min-width: 240px; padding: 9px 12px; text-align: left; border-radius: 8px; cursor: pointer; }
+.repo-bar { min-width: 0; display: flex; align-items: center; gap: 4px; padding: 0 12px; border-bottom: 1px solid var(--line); background: white; box-shadow: 0 2px 6px rgba(24, 33, 29, .035); }
+.branch-control { position: relative; flex: 0 1 auto; display: flex; align-items: center; gap: 9px; min-width: 132px; max-width: 260px; padding: 7px 10px; text-align: left; border-radius: 8px; cursor: pointer; }
 .branch-control:hover { background: #f4f5f2; }
 .branch-control.disabled { cursor: default; opacity: .68; }
 .branch-control strong { display: block; font-size: var(--text-body); }
 .branch-symbol { color: #52615a; }
 .branch-control select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
 .toolbar-spacer { flex: 1; }
-.identity-pill { display: flex; align-items: center; gap: 7px; padding: 5px 8px; margin-right: 9px; border: 1px solid #dbe5df; border-radius: 7px; background: #f4f8f5; color: #607069; font-size: var(--text-sm); white-space: nowrap; }
-.identity-pill strong { color: #2d493d; }
-.identity-pill em { padding: 2px 5px; border-radius: 4px; background: #dbeadf; color: #3b634e; font-style: normal; font-size: var(--text-badge); text-transform: uppercase; letter-spacing: .05em; }
-.fetch-button { display: flex; align-items: center; gap: 7px; border: 1px solid #d7dcd7; border-radius: 7px; padding: 8px 11px; font-size: var(--text-body); font-weight: 600; background: white; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+.fetch-button { flex: 0 0 auto; white-space: nowrap; display: flex; align-items: center; gap: 7px; border: 1px solid #d7dcd7; border-radius: 7px; padding: 8px 11px; font-size: var(--text-body); font-weight: 600; background: white; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
 .fetch-button:hover { background: #f7f8f6; }
 .fetch-button:disabled { color: #84908a; }
 .spin { display: inline-block; animation: spin .75s linear infinite; }
@@ -396,26 +409,19 @@ input[type="checkbox"] { width: 13px; height: 13px; accent-color: var(--green); 
 @media (max-width: 980px) {
   body { padding: 0; }
   .app-shell { height: 100vh; min-height: 560px; border: 0; border-radius: 0; }
-  .titlebar { grid-template-columns: minmax(260px,1fr) auto; }
-  .titlebar-center { display: none; }
-  .toolbar { padding-left: 14px; }
   .workspace { grid-template-columns: 225px minmax(0,1fr); }
   .changes-layout { grid-template-columns: 270px minmax(0,1fr); }
-  .identity-pill { display: none; }
 }
 
 @media (max-width: 720px) {
-  .app-shell { grid-template-rows: 58px 55px minmax(0,1fr) 30px; }
+  .app-shell { grid-template-rows: 36px 54px minmax(0,1fr) 30px; }
   .window-controls { display: none; }
-  .repo-picker { margin-left: 5px; }
-  .repo-picker span:nth-child(2) { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
-  .account-trigger { min-width: 54px; padding: 0 12px; }
+  .repo-picker span:nth-child(2) { max-width: 150px; }
+  .account-trigger { max-width: 54px; padding: 7px; }
   .account-copy, .account-trigger .chevron { display: none; }
-  .account-menu { right: 5px; width: min(328px, calc(100vw - 10px)); }
-  .toolbar { padding: 0 9px; }
-  .branch-control { min-width: 0; flex: 1; }
-  .fetch-button { padding: 8px; font-size: 0; }
-  .fetch-button span { font-size: 17px; }
+  .account-menu { right: 0; width: min(328px, calc(100vw - 10px)); }
+  .repo-bar { padding: 0 8px; }
+  .branch-control { min-width: 96px; }
   .workspace { grid-template-columns: 1fr; }
   .repo-sidebar { display: none; }
   .changes-layout { grid-template-columns: minmax(250px, 42%) minmax(420px, 1fr); overflow-x: auto; }
@@ -423,8 +429,7 @@ input[type="checkbox"] { width: 13px; height: 13px; accent-color: var(--green); 
 }
 
 @media (max-height: 720px) {
-  .app-shell { grid-template-rows: 56px 55px minmax(0, 1fr) 29px; }
-  .toolbar { padding-left: 14px; }
+  .app-shell { grid-template-rows: 36px 54px minmax(0, 1fr) 29px; }
   .commit-box textarea { display: none; }
   .file-item { min-height: 47px; }
 }
@@ -434,5 +439,20 @@ html.desktop .app-shell { height: 100vh; border: 0; border-radius: 0; box-shadow
 html.desktop .titlebar { -webkit-app-region: drag; }
 html.desktop button, html.desktop input, html.desktop textarea, html.desktop label { -webkit-app-region: no-drag; }
 html.desktop .window-controls { display: none; }
-html.desktop.macos .repo-picker { margin-left: 76px; }
-html.desktop.windows .repo-picker { margin-left: 8px; }
+
+/* macOS folds everything into one row: the repository action row is the drag
+   region, indented to clear the traffic lights, and Relay's own title row is
+   dropped because the system menu bar already names the app. */
+html.desktop.macos .titlebar { display: none; }
+html.desktop.macos .app-shell { grid-template-rows: 58px minmax(0, 1fr) 31px; }
+html.desktop.macos .repo-bar { -webkit-app-region: drag; padding-left: 86px; }
+
+/* Windows keeps a title row, but the menus share it and the native window
+   controls sit in the title bar overlay on its right. The reserved space
+   matches the overlay width so the menus never sit under the controls. */
+html.desktop.windows .titlebar { padding-right: 150px; -webkit-app-region: drag; }
+html.desktop.windows .repo-bar { -webkit-app-region: no-drag; }
+
+@media (max-height: 720px) {
+  html.desktop.macos .app-shell { grid-template-rows: 54px minmax(0, 1fr) 29px; }
+}

@@ -9,6 +9,7 @@ import test from "node:test";
 const require = createRequire(import.meta.url);
 const { GITHUB_DEVICE_URL, loginProgressFromOutput } = require("../electron/github-auth.cjs");
 const { applyManualOrder, normalizeOrdering } = require("../electron/repository-order.cjs");
+const { commandIds, menuDescriptor, menuTemplate } = require("../electron/application-menu.cjs");
 const {
   readCommitDetail,
   readCommitFileDiff,
@@ -243,6 +244,71 @@ test("refuses commit hashes that are malformed or from another repository", asyn
   }
 });
 
+test("builds the native menu and the in-window menu bar from one definition", () => {
+  const nativeWindows = menuTemplate({ isMac: false, appName: "Relay", onAction: () => {} });
+  const nativeMac = menuTemplate({ isMac: true, appName: "Relay", onAction: () => {} });
+  const rendererWindows = menuDescriptor({ isMac: false });
+
+  // Same menus, same order, in both the native template and the descriptor the
+  // renderer draws on the Windows title row.
+  assert.deepEqual(rendererWindows.map((menu) => menu.label), ["File", "Edit", "View", "Window"]);
+  assert.deepEqual(
+    nativeWindows.map((menu) => menu.label.replace("&", "")),
+    rendererWindows.map((menu) => menu.label),
+  );
+
+  // macOS keeps its application menu and never shows Windows mnemonics.
+  assert.equal(nativeMac[0].label, "Relay");
+  assert.ok(nativeMac.every((menu) => !menu.label.includes("&")));
+  assert.ok(nativeWindows.every((menu) => menu.label.includes("&")));
+
+  // Exit belongs to Windows only; macOS quits from the application menu.
+  const macFile = nativeMac.find((menu) => menu.label === "File");
+  assert.ok(!macFile.submenu.some((item) => item.label === "Exit"));
+  assert.ok(nativeWindows[0].submenu.some((item) => item.label?.includes("xit")));
+
+  // Accelerators stay on the native menu, which is what keeps them working
+  // while the Windows menu bar is hidden.
+  const nativeFile = nativeWindows.find((menu) => menu.label === "&File");
+  assert.equal(nativeFile.submenu[0].accelerator, "CmdOrCtrl+O");
+  assert.equal(nativeFile.submenu[1].accelerator, "CmdOrCtrl+Shift+O");
+
+  // Every renderer command id is one the main process will accept.
+  const allowed = commandIds();
+  for (const menu of rendererWindows) {
+    for (const item of menu.items) if (item.id) assert.ok(allowed.has(item.id), `${item.id} is not an allowed command`);
+  }
+});
+
+test("keeps one repository action row without a duplicate account pill", async () => {
+  const [page, css] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  // Current repository, then branch, then the remote control, then a spacer,
+  // then the account switcher. The spacer must not come before the sync button.
+  const row = page.slice(page.indexOf('<section className="repo-bar">'), page.indexOf("<div className=\"workspace\">"));
+  const order = ["repo-picker", "branch-control", "fetch-button", "toolbar-spacer", "account-wrap"];
+  let cursor = -1;
+  for (const marker of order) {
+    const next = row.indexOf(marker, cursor + 1);
+    assert.ok(next > cursor, `${marker} is out of order in the repository action row`);
+    cursor = next;
+  }
+
+  // The duplicated "Using @account" pill is gone entirely, not relocated.
+  assert.doesNotMatch(page, /identity-pill/);
+  assert.doesNotMatch(css, /identity-pill/);
+  assert.doesNotMatch(page, /Using <strong>/);
+
+  // macOS folds the chrome into the single action row; Windows keeps a title
+  // row and reserves space for the native window controls.
+  assert.match(css, /html\.desktop\.macos \.titlebar \{ display: none; \}/);
+  assert.match(css, /html\.desktop\.macos \.repo-bar \{ -webkit-app-region: drag;/);
+  assert.match(css, /html\.desktop\.windows \.titlebar \{ padding-right: 150px;/);
+});
+
 test("submits the commit-email modal from the keyboard", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
 
@@ -264,19 +330,23 @@ test("submits the commit-email modal from the keyboard", async () => {
 });
 
 test("keeps native repository and multi-account workflows wired", async () => {
-  const [page, main, preload, gitService, discovery, css, packageJson] = await Promise.all([
+  const [page, main, preload, gitService, discovery, applicationMenu, css, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../electron/main.cjs", import.meta.url), "utf8"),
     readFile(new URL("../electron/preload.cjs", import.meta.url), "utf8"),
     readFile(new URL("../electron/git-service.cjs", import.meta.url), "utf8"),
     readFile(new URL("../electron/repository-discovery.cjs", import.meta.url), "utf8"),
+    readFile(new URL("../electron/application-menu.cjs", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
   assert.match(packageJson, /"version": "0\.4\.0"/);
-  assert.match(main, /Clone Repository…/);
-  assert.match(main, /Scan Folder for Repositories…/);
+  // The menu labels now live in the shared definition both the native menu and
+  // the Windows in-window menu bar are built from.
+  assert.match(applicationMenu, /Clone Repository…/);
+  assert.match(applicationMenu, /Scan Folder for Repositories…/);
+  assert.match(main, /menuTemplate\(/);
   assert.match(main, /relay:list-github-repositories/);
   assert.match(main, /relay:remove-repository/);
   assert.match(main, /relay:set-account-email/);
