@@ -37,6 +37,10 @@ contextBridge.exposeInMainWorld("relayDesktop", {
     ipcRenderer.on("relay:menu-action", listener);
     return () => ipcRenderer.removeListener("relay:menu-action", listener);
   },
+  saveSshProfile: (profile) => ipcRenderer.invoke("relay:save-ssh-profile", profile),
+  removeSshProfile: (profileId) => ipcRenderer.invoke("relay:remove-ssh-profile", profileId),
+  setRepositorySshProfile: (repositoryPath, profileId) => ipcRenderer.invoke("relay:set-repository-ssh-profile", repositoryPath, profileId),
+  testSshProfile: (profile) => ipcRenderer.invoke("relay:test-ssh-profile", profile),
   getMenu: () => ipcRenderer.invoke("relay:get-menu"),
   runMenuCommand: (command) => ipcRenderer.invoke("relay:menu-command", command),
   openExternal: (url) => ipcRenderer.invoke("relay:open-external", url),

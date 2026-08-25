@@ -386,6 +386,29 @@ async function getFileDiff(repositoryPath, filePath) {
   }
 }
 
+/**
+ * Chooses the SSH command for a remote.
+ *
+ * Only an SSH remote gets one; an HTTPS remote is untouched. This is also the
+ * point where the shapes stay separate: a GitHub OAuth token is only ever
+ * attached to an HTTPS github.com remote, and an SSH profile is only ever
+ * attached to an SSH remote, so neither can leak into the other's transport.
+ */
+function sshEnvironment(sshCommand, remote) {
+  if (!sshCommand) return {};
+  return isSshRemote(remote) ? { GIT_SSH_COMMAND: sshCommand } : {};
+}
+
+/** The origin URL, or an empty string when the repository has no origin. */
+async function originRemoteUrl(repositoryPath) {
+  return git(repositoryPath, ["remote", "get-url", "origin"]).catch(() => "");
+}
+
+function isSshRemote(remote) {
+  const value = String(remote || "").trim();
+  return /^ssh:\/\//i.test(value) || (/^[^@\s]+@[^@:\s/\\]+:/.test(value) && !/^[a-zA-Z]:[\\/]/.test(value));
+}
+
 async function commitFiles(repositoryPath, files, summary, description, account) {
   if (!Array.isArray(files) || files.length === 0) throw new Error("Select at least one changed file.");
   if (!String(summary || "").trim()) throw new Error("Enter a commit summary.");
@@ -402,11 +425,11 @@ async function commitFiles(repositoryPath, files, summary, description, account)
   });
 }
 
-async function fetchOrigin(repositoryPath, token, handle) {
+async function fetchOrigin(repositoryPath, token, handle, sshCommand) {
   const remote = await git(repositoryPath, ["remote", "get-url", "origin"]).catch(() => "");
   if (!remote) throw new Error("This repository does not have an origin remote.");
   const args = [];
-  const environment = { GIT_TERMINAL_PROMPT: "0" };
+  const environment = { GIT_TERMINAL_PROMPT: "0", ...sshEnvironment(sshCommand, remote) };
   if (token && /^https:\/\/github\.com\//i.test(remote)) {
     args.push(
       "-c", "credential.helper=",
@@ -418,13 +441,13 @@ async function fetchOrigin(repositoryPath, token, handle) {
   await git(repositoryPath, args, environment);
 }
 
-async function pushOrigin(repositoryPath, token, handle) {
+async function pushOrigin(repositoryPath, token, handle, sshCommand) {
   const remote = await git(repositoryPath, ["remote", "get-url", "origin"]).catch(() => "");
   if (!remote) throw new Error("This repository does not have an origin remote.");
   const branch = await git(repositoryPath, ["branch", "--show-current"]);
   if (!branch) throw new Error("Switch to a branch before pushing.");
   const args = [];
-  const environment = { GIT_TERMINAL_PROMPT: "0" };
+  const environment = { GIT_TERMINAL_PROMPT: "0", ...sshEnvironment(sshCommand, remote) };
   if (token && /^https:\/\/github\.com\//i.test(remote)) {
     args.push(
       "-c", "credential.helper=",
@@ -436,9 +459,9 @@ async function pushOrigin(repositoryPath, token, handle) {
   await git(repositoryPath, args, environment);
 }
 
-async function cloneRepository(remoteUrl, destinationPath, token, handle) {
+async function cloneRepository(remoteUrl, destinationPath, token, handle, sshCommand) {
   const args = [];
-  const environment = { GIT_TERMINAL_PROMPT: "0" };
+  const environment = { GIT_TERMINAL_PROMPT: "0", ...sshEnvironment(sshCommand, remoteUrl) };
   if (token && /^https:\/\/github\.com\//i.test(remoteUrl)) {
     args.push(
       "-c", "credential.helper=",
@@ -458,6 +481,8 @@ async function switchBranch(repositoryPath, branch) {
 
 module.exports = {
   cloneRepository,
+  isSshRemote,
+  originRemoteUrl,
   commitFiles,
   fetchOrigin,
   getFileDiff,

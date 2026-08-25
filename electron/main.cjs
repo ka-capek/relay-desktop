@@ -6,6 +6,7 @@ const {
   commitFiles,
   fetchOrigin,
   getFileDiff,
+  originRemoteUrl,
   pushOrigin,
   readCommitDetail,
   readCommitFileDiff,
@@ -16,6 +17,12 @@ const {
 } = require("./git-service.cjs");
 const { scanForRepositories } = require("./repository-discovery.cjs");
 const { commandIds, menuDescriptor, menuTemplate } = require("./application-menu.cjs");
+const {
+  isGitHubRemote,
+  normalizeProfile: normalizeSshProfile,
+  sshCommandFor,
+  testConnection: testSshConnection,
+} = require("./ssh-service.cjs");
 const {
   DEFAULT_ORDER,
   REPOSITORY_ORDER_DIRECTIONS,
@@ -51,7 +58,30 @@ function emptyStore() {
     repositoryAccounts: {},
     repositoryOrder: { ...DEFAULT_ORDER },
     manualOrder: [],
+    // SSH identities for non-GitHub hosts. These hold no key material: a host,
+    // an optional user and port, and an optional path to a private key.
+    sshProfiles: [],
+    repositorySshProfiles: {},
   };
+}
+
+function normalizeSshState(store) {
+  const profiles = [];
+  const seen = new Set();
+  for (const profile of Array.isArray(store.sshProfiles) ? store.sshProfiles : []) {
+    const normalized = normalizeSshProfile(profile);
+    if (!normalized || seen.has(normalized.id)) continue;
+    seen.add(normalized.id);
+    profiles.push(normalized);
+  }
+  store.sshProfiles = profiles;
+
+  const bindings = {};
+  for (const [repositoryPath, profileId] of Object.entries(store.repositorySshProfiles || {})) {
+    if (seen.has(profileId)) bindings[repositoryPath] = profileId;
+  }
+  store.repositorySshProfiles = bindings;
+  return store;
 }
 
 function readStore() {
@@ -65,7 +95,7 @@ function readStore() {
         delete sanitized.encryptedToken;
         return sanitized;
       });
-    return normalizeOrdering(store);
+    return normalizeSshState(normalizeOrdering(store));
   } catch {
     return emptyStore();
   }
@@ -91,7 +121,22 @@ function publicState(store) {
     repositoryAccounts: store.repositoryAccounts,
     repositoryOrder: store.repositoryOrder,
     manualOrder: store.manualOrder,
+    sshProfiles: store.sshProfiles,
+    repositorySshProfiles: store.repositorySshProfiles,
   };
+}
+
+/**
+ * The SSH command for a repository, or null.
+ *
+ * A GitHub remote never gets one: GitHub.com goes through the OAuth-backed
+ * HTTPS path, and an SSH GitHub remote uses the user's own SSH setup.
+ */
+function sshCommandForRepository(store, repositoryPath, remote) {
+  if (remote && isGitHubRemote(remote)) return null;
+  const profileId = store.repositorySshProfiles[repositoryPath];
+  if (!profileId) return null;
+  return sshCommandFor(store.sshProfiles.find((profile) => profile.id === profileId));
 }
 
 function initials(name) {
@@ -358,9 +403,22 @@ function registerIpc() {
     const store = readStore();
     const accountId = input?.accountId || store.activeAccountId;
     const account = store.accounts.find((item) => item.id === accountId);
-    const token = account ? await accountToken(githubContext(), account.handle) : null;
-    const repository = await cloneRepository(remoteUrl, destinationPath, token, account?.handle);
+    const isGitHub = isGitHubRemote(remoteUrl);
+    const token = account && isGitHub ? await accountToken(githubContext(), account.handle) : null;
+    // A clone has no repository path yet, so its SSH identity is chosen in the
+    // clone dialog rather than resolved from a per-repository binding.
+    const sshProfile = input?.sshProfileId
+      ? store.sshProfiles.find((profile) => profile.id === input.sshProfileId)
+      : null;
+    const sshCommand = isGitHub ? null : sshCommandFor(sshProfile);
+    const repository = await cloneRepository(remoteUrl, destinationPath, token, account?.handle, sshCommand);
     const state = rememberRepository(repository);
+    if (sshProfile) {
+      const updated = readStore();
+      updated.repositorySshProfiles[repository.path] = sshProfile.id;
+      writeStore(updated);
+      return { repository, state: publicState(updated) };
+    }
     return { repository, state };
   });
 
@@ -433,8 +491,10 @@ function registerIpc() {
     const store = readStore();
     const resolvedId = accountId || store.activeAccountId;
     const account = store.accounts.find((item) => item.id === resolvedId);
-    const token = account ? await accountToken(githubContext(), account.handle) : null;
-    await fetchOrigin(repositoryPath, token, account?.handle);
+    const remote = await originRemoteUrl(repositoryPath);
+    // A non-GitHub remote never receives a GitHub token, so it is not fetched.
+    const token = account && isGitHubRemote(remote) ? await accountToken(githubContext(), account.handle) : null;
+    await fetchOrigin(repositoryPath, token, account?.handle, sshCommandForRepository(store, repositoryPath, remote));
     return readRepository(repositoryPath);
   });
 
@@ -442,8 +502,9 @@ function registerIpc() {
     const store = readStore();
     const resolvedId = accountId || store.activeAccountId;
     const account = store.accounts.find((item) => item.id === resolvedId);
-    const token = account ? await accountToken(githubContext(), account.handle) : null;
-    await pushOrigin(repositoryPath, token, account?.handle);
+    const remote = await originRemoteUrl(repositoryPath);
+    const token = account && isGitHubRemote(remote) ? await accountToken(githubContext(), account.handle) : null;
+    await pushOrigin(repositoryPath, token, account?.handle, sshCommandForRepository(store, repositoryPath, remote));
     return readRepository(repositoryPath);
   });
 
@@ -526,6 +587,38 @@ function registerIpc() {
 
   // The renderer draws the menu bar on Windows, so it needs the same structure
   // the native menu was built from.
+  ipcMain.handle("relay:save-ssh-profile", (_event, profile) => {
+    const normalized = normalizeSshProfile(profile);
+    if (!normalized) throw new Error("Enter a host name for this SSH identity.");
+    const store = readStore();
+    const index = store.sshProfiles.findIndex((item) => item.id === normalized.id);
+    if (index >= 0) store.sshProfiles[index] = normalized;
+    else store.sshProfiles.push(normalized);
+    writeStore(store);
+    return publicState(store);
+  });
+
+  ipcMain.handle("relay:remove-ssh-profile", (_event, profileId) => {
+    const store = readStore();
+    store.sshProfiles = store.sshProfiles.filter((profile) => profile.id !== String(profileId || ""));
+    normalizeSshState(store);
+    writeStore(store);
+    return publicState(store);
+  });
+
+  ipcMain.handle("relay:set-repository-ssh-profile", (_event, repositoryPath, profileId) => {
+    const store = readStore();
+    const resolvedPath = String(repositoryPath || "");
+    if (!resolvedPath) throw new Error("Open a repository first.");
+    if (profileId && !store.sshProfiles.some((profile) => profile.id === profileId)) throw new Error("SSH identity not found.");
+    if (profileId) store.repositorySshProfiles[resolvedPath] = profileId;
+    else delete store.repositorySshProfiles[resolvedPath];
+    writeStore(store);
+    return publicState(store);
+  });
+
+  ipcMain.handle("relay:test-ssh-profile", (_event, profile) => testSshConnection(profile));
+
   ipcMain.handle("relay:get-menu", () => ({ isMac, menus: menuDescriptor({ isMac }) }));
 
   ipcMain.handle("relay:menu-command", (event, command) => {

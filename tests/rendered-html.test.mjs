@@ -11,6 +11,19 @@ const { GITHUB_DEVICE_URL, loginProgressFromOutput } = require("../electron/gith
 const { applyManualOrder, normalizeOrdering } = require("../electron/repository-order.cjs");
 const { commandIds, menuDescriptor, menuTemplate } = require("../electron/application-menu.cjs");
 const {
+  cloneRepository,
+  fetchOrigin,
+  commitFiles,
+  isSshRemote,
+  pushOrigin,
+} = require("../electron/git-service.cjs");
+const {
+  describeSshResult,
+  isGitHubRemote,
+  parseSshRemote,
+  sshCommandFor,
+} = require("../electron/ssh-service.cjs");
+const {
   readCommitDetail,
   readCommitFileDiff,
   readHistoryPage,
@@ -307,6 +320,121 @@ test("keeps one repository action row without a duplicate account pill", async (
   assert.match(css, /html\.desktop\.macos \.titlebar \{ display: none; \}/);
   assert.match(css, /html\.desktop\.macos \.repo-bar \{ -webkit-app-region: drag;/);
   assert.match(css, /html\.desktop\.windows \.titlebar \{ padding-right: 150px;/);
+});
+
+test("recognises SSH remotes and keeps GitHub separate from other hosts", () => {
+  assert.deepEqual(parseSshRemote("git@gitlab.example.com:team/tools.git"),
+    { user: "git", host: "gitlab.example.com", port: null, path: "team/tools.git" });
+  assert.deepEqual(parseSshRemote("ssh://git@git.internal:2222/srv/tools.git"),
+    { user: "git", host: "git.internal", port: 2222, path: "/srv/tools.git" });
+
+  // A Windows drive letter and a plain local path are not SSH remotes.
+  assert.equal(parseSshRemote("C:\\Users\\me\\repo"), null);
+  assert.equal(parseSshRemote("/Users/me/repo"), null);
+  assert.equal(parseSshRemote("https://gitlab.com/a/b.git"), null);
+
+  // GitHub is recognised in both its HTTPS and SSH forms, so it keeps using
+  // the OAuth path and never picks up an SSH identity.
+  for (const remote of ["https://github.com/a/b.git", "git@github.com:a/b.git", "ssh://git@github.com/a/b.git"]) {
+    assert.equal(isGitHubRemote(remote), true, remote);
+  }
+  for (const remote of ["git@gitlab.com:a/b.git", "https://gitlab.com/a/b.git"]) {
+    assert.equal(isGitHubRemote(remote), false, remote);
+  }
+
+  // Only an SSH remote can receive GIT_SSH_COMMAND.
+  assert.equal(isSshRemote("git@gitlab.example.com:t/x.git"), true);
+  assert.equal(isSshRemote("https://gitlab.com/t/x.git"), false);
+
+  // A profile with no key changes nothing, so the agent and ~/.ssh/config win.
+  assert.equal(sshCommandFor({ host: "gitlab.example.com" }), null);
+  assert.equal(sshCommandFor({ host: "has space" }), null);
+
+  // Paths are POSIX-quoted, including one containing a quote and a space.
+  assert.equal(
+    sshCommandFor({ host: "h", identityFile: "/keys/my key/id_'x" }),
+    "'ssh' -i '/keys/my key/id_'\\''x' -o 'IdentitiesOnly=yes'",
+  );
+});
+
+test("explains SSH failures without leaking key material", () => {
+  const cases = [
+    ["Hi acme! You've successfully authenticated", true, /accepted the key/],
+    ["Permission denied (publickey).", false, /refused the key/],
+    ["ssh: Could not resolve hostname nope", false, /could not be resolved/],
+    ["Host key verification failed.", false, /not trusted yet/],
+    ["ssh: connect to host x port 22: Connection timed out", false, /did not answer/],
+    ["Enter passphrase for key '/home/me/.ssh/id_rsa':", false, /ssh-add/],
+  ];
+  for (const [output, ok, matcher] of cases) {
+    const result = describeSshResult("git.example.com", 255, output);
+    assert.equal(result.ok, ok, output);
+    assert.match(result.message, matcher);
+    // Every message names the host and stays one actionable sentence.
+    assert.match(result.message, /git\.example\.com|ssh-add/);
+    // A passphrase prompt must never echo the key path back at the user.
+    assert.doesNotMatch(result.message, /id_rsa/);
+  }
+});
+
+test("clones, fetches and pushes over SSH without a token", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "relay-ssh-"));
+  try {
+    const run = (cwd, args, env) => execFileSync("git", args, { cwd, stdio: "pipe", env: { ...process.env, ...env } });
+
+    // A bare repository standing in for the remote host.
+    const server = path.join(root, "server.git");
+    run(root, ["init", "-q", "--bare", "-b", "main", "server.git"]);
+    const seed = path.join(root, "seed");
+    await mkdir(seed);
+    run(seed, ["init", "-q", "-b", "main", "."]);
+    await writeFile(path.join(seed, "file.txt"), "hello over ssh\n");
+    run(seed, ["add", "."]);
+    run(seed, ["-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-q", "-m", "Initial over SSH"]);
+    run(seed, ["remote", "add", "origin", server]);
+    run(seed, ["push", "-q", "origin", "main"]);
+
+    // Stands in for ssh: records its arguments, then runs the command the way
+    // a real sshd would run it for Git.
+    const shim = path.join(root, "fake-ssh");
+    const log = path.join(root, "ssh-args.log");
+    await writeFile(shim, `#!/bin/sh\necho "$@" >> ${JSON.stringify(log)}\nfor last; do :; done\nexec sh -c "$last"\n`, { mode: 0o755 });
+
+    // Relay builds the command; only the executable is swapped for the shim.
+    const key = path.join(root, "id_test");
+    const sshCommand = sshCommandFor({ host: "git.example.com", identityFile: key })
+      .replace(/^'ssh'/, `'${shim}'`);
+
+    const remote = `git@git.example.com:${server}`;
+    assert.equal(isSshRemote(remote), true);
+
+    const cloned = path.join(root, "cloned");
+    const repository = await cloneRepository(remote, cloned, null, null, sshCommand);
+    assert.equal(repository.branch, "main");
+    assert.equal(repository.history[0].title, "Initial over SSH");
+
+    await fetchOrigin(cloned, null, null, sshCommand);
+
+    await writeFile(path.join(cloned, "file.txt"), "hello over ssh\nsecond line\n");
+    await commitFiles(cloned, ["file.txt"], "Push over SSH", "", { name: "T", email: "t@example.com" });
+    await pushOrigin(cloned, null, null, sshCommand);
+
+    // The push really reached the remote.
+    const serverLog = execFileSync("git", ["-C", server, "log", "--oneline", "main"], { encoding: "utf8" });
+    assert.match(serverLog, /Push over SSH/);
+
+    // The identity Relay chose actually reached ssh.
+    const args = await readFile(log, "utf8");
+    assert.match(args, /-i .*id_test/);
+    assert.match(args, /IdentitiesOnly=yes/);
+    assert.match(args, /git-upload-pack/);
+    assert.match(args, /git-receive-pack/);
+
+    // No GitHub credential was involved anywhere in that exchange.
+    assert.doesNotMatch(args, /RELAY_GIT_TOKEN|credential\.helper|Authorization/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("submits the commit-email modal from the keyboard", async () => {

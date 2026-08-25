@@ -25,6 +25,23 @@ type RepositorySummary = {
   latestCommit: string | null;
 };
 
+/**
+ * An SSH identity for a non-GitHub host.
+ *
+ * This is not a GitHub account and never involves a token. It holds no key
+ * material either: `identityFile` is a path, and OpenSSH and the SSH agent
+ * handle the key and any passphrase.
+ */
+type SshProfile = {
+  id: string;
+  label: string;
+  host: string;
+  user: string | null;
+  port: number | null;
+  identityFile: string | null;
+  identitiesOnly: boolean;
+};
+
 type RepositoryOrderMode = "manual" | "age" | "name" | "latest";
 type RepositoryOrderDirection = "asc" | "desc";
 type RepositoryOrder = { mode: RepositoryOrderMode; direction: RepositoryOrderDirection };
@@ -135,6 +152,8 @@ type AppState = {
   repositoryAccounts: Record<string, string>;
   repositoryOrder: RepositoryOrder;
   manualOrder: string[];
+  sshProfiles: SshProfile[];
+  repositorySshProfiles: Record<string, string>;
 };
 
 type CommitInput = {
@@ -152,7 +171,7 @@ type RelayDesktop = {
   selectRepository: () => Promise<Repository | null>;
   chooseCloneDirectory: () => Promise<string | null>;
   listGitHubRepositories: (accountId: string) => Promise<GitHubRepository[]>;
-  cloneRepository: (input: { remoteUrl: string; parentPath: string; repositoryName: string; accountId: string | null }) => Promise<{ repository: Repository; state: AppState }>;
+  cloneRepository: (input: { remoteUrl: string; parentPath: string; repositoryName: string; accountId: string | null; sshProfileId: string | null }) => Promise<{ repository: Repository; state: AppState }>;
   scanFolder: () => Promise<{ state: AppState; found: number; added: number; readable: number; folderPath: string } | null>;
   removeRepository: (repositoryPath: string) => Promise<AppState>;
   openRepository: (repositoryPath: string) => Promise<Repository>;
@@ -172,6 +191,10 @@ type RelayDesktop = {
   setRepositoryAccount: (repositoryPath: string, accountId: string | null) => Promise<AppState>;
   setRepositoryOrder: (mode: RepositoryOrderMode, direction: RepositoryOrderDirection) => Promise<AppState>;
   setManualOrder: (repositoryPaths: string[]) => Promise<AppState>;
+  saveSshProfile: (profile: Partial<SshProfile>) => Promise<AppState>;
+  removeSshProfile: (profileId: string) => Promise<AppState>;
+  setRepositorySshProfile: (repositoryPath: string, profileId: string | null) => Promise<AppState>;
+  testSshProfile: (profile: Partial<SshProfile>) => Promise<{ ok: boolean; message: string }>;
   removeAccount: (accountId: string) => Promise<AppState>;
   onMenuAction: (callback: (action: MenuAction) => void) => () => void;
   openExternal: (url: string) => Promise<void>;
@@ -209,7 +232,29 @@ type DiffLine = {
   text: string;
 };
 
-type IconName = "alert" | "branch" | "check" | "chevron" | "clone" | "close" | "edit" | "external" | "folder" | "github" | "grip" | "info" | "lock" | "more" | "plus" | "refresh" | "repository" | "route" | "search" | "settings" | "sort" | "trash" | "upload";
+const EMPTY_SSH_FORM = { id: "", label: "", host: "", user: "", port: "", identityFile: "", identitiesOnly: true };
+
+/** Mirrors electron/ssh-service.cjs so the UI can tell the user what will happen. */
+function isSshRemoteUrl(remote: string) {
+  const value = remote.trim();
+  return /^ssh:\/\//i.test(value) || (/^[^@\s]+@[^@:\s/\\]+:/.test(value) && !/^[a-zA-Z]:[\\/]/.test(value));
+}
+
+function isGitHubRemoteUrl(remote: string) {
+  const value = remote.trim();
+  if (/^https:\/\/github\.com\//i.test(value)) return true;
+  return /^(?:ssh:\/\/)?(?:[^@\s]+@)?github\.com[:/]/i.test(value);
+}
+
+function sshHostFromRemote(remote: string) {
+  const value = remote.trim();
+  const explicit = value.match(/^ssh:\/\/(?:[^@/]+@)?([^:/]+)/i);
+  if (explicit) return explicit[1];
+  const scp = value.match(/^(?:[^@\s]+@)?([^@:\s/\\]+):(?!\/\/)/);
+  return scp && !/^[a-zA-Z]$/.test(scp[1]) ? scp[1] : null;
+}
+
+type IconName = "alert" | "branch" | "check" | "chevron" | "clone" | "close" | "edit" | "external" | "folder" | "github" | "grip" | "info" | "key" | "lock" | "more" | "plus" | "refresh" | "repository" | "route" | "search" | "settings" | "sort" | "trash" | "upload";
 
 function Icon({ name, size = 16, className = "" }: { name: IconName; size?: number; className?: string }) {
   let content;
@@ -226,6 +271,7 @@ function Icon({ name, size = 16, className = "" }: { name: IconName; size?: numb
     case "github": content = <path fill="currentColor" stroke="none" d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.23c-3.23.7-3.91-1.37-3.91-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.78 2.72 1.27 3.38.97.1-.75.4-1.27.74-1.56-2.58-.29-5.29-1.29-5.29-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.47.11-3.05 0 0 .97-.31 3.16 1.18a10.9 10.9 0 0 1 5.76 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.72 5.39-5.31 5.68.42.36.79 1.07.79 2.16v3.21c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" />; break;
     case "grip": content = <><path d="M9 6h.01M9 12h.01M9 18h.01" /><path d="M15 6h.01M15 12h.01M15 18h.01" /></>; break;
     case "info": content = <><circle cx="12" cy="12" r="9" /><path d="M12 11v6" /><path d="M12 7h.01" /></>; break;
+    case "key": content = <><circle cx="8" cy="15" r="4" /><path d="m11 12 8-8" /><path d="m17 6 2 2" /><path d="m14 9 2 2" /></>; break;
     case "lock": content = <><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>; break;
     case "more": content = <><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none" /></>; break;
     case "plus": content = <><path d="M12 5v14" /><path d="M5 12h14" /></>; break;
@@ -249,6 +295,8 @@ const emptyAppState: AppState = {
   repositoryAccounts: {},
   repositoryOrder: { mode: "manual", direction: "asc" },
   manualOrder: [],
+  sshProfiles: [],
+  repositorySshProfiles: {},
 };
 
 const HISTORY_PAGE_SIZE = 50;
@@ -437,6 +485,10 @@ export default function Home() {
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const menuActionsRef = useRef<Record<MenuAction, () => void> | null>(null);
   const savingEmailRef = useRef(false);
+  const [sshModalOpen, setSshModalOpen] = useState(false);
+  const [sshForm, setSshForm] = useState({ ...EMPTY_SSH_FORM });
+  const [sshTestResult, setSshTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [cloneSshProfileId, setCloneSshProfileId] = useState<string>("");
   const [appMenus, setAppMenus] = useState<MenuDescriptor[]>([]);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const menuBarRef = useRef<HTMLDivElement>(null);
@@ -478,6 +530,8 @@ export default function Home() {
     if (!needle) return orderedRepositories;
     return orderedRepositories.filter((repo) => `${repo.owner}/${repo.name} ${repo.path}`.toLowerCase().includes(needle));
   }, [orderedRepositories, search]);
+  // A non-GitHub SSH clone is the case where an explicit identity can help.
+  const cloneUsesSsh = isSshRemoteUrl(cloneForm.remoteUrl) && !isGitHubRemoteUrl(cloneForm.remoteUrl);
   const visibleGitHubRepositories = useMemo(() => {
     const needle = githubRepositorySearch.trim().toLowerCase();
     if (!needle) return githubRepositories;
@@ -815,6 +869,9 @@ export default function Home() {
       const result = await window.relayDesktop.cloneRepository({
         ...cloneForm,
         accountId: activeAccount?.id || null,
+        // A clone has no path yet, so the identity is chosen here and bound to
+        // the repository once it exists.
+        sshProfileId: cloneUsesSsh ? cloneSshProfileId || null : null,
       });
       setAppState(result.state);
       applyRepository(result.repository, false);
@@ -1108,6 +1165,86 @@ export default function Home() {
     if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
     event.preventDefault();
     nudgeRepository(repositoryPath, event.key === "ArrowUp" ? -1 : 1);
+  }
+
+  const sshProfiles = appState.sshProfiles;
+  const repositorySshProfileId = repository ? appState.repositorySshProfiles[repository.path] || "" : "";
+  const repositoryUsesSsh = Boolean(repository?.remote && isSshRemoteUrl(repository.remote) && !isGitHubRemoteUrl(repository.remote));
+
+  function editSshProfile(profile?: SshProfile) {
+    setSshTestResult(null);
+    setSshForm(profile
+      ? {
+        id: profile.id,
+        label: profile.label,
+        host: profile.host,
+        user: profile.user || "",
+        port: profile.port ? String(profile.port) : "",
+        identityFile: profile.identityFile || "",
+        identitiesOnly: profile.identitiesOnly,
+      }
+      : { ...EMPTY_SSH_FORM, host: repository?.remote ? sshHostFromRemote(repository.remote) || "" : "" });
+    setSshModalOpen(true);
+  }
+
+  function sshProfileFromForm() {
+    return {
+      id: sshForm.id || undefined,
+      label: sshForm.label.trim(),
+      host: sshForm.host.trim(),
+      user: sshForm.user.trim(),
+      port: sshForm.port.trim() ? Number(sshForm.port.trim()) : null,
+      identityFile: sshForm.identityFile.trim(),
+      identitiesOnly: sshForm.identitiesOnly,
+    };
+  }
+
+  async function saveSshProfile() {
+    if (!window.relayDesktop) return;
+    try {
+      setBusy("ssh");
+      setAppState(await window.relayDesktop.saveSshProfile(sshProfileFromForm()));
+      setSshModalOpen(false);
+      setSshForm({ ...EMPTY_SSH_FORM });
+      showNotice("SSH identity saved");
+    } catch (error) {
+      showNotice(messageFrom(error), true);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function testSshProfile() {
+    if (!window.relayDesktop) return;
+    setSshTestResult(null);
+    try {
+      setBusy("ssh-test");
+      setSshTestResult(await window.relayDesktop.testSshProfile(sshProfileFromForm()));
+    } catch (error) {
+      setSshTestResult({ ok: false, message: messageFrom(error) });
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function removeSshProfile(profileId: string) {
+    if (!window.relayDesktop) return;
+    try {
+      setAppState(await window.relayDesktop.removeSshProfile(profileId));
+      showNotice("SSH identity removed. No key files were changed.");
+    } catch (error) {
+      showNotice(messageFrom(error), true);
+    }
+  }
+
+  async function chooseRepositorySshProfile(profileId: string) {
+    if (!window.relayDesktop || !repository) return;
+    try {
+      setAppState(await window.relayDesktop.setRepositorySshProfile(repository.path, profileId || null));
+      showNotice(profileId ? "This repository will use the chosen SSH identity." : "This repository will use your default SSH configuration.");
+    } catch (error) {
+      showNotice(messageFrom(error), true);
+    }
   }
 
   async function runMenuCommand(command: string) {
@@ -1627,6 +1764,54 @@ export default function Home() {
               ))}
             </div>
             <div className="modal-note"><Icon name="info" size={17} />GitHub CLI keeps OAuth credentials in the operating system credential store.</div>
+
+            <div className="ssh-section">
+              <div className="ssh-section-heading">
+                <span><Icon name="key" size={15} />SSH identity</span>
+                <button onClick={() => editSshProfile()}><Icon name="plus" size={13} />Add identity</button>
+              </div>
+              {repositoryUsesSsh ? (
+                <>
+                  <p>
+                    This repository uses <code>{repository.remote}</code>. Commit name and email still come from the account above;
+                    this only chooses which key is offered to the host.
+                  </p>
+                  <label className="form-field">
+                    <span>Identity for this repository</span>
+                    <select value={repositorySshProfileId} onChange={(event) => chooseRepositorySshProfile(event.target.value)}>
+                      <option value="">Use my SSH agent and ~/.ssh/config</option>
+                      {sshProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.label} · {profile.host}</option>)}
+                    </select>
+                  </label>
+                </>
+              ) : (
+                <p>
+                  {repository.remote
+                    ? "This repository's remote is not a non-GitHub SSH remote, so Relay uses the account above for it."
+                    : "This repository has no origin remote yet."}
+                  {" "}SSH identities apply to Git hosts other than GitHub.com.
+                </p>
+              )}
+              {sshProfiles.length > 0 && (
+                <div className="ssh-profiles">
+                  {sshProfiles.map((profile) => (
+                    <div className="ssh-profile" key={profile.id}>
+                      <span className="ssh-profile-mark"><Icon name="key" size={14} /></span>
+                      <span className="ssh-profile-copy">
+                        <strong>{profile.label}</strong>
+                        <small>{profile.user ? `${profile.user}@` : ""}{profile.host}{profile.port ? `:${profile.port}` : ""}{profile.identityFile ? ` · ${profile.identityFile}` : " · SSH agent"}</small>
+                      </span>
+                      <div className="ssh-profile-actions">
+                        <button onClick={() => editSshProfile(profile)}><Icon name="edit" size={13} />Edit</button>
+                        <button className="danger" onClick={() => removeSshProfile(profile.id)}><Icon name="trash" size={13} />Remove</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="modal-note"><Icon name="info" size={17} />Relay stores only the host and the key&apos;s location. Private keys and passphrases stay with OpenSSH and your SSH agent, and a GitHub token is never sent to another host.</div>
+            </div>
+
             <button className="primary-modal-button" onClick={saveRepositoryAccount}>Save preference</button>
           </section>
         </div>
@@ -1699,7 +1884,16 @@ export default function Home() {
             )}
             <label className="form-field"><span>Repository name</span><input value={cloneForm.repositoryName} onChange={(event) => setCloneForm((current) => ({ ...current, repositoryName: event.target.value }))} placeholder="repository" /></label>
             <label className="form-field"><span>Clone into folder</span><div className="path-picker"><input value={cloneForm.parentPath} readOnly placeholder="Choose a local folder" /><button onClick={chooseCloneDirectory}><Icon name="folder" size={15} />Choose</button></div></label>
-            <div className="modal-note"><Icon name="info" size={17} />{activeAccount ? `Private GitHub repositories use @${activeAccount.handle}.` : "Connect a GitHub account to browse and clone private repositories."} SSH URLs use your existing SSH configuration.</div>
+            {cloneUsesSsh && (
+              <label className="form-field">
+                <span>SSH identity <small>Optional</small></span>
+                <select value={cloneSshProfileId} onChange={(event) => setCloneSshProfileId(event.target.value)}>
+                  <option value="">Use my SSH agent and ~/.ssh/config</option>
+                  {sshProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.label} · {profile.host}</option>)}
+                </select>
+              </label>
+            )}
+            <div className="modal-note"><Icon name="info" size={17} />{activeAccount ? `Private GitHub repositories use @${activeAccount.handle}.` : "Connect a GitHub account to browse and clone private repositories."} SSH URLs use your existing SSH configuration; a GitHub token is never sent to another host.</div>
             <button className="primary-modal-button" disabled={!cloneForm.remoteUrl.trim() || !cloneForm.parentPath || !cloneForm.repositoryName.trim() || busy === "clone"} onClick={cloneRemoteRepository}>{busy === "clone" ? "Cloning repository…" : "Clone repository"}</button>
             <button className="secondary-modal-button" disabled={busy === "clone"} onClick={() => setCloneModalOpen(false)}>Cancel</button>
           </section>
@@ -1719,6 +1913,43 @@ export default function Home() {
               <label className="form-field"><span>Commit email</span><input type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} placeholder="Leave blank to use GitHub noreply" /></label>
               <button type="submit" className="primary-modal-button" disabled={busy === "email"}>{busy === "email" ? "Saving…" : "Save email"}</button>
               <button type="button" className="secondary-modal-button" onClick={() => setEditingAccountId(null)}>Cancel</button>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {sshModalOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && busy !== "ssh-test") setSshModalOpen(false); }}>
+          <section className="modal ssh-modal" role="dialog" aria-modal="true" aria-labelledby="ssh-title">
+            <button className="modal-close" onClick={() => setSshModalOpen(false)} aria-label="Close"><Icon name="close" size={17} /></button>
+            <div className="modal-icon"><Icon name="key" size={21} /></div>
+            <h2 id="ssh-title">{sshForm.id ? "Edit SSH identity" : "Add SSH identity"}</h2>
+            <p>For Git hosts other than GitHub.com. Leave the key blank to use your SSH agent and <code>~/.ssh/config</code>, which is right for most setups.</p>
+            <form onSubmit={(event) => { event.preventDefault(); saveSshProfile(); }} noValidate>
+              <label className="form-field"><span>Name</span><input value={sshForm.label} onChange={(event) => setSshForm({ ...sshForm, label: event.target.value })} placeholder="Work GitLab" /></label>
+              <label className="form-field"><span>Host <small>Required</small></span><input value={sshForm.host} onChange={(event) => setSshForm({ ...sshForm, host: event.target.value })} placeholder="gitlab.example.com" /></label>
+              <div className="ssh-form-row">
+                <label className="form-field"><span>User</span><input value={sshForm.user} onChange={(event) => setSshForm({ ...sshForm, user: event.target.value })} placeholder="git" /></label>
+                <label className="form-field"><span>Port</span><input value={sshForm.port} onChange={(event) => setSshForm({ ...sshForm, port: event.target.value.replace(/\D/g, "") })} placeholder="22" inputMode="numeric" /></label>
+              </div>
+              <label className="form-field">
+                <span>Private key file <small>Optional</small></span>
+                <input value={sshForm.identityFile} onChange={(event) => setSshForm({ ...sshForm, identityFile: event.target.value })} placeholder="~/.ssh/id_ed25519" />
+              </label>
+              <label className="ssh-checkbox">
+                <input type="checkbox" checked={sshForm.identitiesOnly} onChange={(event) => setSshForm({ ...sshForm, identitiesOnly: event.target.checked })} />
+                <span>Offer only this key<small>Keep this on when several identities share one host.</small></span>
+              </label>
+              {sshTestResult && (
+                <div className={`ssh-test-result ${sshTestResult.ok ? "ok" : "error"}`} role="status">
+                  <Icon name={sshTestResult.ok ? "check" : "alert"} size={16} />{sshTestResult.message}
+                </div>
+              )}
+              <button type="button" className="secondary-modal-button" disabled={!sshForm.host.trim() || busy === "ssh-test"} onClick={testSshProfile}>
+                {busy === "ssh-test" ? "Testing connection…" : "Test connection"}
+              </button>
+              <button type="submit" className="primary-modal-button" disabled={!sshForm.host.trim() || busy === "ssh"}>{busy === "ssh" ? "Saving…" : "Save identity"}</button>
+              <button type="button" className="secondary-modal-button" onClick={() => setSshModalOpen(false)}>Cancel</button>
             </form>
           </section>
         </div>

@@ -359,6 +359,36 @@ input[type="checkbox"] { width: 13px; height: 13px; accent-color: var(--green); 
 .device-code.error { border-color: #c98b7b; background: #fbf3f1; }
 .device-code.error small { color: #9b4e3d; }
 .login-progress { display: flex; align-items: center; gap: 9px; margin: 13px 0; padding: 11px; border-radius: 8px; background: #edf4ef; color: #496053; font-size: var(--text-sm); }
+.ssh-section { margin: 16px 0 4px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.ssh-section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.ssh-section-heading > span { display: flex; align-items: center; gap: 7px; color: #46534d; font-size: var(--text-body); font-weight: 650; }
+.ssh-section-heading button { display: flex; align-items: center; gap: 5px; border: 1px solid #d9ded9; border-radius: 6px; padding: 5px 9px; background: white; color: #4f7562; cursor: pointer; font-size: var(--text-meta); }
+.ssh-section-heading button:hover { background: #f0f5f1; }
+.ssh-section > p { margin: 0 0 10px; color: #6e7973; font-size: var(--text-meta); line-height: var(--line-body); }
+.ssh-section code { padding: 1px 4px; border-radius: 4px; background: #f0f2ef; font: var(--text-meta) var(--font-geist-mono); overflow-wrap: anywhere; }
+/* minmax(0,1fr) stops the grid item sizing to the nowrap text's min-content
+   width, which would push the row wider than the modal. */
+.ssh-profiles { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin: 10px 0; }
+.ssh-profile { min-width: 0; display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid #dde2dd; border-radius: 8px; }
+.ssh-profile-mark { width: 26px; height: 26px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 7px; background: #eef3ef; color: var(--green); }
+.ssh-profile-copy { flex: 1; min-width: 0; }
+.ssh-profile-copy strong, .ssh-profile-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-profile-copy strong { font-size: var(--text-body); }
+.ssh-profile-copy small { margin-top: 3px; color: #7b8680; font: var(--text-meta) var(--font-geist-mono); }
+.ssh-profile-actions { display: flex; gap: 5px; flex: 0 0 auto; }
+.ssh-profile-actions button { display: flex; align-items: center; gap: 4px; border: 1px solid #d9ded9; border-radius: 6px; padding: 5px 7px; background: white; color: #52625a; cursor: pointer; font-size: var(--text-meta); }
+.ssh-profile-actions button.danger { color: #a64e43; }
+.ssh-modal { width: min(480px, 100%); }
+.ssh-form-row { display: grid; grid-template-columns: minmax(0, 1fr) 108px; gap: 10px; }
+.form-field select { width: 100%; height: 38px; border: 1px solid #d8ddd8; border-radius: 7px; padding: 0 9px; background: white; outline: 0; color: var(--ink); font-size: var(--text-sm); }
+.form-field select:focus { border-color: #78a28e; box-shadow: 0 0 0 2px #dfebe4; }
+.ssh-checkbox { display: flex; align-items: flex-start; gap: 9px; margin: 12px 0; cursor: pointer; }
+.ssh-checkbox span { display: grid; color: #46534d; font-size: var(--text-sm); }
+.ssh-checkbox small { margin-top: 3px; color: #7b8680; font-size: var(--text-meta); }
+.ssh-test-result { display: flex; align-items: center; gap: 8px; margin: 12px 0; padding: 10px 11px; border-radius: 7px; font-size: var(--text-meta); line-height: var(--line-body); }
+.ssh-test-result.ok { background: #e9f3ed; color: #2c6248; }
+.ssh-test-result.error { background: #f6eae7; color: #8f483d; }
+
 .managed-accounts { display: grid; gap: 7px; margin: 13px 0 16px; }
 .managed-account { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid #dde2dd; border-radius: 9px; }
 .managed-account > span:nth-child(2) { flex: 1; min-width: 0; }
