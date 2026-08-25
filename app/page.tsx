@@ -114,8 +114,12 @@ type MenuAction = "open-repository" | "clone-repository" | "scan-folder" | "remo
 
 type GitHubLoginProgress = {
   code: string | null;
+  verificationUrl: string | null;
   message: string;
+  browserOpenFailed?: boolean;
 };
+
+type DeviceCodeCopyStatus = "idle" | "copied" | "error";
 
 declare global {
   interface Window {
@@ -248,8 +252,11 @@ export default function Home() {
   const [accountEmail, setAccountEmail] = useState("");
   const [routingChoice, setRoutingChoice] = useState("follow");
   const [loginProgress, setLoginProgress] = useState<GitHubLoginProgress | null>(null);
+  const [deviceCodeCopyStatus, setDeviceCodeCopyStatus] = useState<DeviceCodeCopyStatus>("idle");
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const menuActionsRef = useRef<Record<MenuAction, () => void> | null>(null);
+  const loginCodeRef = useRef<string | null>(null);
+  const deviceCodeCopyTimerRef = useRef<number | null>(null);
 
   const accounts = appState.accounts;
   const activeAccount = accounts.find((account) => account.id === appState.activeAccountId) ?? null;
@@ -293,7 +300,19 @@ export default function Home() {
   useEffect(() => {
     const api = window.relayDesktop;
     if (!api) return;
-    return api.onGitHubLoginProgress((progress) => setLoginProgress(progress));
+    return api.onGitHubLoginProgress((progress) => {
+      if (progress.code !== loginCodeRef.current) {
+        loginCodeRef.current = progress.code;
+        if (deviceCodeCopyTimerRef.current !== null) window.clearTimeout(deviceCodeCopyTimerRef.current);
+        deviceCodeCopyTimerRef.current = null;
+        setDeviceCodeCopyStatus("idle");
+      }
+      setLoginProgress(progress);
+    });
+  }, []);
+
+  useEffect(() => () => {
+    if (deviceCodeCopyTimerRef.current !== null) window.clearTimeout(deviceCodeCopyTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -346,6 +365,23 @@ export default function Home() {
   function showNotice(message: string, error = false) {
     setNotice({ message, error });
     window.setTimeout(() => setNotice(null), error ? 4400 : 2800);
+  }
+
+  function resetDeviceCodeCopyFeedback() {
+    if (deviceCodeCopyTimerRef.current !== null) window.clearTimeout(deviceCodeCopyTimerRef.current);
+    deviceCodeCopyTimerRef.current = null;
+    setDeviceCodeCopyStatus("idle");
+  }
+
+  function openAccountModal() {
+    resetDeviceCodeCopyFeedback();
+    setAccountModalOpen(true);
+  }
+
+  function closeAccountModal() {
+    resetDeviceCodeCopyFeedback();
+    loginCodeRef.current = null;
+    setAccountModalOpen(false);
   }
 
   async function chooseRepository() {
@@ -503,16 +539,45 @@ export default function Home() {
     if (!window.relayDesktop) return;
     try {
       setBusy("account");
-      setLoginProgress({ code: null, message: "Opening GitHub in your browser…" });
+      loginCodeRef.current = null;
+      if (deviceCodeCopyTimerRef.current !== null) window.clearTimeout(deviceCodeCopyTimerRef.current);
+      deviceCodeCopyTimerRef.current = null;
+      setDeviceCodeCopyStatus("idle");
+      setLoginProgress({ code: null, verificationUrl: null, message: "Preparing GitHub sign-in…" });
       const state = await window.relayDesktop.connectAccount();
       setAppState(state);
       setLoginProgress(null);
-      setAccountModalOpen(false);
+      closeAccountModal();
       showNotice(`Connected @${state.accounts.find((account) => account.id === state.activeAccountId)?.handle}`);
     } catch (error) {
       showNotice(messageFrom(error), true);
     } finally {
       setBusy("");
+    }
+  }
+
+  async function copyDeviceCode() {
+    const code = loginProgress?.code;
+    if (!code) return;
+    if (deviceCodeCopyTimerRef.current !== null) window.clearTimeout(deviceCodeCopyTimerRef.current);
+    deviceCodeCopyTimerRef.current = null;
+    try {
+      await navigator.clipboard.writeText(code);
+      setDeviceCodeCopyStatus("copied");
+      deviceCodeCopyTimerRef.current = window.setTimeout(() => {
+        setDeviceCodeCopyStatus("idle");
+        deviceCodeCopyTimerRef.current = null;
+      }, 2200);
+    } catch {
+      setDeviceCodeCopyStatus("error");
+    }
+  }
+
+  async function openGitHubDevicePage() {
+    try {
+      await window.relayDesktop?.openExternal("https://github.com/login/device");
+    } catch (error) {
+      showNotice(messageFrom(error) || "GitHub could not be opened in your browser.", true);
     }
   }
 
@@ -610,7 +675,7 @@ export default function Home() {
   async function commit() {
     if (!window.relayDesktop || !repository) return;
     if (!repositoryAccount) {
-      setAccountModalOpen(true);
+      openAccountModal();
       return;
     }
     try {
@@ -690,7 +755,7 @@ export default function Home() {
                 </button>
               ))}
               <div className="menu-divider" />
-              <button className="menu-action" onClick={() => { setAccountMenuOpen(false); setAccountModalOpen(true); }}><Icon name="plus" size={17} /> Add another account</button>
+              <button className="menu-action" onClick={() => { setAccountMenuOpen(false); openAccountModal(); }}><Icon name="plus" size={17} /> Add another account</button>
               {accounts.length > 0 && <button className="menu-action" onClick={() => { setAccountMenuOpen(false); setManageAccountsOpen(true); }}><Icon name="settings" size={16} /> Manage accounts</button>}
             </div>
           )}
@@ -842,18 +907,18 @@ export default function Home() {
       )}
 
       {accountModalOpen && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAccountModalOpen(false); }}>
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeAccountModal(); }}>
           <section className="modal account-form-modal" role="dialog" aria-modal="true" aria-labelledby="add-account-title">
-            <button className="modal-close" onClick={() => setAccountModalOpen(false)} aria-label="Close"><Icon name="close" size={17} /></button>
+            <button className="modal-close" onClick={closeAccountModal} aria-label="Close"><Icon name="close" size={17} /></button>
             <div className="modal-icon github-mark"><Icon name="github" size={22} /></div>
             <h2 id="add-account-title">Connect a GitHub account</h2>
             <p>Relay opens GitHub in your browser for an official one-time OAuth login. No personal access token is needed.</p>
-            {loginProgress?.code && <button className="device-code" onClick={() => navigator.clipboard.writeText(loginProgress.code || "")} title="Copy code"><span>One-time code</span><strong>{loginProgress.code}</strong><small>Click to copy</small></button>}
+            {loginProgress?.code && <div className={`device-code ${deviceCodeCopyStatus}`}><span>One-time code</span><input className="device-code-value" value={loginProgress.code} readOnly onFocus={(event) => event.currentTarget.select()} aria-label="One-time GitHub device code" /><button type="button" onClick={copyDeviceCode} aria-label={`Copy one-time code ${loginProgress.code}`}>{deviceCodeCopyStatus === "copied" ? <><Icon name="check" size={14} />Copied</> : "Copy code"}</button><small aria-live="polite">{deviceCodeCopyStatus === "copied" ? "Code copied to the clipboard." : deviceCodeCopyStatus === "error" ? "Couldn’t copy automatically. Select the code and copy it manually." : "Paste this code into the GitHub page."}</small></div>}
             {busy === "account" && <div className="login-progress"><Icon name="refresh" className="spin" size={17} /><span>{loginProgress?.message || "Waiting for GitHub…"}</span></div>}
             <div className="modal-note"><Icon name="info" size={17} />GitHub CLI stores the OAuth credential in your operating system credential store. Relay never asks for or saves a PAT.</div>
             <button className="primary-modal-button" disabled={busy === "account"} onClick={connectAccount}>{busy === "account" ? "Waiting for browser sign-in…" : "Continue with GitHub"}</button>
-            {busy === "account" && <button className="token-help" onClick={() => window.relayDesktop?.openExternal("https://github.com/login/device")}>Open the GitHub device page again <Icon name="external" size={13} /></button>}
-            <button className="secondary-modal-button" onClick={() => setAccountModalOpen(false)}>Cancel</button>
+            {busy === "account" && <button className="token-help" onClick={openGitHubDevicePage}>{loginProgress?.browserOpenFailed ? "Open the GitHub device page" : "Open the GitHub device page again"} <Icon name="external" size={13} /></button>}
+            <button className="secondary-modal-button" onClick={closeAccountModal}>Cancel</button>
           </section>
         </div>
       )}
@@ -868,7 +933,7 @@ export default function Home() {
             <div className="managed-accounts">
               {accounts.map((account) => <div className="managed-account" key={account.id}><span className={`avatar ${account.tone}`}>{account.initials}</span><span><strong>{account.status}</strong><small>@{account.handle} · {account.email}</small></span><div className="managed-account-actions"><button onClick={() => editAccountEmail(account)}><Icon name="edit" size={14} />Email</button><button className="danger" onClick={() => removeAccount(account.id)}><Icon name="trash" size={14} />Remove</button></div></div>)}
             </div>
-            <button className="primary-modal-button" onClick={() => { setManageAccountsOpen(false); setAccountModalOpen(true); }}>Add account</button>
+            <button className="primary-modal-button" onClick={() => { setManageAccountsOpen(false); openAccountModal(); }}>Add account</button>
           </section>
         </div>
       )}

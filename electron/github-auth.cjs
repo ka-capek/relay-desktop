@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 const GITHUB_HOST = "github.com";
+const GITHUB_DEVICE_URL = "https://github.com/login/device";
 
 function githubCliPath({ isPackaged, appPath, resourcesPath, platform = process.platform }) {
   const executable = platform === "win32" ? "gh.exe" : "gh";
@@ -108,16 +109,21 @@ async function removeAccount(context, handle) {
   await runGitHubCli(context, ["auth", "logout", "--hostname", GITHUB_HOST, "--user", handle]);
 }
 
+function loginProgressFromOutput(combinedOutput, latestOutput) {
+  const code = combinedOutput.match(/\b[A-Z0-9]{4}-[A-Z0-9]{4}\b/)?.[0] || null;
+  return {
+    code,
+    verificationUrl: code ? GITHUB_DEVICE_URL : null,
+    message: code ? "Enter this one-time code in the GitHub window." : latestOutput.split("\n").filter(Boolean).at(-1),
+  };
+}
+
 async function login(context, onProgress) {
   let combinedOutput = "";
   const emit = (value) => {
     if (!value) return;
     combinedOutput = `${combinedOutput}\n${value}`.slice(-4000);
-    const code = combinedOutput.match(/\b[A-Z0-9]{4}-[A-Z0-9]{4}\b/)?.[0] || null;
-    onProgress?.({
-      code,
-      message: code ? "Enter this one-time code in the GitHub window." : value.split("\n").filter(Boolean).at(-1),
-    });
+    onProgress?.(loginProgressFromOutput(combinedOutput, value));
   };
   await runGitHubCli(
     context,
@@ -127,10 +133,12 @@ async function login(context, onProgress) {
 }
 
 module.exports = {
+  GITHUB_DEVICE_URL,
   accountToken,
   authenticatedAccounts,
   githubCliPath,
   login,
+  loginProgressFromOutput,
   removeAccount,
   switchAccount,
 };

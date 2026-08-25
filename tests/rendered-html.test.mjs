@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+
+const require = createRequire(import.meta.url);
+const { GITHUB_DEVICE_URL, loginProgressFromOutput } = require("../electron/github-auth.cjs");
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -28,6 +32,20 @@ test("server-renders Relay with no repository selected", async () => {
   assert.doesNotMatch(html, /git-fixture|All systems operational/i);
 });
 
+test("extracts a sanitized GitHub device-login progress event", () => {
+  assert.deepEqual(
+    loginProgressFromOutput(
+      "One-time code (ABCD-1234) copied to clipboard\nOpen this URL to continue: https://github.com/login/device",
+      "Open this URL to continue: https://github.com/login/device",
+    ),
+    {
+      code: "ABCD-1234",
+      verificationUrl: GITHUB_DEVICE_URL,
+      message: "Enter this one-time code in the GitHub window.",
+    },
+  );
+});
+
 test("keeps native repository and multi-account workflows wired", async () => {
   const [page, main, preload, gitService, discovery, css, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -45,6 +63,7 @@ test("keeps native repository and multi-account workflows wired", async () => {
   assert.match(main, /relay:list-github-repositories/);
   assert.match(main, /relay:remove-repository/);
   assert.match(main, /relay:set-account-email/);
+  assert.match(main, /shell\.openExternal\(GITHUB_DEVICE_URL\)/);
   assert.match(preload, /listGitHubRepositories/);
   assert.match(preload, /onMenuAction/);
   assert.match(gitService, /GIT_EXEC_PATH/);
@@ -52,6 +71,8 @@ test("keeps native repository and multi-account workflows wired", async () => {
   assert.match(discovery, /isGitWorktree/);
   assert.match(page, /github-repository-picker/);
   assert.match(page, /document\.addEventListener\("pointerdown", dismissAccountMenu\)/);
+  assert.match(page, /await navigator\.clipboard\.writeText\(code\)/);
+  assert.match(page, /Code copied to the clipboard\./);
   assert.match(page, /Files were left untouched/);
   assert.doesNotMatch(css, /linear-gradient/);
 });

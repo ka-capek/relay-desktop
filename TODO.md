@@ -228,7 +228,11 @@ so the view is not yet useful as a serious repository-history browser.
 
 ## GitHub OAuth copy feedback and automatic browser launch
 
-**Problem:** The one-time device-code button always says `Click to copy`, even
+**Status:** Implemented in the local source. Keep this item open until the
+packaged macOS Apple Silicon and Windows x64 flows satisfy every acceptance
+criterion below.
+
+**Original problem:** The one-time device-code button always says `Click to copy`, even
 after the clipboard write succeeds, and clipboard failures are ignored. Relay
 also relies on `gh auth login --web` to launch the browser. The packaged flow has
 been reported to remain inside Relay until the user manually clicks **Open the

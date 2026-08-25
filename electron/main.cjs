@@ -13,6 +13,7 @@ const {
 } = require("./git-service.cjs");
 const { scanForRepositories } = require("./repository-discovery.cjs");
 const {
+  GITHUB_DEVICE_URL,
   accountToken,
   authenticatedAccounts,
   login: loginWithGitHub,
@@ -421,8 +422,21 @@ function registerIpc() {
   });
 
   ipcMain.handle("relay:connect-account", async (event) => {
+    let devicePageOpened = false;
     await loginWithGitHub(githubContext(), (progress) => {
-      if (!event.sender.isDestroyed()) event.sender.send("relay:github-login-progress", progress);
+      if (event.sender.isDestroyed()) return;
+      event.sender.send("relay:github-login-progress", progress);
+      if (devicePageOpened || !progress.code || progress.verificationUrl !== GITHUB_DEVICE_URL) return;
+      devicePageOpened = true;
+      void shell.openExternal(GITHUB_DEVICE_URL).catch(() => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send("relay:github-login-progress", {
+            ...progress,
+            browserOpenFailed: true,
+            message: "GitHub did not open automatically. Use the button below to open it.",
+          });
+        }
+      });
     });
     return syncGitHubAccounts();
   });
@@ -464,7 +478,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("relay:open-external", (_event, url) => {
-    if (typeof url === "string" && url.startsWith("https://")) shell.openExternal(url);
+    if (typeof url === "string" && url.startsWith("https://")) return shell.openExternal(url);
   });
 }
 

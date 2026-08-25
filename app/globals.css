@@ -278,9 +278,15 @@ input[type="checkbox"] { width: 13px; height: 13px; accent-color: var(--green); 
 .form-field input:focus { border-color: #78a28e; box-shadow: 0 0 0 2px #dfebe4; }
 .token-help { display: flex; align-items: center; gap: 4px; margin: 7px auto 2px; padding: 0; border: 0; background: transparent; color: #367356; cursor: pointer; font-size: 9px; }
 .token-help:hover { text-decoration: underline; }
-.device-code { width: 100%; display: grid; justify-items: center; gap: 5px; margin: 14px 0; padding: 14px; border: 1px solid #cfdad3; border-radius: 9px; background: #f5f8f6; cursor: pointer; }
+.device-code { width: 100%; display: grid; justify-items: center; gap: 6px; margin: 14px 0; padding: 14px; border: 1px solid #cfdad3; border-radius: 9px; background: #f5f8f6; }
 .device-code span, .device-code small { color: #758079; font-size: 9px; }
-.device-code strong { color: #24362d; font: 700 20px var(--font-geist-mono); letter-spacing: .12em; }
+.device-code-value { width: min(100%, 245px); border: 0; border-radius: 4px; outline: 0; background: transparent; color: #24362d; font: 700 20px var(--font-geist-mono); letter-spacing: .12em; text-align: center; }
+.device-code-value:focus { box-shadow: 0 0 0 2px #78a28e; }
+.device-code button { display: flex; align-items: center; gap: 5px; margin-top: 3px; padding: 6px 10px; border: 1px solid #cbd7cf; border-radius: 6px; background: white; color: #416251; cursor: pointer; font-size: 10px; font-weight: 650; }
+.device-code button:hover { background: #edf4ef; }
+.device-code.copied { border-color: #8fb5a0; background: #eef6f1; }
+.device-code.error { border-color: #c98b7b; background: #fbf3f1; }
+.device-code.error small { color: #9b4e3d; }
 .login-progress { display: flex; align-items: center; gap: 9px; margin: 13px 0; padding: 11px; border-radius: 8px; background: #edf4ef; color: #496053; font-size: 10px; }
 .managed-accounts { display: grid; gap: 7px; margin: 13px 0 16px; }
 .managed-account { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid #dde2dd; border-radius: 9px; }
