@@ -3,8 +3,15 @@ import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 const require = createRequire(import.meta.url);
 const { GITHUB_DEVICE_URL, loginProgressFromOutput } = require("../electron/github-auth.cjs");
+const { applyManualOrder, normalizeOrdering } = require("../electron/repository-order.cjs");
+const { readRepositorySummary } = require("../electron/git-service.cjs");
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -44,6 +51,90 @@ test("extracts a sanitized GitHub device-login progress event", () => {
       message: "Enter this one-time code in the GitHub window.",
     },
   );
+});
+
+test("upgrades a repository store written before ordering existed", () => {
+  const legacy = {
+    repositories: [
+      { path: "/b", name: "b", lastOpened: "2026-01-02T00:00:00.000Z" },
+      { path: "/a", name: "a", lastOpened: "2026-01-01T00:00:00.000Z" },
+    ],
+  };
+
+  const upgraded = normalizeOrdering(legacy);
+
+  assert.deepEqual(upgraded.repositoryOrder, { mode: "manual", direction: "asc" });
+  // Manual order seeds from the existing list rather than reshuffling it.
+  assert.deepEqual(upgraded.manualOrder, ["/b", "/a"]);
+  // addedAt backfills from lastOpened, which is never later than the truth.
+  assert.equal(upgraded.repositories[0].addedAt, "2026-01-02T00:00:00.000Z");
+  assert.equal(upgraded.repositories[1].addedAt, "2026-01-01T00:00:00.000Z");
+  // A repository with no commits sorts last rather than breaking the list.
+  assert.equal(upgraded.repositories[0].latestCommit, null);
+});
+
+test("keeps the manual order consistent with the remembered repositories", () => {
+  const store = normalizeOrdering({
+    repositories: [{ path: "/a" }, { path: "/b" }, { path: "/c" }],
+    // A stale path, a duplicate, and a repository missing from the order.
+    manualOrder: ["/c", "/removed", "/c", "/a"],
+    repositoryOrder: { mode: "nonsense", direction: "sideways" },
+  });
+
+  assert.deepEqual(store.manualOrder, ["/c", "/a", "/b"]);
+  assert.deepEqual(store.repositoryOrder, { mode: "manual", direction: "asc" });
+
+  // A renderer-supplied order cannot introduce unknown paths or drop a
+  // repository out of the sidebar.
+  applyManualOrder(store, ["/b", "/ghost", "/a"]);
+  assert.deepEqual(store.manualOrder, ["/b", "/a", "/c"]);
+
+  assert.throws(() => applyManualOrder(store, "not-a-list"), /list of repository paths/);
+});
+
+test("reads the HEAD commit date used to sort the sidebar", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "relay-order-"));
+  try {
+    const withCommits = path.join(root, "with-commits");
+    const withoutCommits = path.join(root, "without-commits");
+    await mkdir(withCommits);
+    await mkdir(withoutCommits);
+
+    const git = (cwd, args) => execFileSync("git", args, { cwd, stdio: "pipe" });
+    for (const repository of [withCommits, withoutCommits]) git(repository, ["init", "-q", "-b", "main", "."]);
+    await writeFile(path.join(withCommits, "a.txt"), "hello\n");
+    git(withCommits, ["add", "a.txt"]);
+    git(withCommits, ["-c", "user.email=t@example.com", "-c", "user.name=Test", "commit", "-q", "-m", "first"]);
+
+    const committed = await readRepositorySummary(withCommits);
+    assert.match(committed.latestCommit, /^\d{4}-\d{2}-\d{2}T/);
+
+    // A repository with no commits must read cleanly and simply have no date.
+    const empty = await readRepositorySummary(withoutCommits);
+    assert.equal(empty.latestCommit, null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("submits the commit-email modal from the keyboard", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+  // Enter only submits when the controls are inside a real form, so the button
+  // and the Enter key have to share one submit handler.
+  assert.match(page, /<form onSubmit=\{saveAccountEmail\} noValidate>/);
+  assert.match(page, /<button type="submit" className="primary-modal-button"/);
+  assert.match(page, /<button type="button" className="secondary-modal-button"/);
+
+  // Repeated Enter presses must not start concurrent saves, and the busy string
+  // cannot guard that on its own because it lands a render too late.
+  assert.match(page, /if \(savingEmailRef\.current\) return;/);
+  assert.match(page, /savingEmailRef\.current = true;/);
+  assert.match(page, /savingEmailRef\.current = false;/);
+
+  // A blank value still has to reach the main process, which turns it back into
+  // the GitHub noreply address.
+  assert.match(page, /placeholder="Leave blank to use GitHub noreply"/);
 });
 
 test("keeps native repository and multi-account workflows wired", async () => {

@@ -129,14 +129,23 @@ function parseHistory(logText) {
   });
 }
 
+// The sidebar sorts by the current HEAD commit, so this reads one commit
+// rather than a history. A repository with no commits has no date and sorts
+// last; that is not an error worth failing the whole repository read for.
+async function latestCommitDate(root) {
+  const value = await git(root, ["log", "-1", "--format=%cI"]).catch(() => "");
+  return value.trim() || null;
+}
+
 async function readRepository(repositoryPath) {
   const root = await git(repositoryPath, ["rev-parse", "--show-toplevel"]);
-  const [branch, status, remote, branches, history] = await Promise.all([
+  const [branch, status, remote, branches, history, latestCommit] = await Promise.all([
     git(root, ["branch", "--show-current"]).catch(() => ""),
     git(root, ["-c", "core.quotepath=false", "status", "--porcelain=v1", "--untracked-files=all"]),
     git(root, ["remote", "get-url", "origin"]).catch(() => ""),
     git(root, ["for-each-ref", "--format=%(refname:short)", "refs/heads/"]).catch(() => ""),
     git(root, ["log", "-30", "--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ae%x1f%aI%x1e"]).catch(() => ""),
+    latestCommitDate(root),
   ]);
 
   let statText = "";
@@ -176,15 +185,17 @@ async function readRepository(repositoryPath) {
     ahead: Number.isFinite(ahead) ? ahead : 0,
     behind: Number.isFinite(behind) ? behind : 0,
     hasUpstream,
+    latestCommit,
   };
 }
 
 async function readRepositorySummary(repositoryPath) {
   const root = await git(repositoryPath, ["rev-parse", "--show-toplevel"]);
-  const [branch, status, remote] = await Promise.all([
+  const [branch, status, remote, latestCommit] = await Promise.all([
     git(root, ["branch", "--show-current"]).catch(() => ""),
     git(root, ["-c", "core.quotepath=false", "status", "--porcelain=v1", "--untracked-files=all"]),
     git(root, ["remote", "get-url", "origin"]).catch(() => ""),
+    latestCommitDate(root),
   ]);
   const identity = repositoryIdentity(remote, root);
   return {
@@ -194,6 +205,7 @@ async function readRepositorySummary(repositoryPath) {
     branch: branch || "detached HEAD",
     changes: status.split("\n").filter(Boolean).length,
     lastOpened: new Date().toISOString(),
+    latestCommit,
   };
 }
 

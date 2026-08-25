@@ -19,7 +19,15 @@ type RepositorySummary = {
   branch: string;
   changes: number;
   lastOpened: string;
+  /** When Relay first remembered this repository, not a filesystem timestamp. */
+  addedAt: string;
+  /** Committer date of the current HEAD, or null in a repository with no commits. */
+  latestCommit: string | null;
 };
+
+type RepositoryOrderMode = "manual" | "age" | "name" | "latest";
+type RepositoryOrderDirection = "asc" | "desc";
+type RepositoryOrder = { mode: RepositoryOrderMode; direction: RepositoryOrderDirection };
 
 type GitHubRepository = {
   id: string;
@@ -65,6 +73,7 @@ type Repository = {
   ahead: number;
   behind: number;
   hasUpstream: boolean;
+  latestCommit: string | null;
 };
 
 type AppState = {
@@ -73,6 +82,8 @@ type AppState = {
   repositories: RepositorySummary[];
   selectedRepositoryPath: string | null;
   repositoryAccounts: Record<string, string>;
+  repositoryOrder: RepositoryOrder;
+  manualOrder: string[];
 };
 
 type CommitInput = {
@@ -105,6 +116,8 @@ type RelayDesktop = {
   setActiveAccount: (accountId: string) => Promise<AppState>;
   setAccountEmail: (accountId: string, email: string) => Promise<AppState>;
   setRepositoryAccount: (repositoryPath: string, accountId: string | null) => Promise<AppState>;
+  setRepositoryOrder: (mode: RepositoryOrderMode, direction: RepositoryOrderDirection) => Promise<AppState>;
+  setManualOrder: (repositoryPaths: string[]) => Promise<AppState>;
   removeAccount: (accountId: string) => Promise<AppState>;
   onMenuAction: (callback: (action: MenuAction) => void) => () => void;
   openExternal: (url: string) => Promise<void>;
@@ -134,7 +147,7 @@ type DiffLine = {
   text: string;
 };
 
-type IconName = "alert" | "branch" | "check" | "chevron" | "clone" | "close" | "edit" | "external" | "folder" | "github" | "info" | "lock" | "more" | "plus" | "refresh" | "repository" | "route" | "search" | "settings" | "trash" | "upload";
+type IconName = "alert" | "branch" | "check" | "chevron" | "clone" | "close" | "edit" | "external" | "folder" | "github" | "grip" | "info" | "lock" | "more" | "plus" | "refresh" | "repository" | "route" | "search" | "settings" | "sort" | "trash" | "upload";
 
 function Icon({ name, size = 16, className = "" }: { name: IconName; size?: number; className?: string }) {
   let content;
@@ -149,6 +162,7 @@ function Icon({ name, size = 16, className = "" }: { name: IconName; size?: numb
     case "external": content = <><path d="M14 5h5v5" /><path d="m10 14 9-9" /><path d="M19 13v6H5V5h6" /></>; break;
     case "folder": content = <><path d="M3 7h6l2 2h10v10H3Z" /><path d="M3 7V5h6l2 2" /></>; break;
     case "github": content = <path fill="currentColor" stroke="none" d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.23c-3.23.7-3.91-1.37-3.91-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.78 2.72 1.27 3.38.97.1-.75.4-1.27.74-1.56-2.58-.29-5.29-1.29-5.29-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.47.11-3.05 0 0 .97-.31 3.16 1.18a10.9 10.9 0 0 1 5.76 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.72 5.39-5.31 5.68.42.36.79 1.07.79 2.16v3.21c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" />; break;
+    case "grip": content = <><path d="M9 6h.01M9 12h.01M9 18h.01" /><path d="M15 6h.01M15 12h.01M15 18h.01" /></>; break;
     case "info": content = <><circle cx="12" cy="12" r="9" /><path d="M12 11v6" /><path d="M12 7h.01" /></>; break;
     case "lock": content = <><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>; break;
     case "more": content = <><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none" /></>; break;
@@ -158,6 +172,7 @@ function Icon({ name, size = 16, className = "" }: { name: IconName; size?: numb
     case "route": content = <><path d="M5 7h11" /><path d="m13 4 3 3-3 3" /><path d="M19 17H8" /><path d="m11 14-3 3 3 3" /></>; break;
     case "search": content = <><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></>; break;
     case "settings": content = <><circle cx="12" cy="12" r="3" /><path d="M19 13.5v-3l-2-.7-.7-1.7.9-1.9-2.1-2.1-1.9.9-1.7-.7L10.5 2h-3l-.7 2-1.7.7-1.9-.9-2.1 2.1.9 1.9-.7 1.7-2 .7v3l2 .7.7 1.7-.9 1.9 2.1 2.1 1.9-.9 1.7.7.7 2h3l.7-2 1.7-.7 1.9.9 2.1-2.1-.9-1.9.7-1.7Z" transform="scale(.82) translate(2.6 2.6)" /></>; break;
+    case "sort": content = <><path d="M4 7h13" /><path d="M4 12h9" /><path d="M4 17h5" /><path d="M18 10v9" /><path d="m15 16 3 3 3-3" /></>; break;
     case "trash": content = <><path d="M4 7h16" /><path d="M9 7V4h6v3" /><path d="m7 7 1 13h8l1-13" /><path d="M10 11v5M14 11v5" /></>; break;
     case "upload": content = <><path d="M12 16V4" /><path d="m7 9 5-5 5 5" /><path d="M5 20h14" /></>; break;
   }
@@ -170,7 +185,69 @@ const emptyAppState: AppState = {
   repositories: [],
   selectedRepositoryPath: null,
   repositoryAccounts: {},
+  repositoryOrder: { mode: "manual", direction: "asc" },
+  manualOrder: [],
 };
+
+const repositoryCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+function timestamp(value: string | null) {
+  const parsed = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+// Equal sort values must not let repositories swap places between renders, so
+// every mode falls through to the same stable tie-breaker.
+function compareByName(a: RepositorySummary, b: RepositorySummary) {
+  return repositoryCollator.compare(a.name, b.name) || repositoryCollator.compare(a.path, b.path);
+}
+
+function sortRepositories(repositories: RepositorySummary[], order: RepositoryOrder, manualOrder: string[]) {
+  const sorted = [...repositories];
+  const sign = order.direction === "asc" ? 1 : -1;
+
+  if (order.mode === "manual") {
+    const position = new Map(manualOrder.map((repositoryPath, index) => [repositoryPath, index]));
+    // Anything missing from the stored order sorts after what the user placed.
+    return sorted.sort((a, b) =>
+      (position.get(a.path) ?? Number.MAX_SAFE_INTEGER) - (position.get(b.path) ?? Number.MAX_SAFE_INTEGER)
+      || compareByName(a, b));
+  }
+
+  if (order.mode === "name") {
+    return sorted.sort((a, b) => (repositoryCollator.compare(a.name, b.name) * sign) || compareByName(a, b));
+  }
+
+  if (order.mode === "age") {
+    return sorted.sort((a, b) => {
+      const left = timestamp(a.addedAt);
+      const right = timestamp(b.addedAt);
+      if (left !== null && right !== null && left !== right) return (left - right) * sign;
+      return compareByName(a, b);
+    });
+  }
+
+  return sorted.sort((a, b) => {
+    const left = timestamp(a.latestCommit);
+    const right = timestamp(b.latestCommit);
+    // A repository with no commits sorts last in both directions.
+    if ((left === null) !== (right === null)) return left === null ? 1 : -1;
+    if (left !== null && right !== null && left !== right) return (left - right) * sign;
+    return compareByName(a, b);
+  });
+}
+
+const ORDER_MODE_LABELS: Record<RepositoryOrderMode, string> = {
+  manual: "Manual",
+  age: "Age",
+  name: "Name",
+  latest: "Latest commit",
+};
+
+function directionLabel(mode: RepositoryOrderMode, direction: RepositoryOrderDirection) {
+  if (mode === "name") return direction === "asc" ? "A–Z" : "Z–A";
+  return direction === "asc" ? "Oldest first" : "Newest first";
+}
 
 function messageFrom(error: unknown) {
   const value = error instanceof Error ? error.message : String(error);
@@ -255,6 +332,9 @@ export default function Home() {
   const [deviceCodeCopyStatus, setDeviceCodeCopyStatus] = useState<DeviceCodeCopyStatus>("idle");
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const menuActionsRef = useRef<Record<MenuAction, () => void> | null>(null);
+  const savingEmailRef = useRef(false);
+  const [draggingRepositoryPath, setDraggingRepositoryPath] = useState<string | null>(null);
+  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
   const loginCodeRef = useRef<string | null>(null);
   const deviceCodeCopyTimerRef = useRef<number | null>(null);
 
@@ -263,11 +343,15 @@ export default function Home() {
   const boundAccountId = repository ? appState.repositoryAccounts[repository.path] : null;
   const repositoryAccount = accounts.find((account) => account.id === boundAccountId) ?? activeAccount;
   const diffLines = useMemo(() => parseDiff(diffText), [diffText]);
+  const orderedRepositories = useMemo(
+    () => sortRepositories(appState.repositories, appState.repositoryOrder, appState.manualOrder),
+    [appState.repositories, appState.repositoryOrder, appState.manualOrder],
+  );
   const visibleRepositories = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    if (!needle) return appState.repositories;
-    return appState.repositories.filter((repo) => `${repo.owner}/${repo.name} ${repo.path}`.toLowerCase().includes(needle));
-  }, [appState.repositories, search]);
+    if (!needle) return orderedRepositories;
+    return orderedRepositories.filter((repo) => `${repo.owner}/${repo.name} ${repo.path}`.toLowerCase().includes(needle));
+  }, [orderedRepositories, search]);
   const visibleGitHubRepositories = useMemo(() => {
     const needle = githubRepositorySearch.trim().toLowerCase();
     if (!needle) return githubRepositories;
@@ -350,14 +434,27 @@ export default function Home() {
 
   function applyRepository(next: Repository, preserveSelection = true) {
     setRepository(next);
-    setAppState((current) => ({
-      ...current,
-      selectedRepositoryPath: next.path,
-      repositories: [
-        { path: next.path, name: next.name, owner: next.owner, branch: next.branch, changes: next.files.length, lastOpened: new Date().toISOString() },
-        ...current.repositories.filter((item) => item.path !== next.path),
-      ].slice(0, 5000),
-    }));
+    setAppState((current) => {
+      const known = current.repositories.find((item) => item.path === next.path);
+      const summary: RepositorySummary = {
+        path: next.path,
+        name: next.name,
+        owner: next.owner,
+        branch: next.branch,
+        changes: next.files.length,
+        lastOpened: new Date().toISOString(),
+        // Mirrors the main process: opening or refreshing a repository must not
+        // reset the age it is sorted by, or its place in the manual order.
+        addedAt: known?.addedAt || new Date().toISOString(),
+        latestCommit: next.latestCommit ?? known?.latestCommit ?? null,
+      };
+      return {
+        ...current,
+        selectedRepositoryPath: next.path,
+        repositories: [summary, ...current.repositories.filter((item) => item.path !== next.path)].slice(0, 5000),
+        manualOrder: current.manualOrder.includes(next.path) ? current.manualOrder : [...current.manualOrder, next.path],
+      };
+    });
     setCheckedFiles((current) => preserveSelection ? current.filter((file) => next.files.some((item) => item.path === file)) : next.files.map((file) => file.path));
     setActiveFile((current) => preserveSelection && next.files.some((file) => file.path === current) ? current : next.files[0]?.path || "");
   }
@@ -597,8 +694,13 @@ export default function Home() {
     setAccountEmail(account.email);
   }
 
-  async function saveAccountEmail() {
+  async function saveAccountEmail(event?: React.FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
     if (!window.relayDesktop || !editingAccountId) return;
+    // Enter can fire again before React re-renders with the busy state, so the
+    // in-flight guard has to be a ref rather than the busy string.
+    if (savingEmailRef.current) return;
+    savingEmailRef.current = true;
     try {
       setBusy("email");
       const state = await window.relayDesktop.setAccountEmail(editingAccountId, accountEmail);
@@ -609,8 +711,67 @@ export default function Home() {
     } catch (error) {
       showNotice(messageFrom(error), true);
     } finally {
+      savingEmailRef.current = false;
       setBusy("");
     }
+  }
+
+  const repositoryOrder = appState.repositoryOrder;
+  // Reordering acts on the whole remembered list, so it is only offered when
+  // the sidebar is showing that whole list.
+  const canReorder = repositoryOrder.mode === "manual" && !search.trim();
+
+  async function changeRepositoryOrder(mode: RepositoryOrderMode, direction: RepositoryOrderDirection) {
+    const previous = appState.repositoryOrder;
+    setAppState((current) => ({ ...current, repositoryOrder: { mode, direction } }));
+    try {
+      setAppState(await window.relayDesktop!.setRepositoryOrder(mode, direction));
+    } catch (error) {
+      setAppState((current) => ({ ...current, repositoryOrder: previous }));
+      showNotice(messageFrom(error), true);
+    }
+  }
+
+  async function persistManualOrder(manualOrder: string[]) {
+    const previous = appState.manualOrder;
+    setAppState((current) => ({ ...current, manualOrder }));
+    try {
+      setAppState(await window.relayDesktop!.setManualOrder(manualOrder));
+    } catch (error) {
+      setAppState((current) => ({ ...current, manualOrder: previous }));
+      showNotice(messageFrom(error), true);
+    }
+  }
+
+  // Both drag-and-drop and the keyboard controls funnel through here so the two
+  // paths can never disagree about what the resulting order is.
+  function moveRepository(repositoryPath: string, targetPath: string, placeAfter = false) {
+    if (!window.relayDesktop || repositoryPath === targetPath) return;
+    const order = orderedRepositories.map((repo) => repo.path);
+    const from = order.indexOf(repositoryPath);
+    const to = order.indexOf(targetPath);
+    if (from < 0 || to < 0) return;
+    order.splice(from, 1);
+    const insertAt = order.indexOf(targetPath) + (placeAfter ? 1 : 0);
+    order.splice(insertAt, 0, repositoryPath);
+    persistManualOrder(order);
+  }
+
+  function nudgeRepository(repositoryPath: string, offset: number) {
+    if (!window.relayDesktop) return;
+    const order = orderedRepositories.map((repo) => repo.path);
+    const from = order.indexOf(repositoryPath);
+    const to = from + offset;
+    if (from < 0 || to < 0 || to >= order.length) return;
+    order.splice(from, 1);
+    order.splice(to, 0, repositoryPath);
+    persistManualOrder(order);
+  }
+
+  function reorderKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, repositoryPath: string) {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    nudgeRepository(repositoryPath, event.key === "ArrowUp" ? -1 : 1);
   }
 
   async function saveRepositoryAccount() {
@@ -784,12 +945,76 @@ export default function Home() {
         <aside className="repo-sidebar">
           <div className="sidebar-heading"><span>Repositories</span><button aria-label="Add repository" onClick={chooseRepository}><Icon name="plus" size={18} /></button></div>
           <label className="search-box"><Icon name="search" size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter repositories" aria-label="Filter repositories" /></label>
+          <div className="repo-order">
+            <label className="repo-order-mode">
+              <Icon name="sort" size={14} />
+              <span>{ORDER_MODE_LABELS[repositoryOrder.mode]}</span>
+              <select
+                value={repositoryOrder.mode}
+                aria-label="Order repositories by"
+                onChange={(event) => changeRepositoryOrder(event.target.value as RepositoryOrderMode, repositoryOrder.direction)}
+              >
+                {(Object.keys(ORDER_MODE_LABELS) as RepositoryOrderMode[]).map((mode) => (
+                  <option key={mode} value={mode}>{ORDER_MODE_LABELS[mode]}</option>
+                ))}
+              </select>
+            </label>
+            {repositoryOrder.mode === "manual" ? (
+              <span className="repo-order-hint">{search.trim() ? "Clear the filter to reorder" : "Drag to reorder"}</span>
+            ) : (
+              <button
+                className="repo-order-direction"
+                onClick={() => changeRepositoryOrder(repositoryOrder.mode, repositoryOrder.direction === "asc" ? "desc" : "asc")}
+                aria-label={`Sort direction: ${directionLabel(repositoryOrder.mode, repositoryOrder.direction)}. Activate to reverse.`}
+              >
+                {directionLabel(repositoryOrder.mode, repositoryOrder.direction)}
+              </button>
+            )}
+          </div>
           <div className="repo-list">
             {visibleRepositories.length === 0 && <div className="repo-empty"><strong>No repositories yet</strong><span>Open, clone, or scan a folder for repositories.</span><div className="repo-empty-actions"><button onClick={chooseRepository}><Icon name="folder" size={14} />Open</button><button onClick={openCloneModal}><Icon name="clone" size={14} />Clone</button><button onClick={scanRepositoryFolder}><Icon name="search" size={14} />Scan</button></div></div>}
-            {visibleRepositories.map((repo) => {
+            {visibleRepositories.map((repo, index) => {
               const pinned = accounts.find((account) => account.id === appState.repositoryAccounts[repo.path]);
               return (
-                <div key={repo.path} className={`repo-row ${repo.path === repository?.path ? "selected" : ""}`}>
+                <div
+                  key={repo.path}
+                  className={`repo-row ${repo.path === repository?.path ? "selected" : ""} ${canReorder ? "reorderable" : ""} ${draggingRepositoryPath === repo.path ? "dragging" : ""} ${dropTargetPath === repo.path ? "drop-target" : ""}`}
+                  draggable={canReorder}
+                  onDragStart={(event) => {
+                    if (!canReorder) return;
+                    setDraggingRepositoryPath(repo.path);
+                    event.dataTransfer.effectAllowed = "move";
+                    // Firefox and Chromium both refuse to start a drag without payload.
+                    event.dataTransfer.setData("text/plain", repo.path);
+                  }}
+                  onDragOver={(event) => {
+                    if (!canReorder || !draggingRepositoryPath || draggingRepositoryPath === repo.path) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    setDropTargetPath(repo.path);
+                  }}
+                  onDragLeave={() => setDropTargetPath((current) => (current === repo.path ? null : current))}
+                  onDrop={(event) => {
+                    if (!canReorder || !draggingRepositoryPath) return;
+                    event.preventDefault();
+                    // Dropping below the row the drag started on means "after it".
+                    const placeAfter = orderedRepositories.findIndex((item) => item.path === draggingRepositoryPath) < index;
+                    moveRepository(draggingRepositoryPath, repo.path, placeAfter);
+                    setDraggingRepositoryPath(null);
+                    setDropTargetPath(null);
+                  }}
+                  onDragEnd={() => { setDraggingRepositoryPath(null); setDropTargetPath(null); }}
+                >
+                  {canReorder && (
+                    <button
+                      className="repo-grip"
+                      onKeyDown={(event) => reorderKeyDown(event, repo.path)}
+                      aria-label={`Reorder ${repo.name}, position ${index + 1} of ${visibleRepositories.length}. Press the up or down arrow key to move it.`}
+                      title="Drag, or focus and use the arrow keys, to reorder"
+                    >
+                      <Icon name="grip" size={14} />
+                    </button>
+                  )}
                   <button className="repo-item" onClick={() => openRepository(repo.path)} title={repo.path}>
                     <Icon name="repository" className="repo-icon" size={17} />
                     <span className="repo-text"><strong>{repo.name}</strong><small>{repo.owner}</small></span>
@@ -987,9 +1212,13 @@ export default function Home() {
             <div className="modal-icon"><Icon name="edit" size={21} /></div>
             <h2 id="email-title">Change commit email</h2>
             <p>This email is written into new commits made with @{accounts.find((account) => account.id === editingAccountId)?.handle}. Existing commits are not changed.</p>
-            <label className="form-field"><span>Commit email</span><input type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} placeholder="Leave blank to use GitHub noreply" /></label>
-            <button className="primary-modal-button" disabled={busy === "email"} onClick={saveAccountEmail}>{busy === "email" ? "Saving…" : "Save email"}</button>
-            <button className="secondary-modal-button" onClick={() => setEditingAccountId(null)}>Cancel</button>
+            {/* noValidate keeps validation in the main process, so Enter and the
+                button both surface the same message a click surfaces today. */}
+            <form onSubmit={saveAccountEmail} noValidate>
+              <label className="form-field"><span>Commit email</span><input type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} placeholder="Leave blank to use GitHub noreply" /></label>
+              <button type="submit" className="primary-modal-button" disabled={busy === "email"}>{busy === "email" ? "Saving…" : "Save email"}</button>
+              <button type="button" className="secondary-modal-button" onClick={() => setEditingAccountId(null)}>Cancel</button>
+            </form>
           </section>
         </div>
       )}

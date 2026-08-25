@@ -13,6 +13,13 @@ const {
 } = require("./git-service.cjs");
 const { scanForRepositories } = require("./repository-discovery.cjs");
 const {
+  DEFAULT_ORDER,
+  REPOSITORY_ORDER_DIRECTIONS,
+  REPOSITORY_ORDER_MODES,
+  applyManualOrder,
+  normalizeOrdering,
+} = require("./repository-order.cjs");
+const {
   GITHUB_DEVICE_URL,
   accountToken,
   authenticatedAccounts,
@@ -34,6 +41,8 @@ function emptyStore() {
     repositories: [],
     selectedRepositoryPath: null,
     repositoryAccounts: {},
+    repositoryOrder: { ...DEFAULT_ORDER },
+    manualOrder: [],
   };
 }
 
@@ -48,7 +57,7 @@ function readStore() {
         delete sanitized.encryptedToken;
         return sanitized;
       });
-    return store;
+    return normalizeOrdering(store);
   } catch {
     return emptyStore();
   }
@@ -72,6 +81,8 @@ function publicState(store) {
     repositories: store.repositories,
     selectedRepositoryPath: null,
     repositoryAccounts: store.repositoryAccounts,
+    repositoryOrder: store.repositoryOrder,
+    manualOrder: store.manualOrder,
   };
 }
 
@@ -191,6 +202,7 @@ async function syncGitHubAccounts() {
 
 function rememberRepository(repository) {
   const store = readStore();
+  const known = store.repositories.find((item) => item.path === repository.path);
   const summary = {
     path: repository.path,
     name: repository.name,
@@ -198,8 +210,13 @@ function rememberRepository(repository) {
     branch: repository.branch,
     changes: repository.files.length,
     lastOpened: new Date().toISOString(),
+    // Opening a repository must never restart its age or move it in the
+    // manual order, so the first-added time is carried forward untouched.
+    addedAt: known?.addedAt || new Date().toISOString(),
+    latestCommit: repository.latestCommit ?? known?.latestCommit ?? null,
   };
   store.repositories = [summary, ...store.repositories.filter((item) => item.path !== summary.path)].slice(0, 5000);
+  normalizeOrdering(store);
   writeStore(store);
   return publicState(store);
 }
@@ -214,10 +231,19 @@ async function rememberRepositoryPaths(repositoryPaths) {
     summaries.push(...values.filter(Boolean));
   }
   const scannedPaths = new Set(summaries.map((repository) => repository.path));
+  const knownByPath = new Map(store.repositories.map((repository) => [repository.path, repository]));
+  // A rescan refreshes branch and change counts but must not make a
+  // long-remembered repository look newly added.
+  for (const summary of summaries) {
+    const known = knownByPath.get(summary.path);
+    summary.addedAt = known?.addedAt || summary.lastOpened;
+    if (known) summary.lastOpened = known.lastOpened;
+  }
   store.repositories = [
     ...summaries,
     ...store.repositories.filter((repository) => !scannedPaths.has(repository.path)),
   ].slice(0, 5000);
+  normalizeOrdering(store);
   writeStore(store);
   return {
     state: publicState(store),
@@ -369,6 +395,9 @@ function registerIpc() {
     for (const storedPath of Object.keys(store.repositoryAccounts)) {
       if (path.resolve(storedPath) === resolvedPath) delete store.repositoryAccounts[storedPath];
     }
+    // Drops the removed path from the manual order while leaving every other
+    // position alone. Nothing on disk is touched.
+    normalizeOrdering(store);
     writeStore(store);
     return publicState(store);
   });
@@ -465,6 +494,22 @@ function registerIpc() {
     if (accountId && !store.accounts.some((account) => account.id === accountId)) throw new Error("Account not found.");
     if (accountId) store.repositoryAccounts[repositoryPath] = accountId;
     else delete store.repositoryAccounts[repositoryPath];
+    writeStore(store);
+    return publicState(store);
+  });
+
+  ipcMain.handle("relay:set-repository-order", (_event, mode, direction) => {
+    if (!REPOSITORY_ORDER_MODES.includes(mode)) throw new Error("Unknown repository sort order.");
+    if (!REPOSITORY_ORDER_DIRECTIONS.includes(direction)) throw new Error("Unknown repository sort direction.");
+    const store = readStore();
+    store.repositoryOrder = { mode, direction };
+    writeStore(store);
+    return publicState(store);
+  });
+
+  ipcMain.handle("relay:set-manual-order", (_event, repositoryPaths) => {
+    const store = readStore();
+    applyManualOrder(store, repositoryPaths);
     writeStore(store);
     return publicState(store);
   });
