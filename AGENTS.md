@@ -34,7 +34,11 @@ Relay provides these working flows:
   collaborator, and organization repositories.
 - Clone a repository selected from that list, or clone an arbitrary HTTPS or SSH
   URL.
-- View working-tree changes, textual diffs, and recent commit history.
+- View working-tree changes and textual diffs.
+- Browse the full branch history, loaded progressively, with per-commit
+  metadata, changed files, and per-file diffs.
+- Sort the repository sidebar manually, by age, by name, or by latest commit.
+- Select an SSH identity for a repository on a Git host other than GitHub.com.
 - Select changed files and create a commit using the selected account identity.
 - Fetch from and push to `origin` using the selected GitHub account.
 - Switch between existing local branches.
@@ -97,6 +101,7 @@ The desktop product uses:
 - electron-builder 26 for DMG and NSIS packaging
 - Git as a child process for all repository operations
 - Official GitHub CLI (`gh`) for multi-account OAuth and credential lookup
+- OpenSSH, through the user's agent and configuration, for non-GitHub remotes
 - GitHub REST API for profile data and repository listing
 - Plain CSS for the complete UI and responsive desktop layout
 
@@ -203,8 +208,15 @@ remain that way.
 | `electron/git-service.cjs` | Git discovery, execution, parsing, and mutations |
 | `electron/github-auth.cjs` | Multi-account GitHub CLI OAuth integration |
 | `electron/repository-discovery.cjs` | Recursive local repository scanner |
-| `build/icon.png` | electron-builder application icon |
-| `build/icon.svg` | Editable source for the application icon |
+| `electron/repository-order.cjs` | Sidebar ordering rules and backward-compatible store normalization |
+| `electron/ssh-service.cjs` | SSH identities for non-GitHub hosts, remote parsing, and the connection test |
+| `electron/application-menu.cjs` | The one menu definition behind both the native menu and the Windows in-window menu bar |
+| `build/icon.icns` | Generated macOS icon; referenced by electron-builder |
+| `build/icon.ico` | Generated Windows icon; referenced by electron-builder |
+| `build/icon.png` | Generated 1024px icon, kept as a plain raster of the master |
+| `build/icon.svg` | Editable master for the application icon at 64px and above |
+| `build/icon-small.svg` | Editable master for 48px and below, with heavier strokes and no shadow |
+| `build/generate-icons.cjs` | Regenerates all three generated icons; run with `npm run icons:build` |
 | `package.json` | Scripts, dependencies, Electron entry, packaging configuration |
 | `tests/rendered-html.test.mjs` | Current server-render and architecture regression tests |
 | `TODO.md` | Explicitly requested product backlog; items are not implemented until verified |
@@ -323,9 +335,29 @@ The metadata store has this conceptual shape:
   "selectedRepositoryPath": null,
   "repositoryAccounts": {
     "/absolute/path/to/repository": "github-96548046"
+  },
+  "repositoryOrder": { "mode": "manual", "direction": "asc" },
+  "manualOrder": ["/absolute/path/to/repository"],
+  "sshProfiles": [
+    {
+      "id": "ssh-gitlab.example.com-1756150000000",
+      "label": "Work GitLab",
+      "host": "gitlab.example.com",
+      "user": "git",
+      "port": null,
+      "identityFile": "/Users/example/.ssh/id_ed25519",
+      "identitiesOnly": true
+    }
+  ],
+  "repositorySshProfiles": {
+    "/absolute/path/to/repository": "ssh-gitlab.example.com-1756150000000"
   }
 }
 ```
+
+Repository summaries also carry `addedAt`, the time Relay first remembered the
+repository, and `latestCommit`, the committer date of the current `HEAD` or
+`null` in a repository with no commits. Both exist to drive sidebar ordering.
 
 Important persistence details:
 
@@ -342,6 +374,17 @@ Important persistence details:
   account synchronization.
 - Custom account emails survive normal account synchronization because known
   account metadata is reused.
+
+Ordering and SSH fields are normalized on every read by
+`electron/repository-order.cjs` and `normalizeSshState()` in `main.cjs`. A store
+written before those fields existed is upgraded in place: `repositoryOrder` and
+`manualOrder` gain defaults, `manualOrder` is seeded from the existing
+repository list so nothing is reshuffled, and `addedAt` backfills from
+`lastOpened`, which is never later than the true first-added time. Nothing is
+removed, so an older Relay can still read the file.
+
+An SSH profile holds a host, an optional user and port, and an optional *path*
+to a private key. It never holds key contents or a passphrase.
 
 Do not put secrets into this store. If a new field is sensitive, it does not
 belong here.
@@ -416,7 +459,44 @@ repositoryAccounts[repositoryPath] ?? activeAccountId
 The clone dialog uses the globally active account because a cloned repository
 does not yet have a path binding.
 
-### 9.6 Token handling
+### 9.6 SSH identities for non-GitHub hosts
+
+GitHub accounts and SSH identities are deliberately separate models. An account
+is an OAuth identity held by the GitHub CLI; an SSH profile is only a hint about
+which key to offer a host. Do not model a non-GitHub host as a GitHub account,
+and do not add a personal access token for one.
+
+With no profile bound to a repository, Relay sets nothing, so the user's SSH
+agent and `~/.ssh/config` behave exactly as they do for `git` on the command
+line. That is the default and covers most setups.
+
+When a profile is bound, `sshCommandFor()` builds a `GIT_SSH_COMMAND` for that
+single Git invocation:
+
+```text
+'ssh' -i '<identityFile>' -o 'IdentitiesOnly=yes' [-p <port>]
+```
+
+`IdentitiesOnly` is what lets several identities share one host; without it
+OpenSSH offers every agent key and the server closes the connection after too
+many attempts. Paths are POSIX single-quoted, including on Windows, because Git
+hands `GIT_SSH_COMMAND` to a shell.
+
+Two rules keep the credential shapes from crossing:
+
+- `sshCommandForRepository()` returns null for any GitHub remote, and
+  `sshEnvironment()` in the Git service attaches `GIT_SSH_COMMAND` only to an
+  SSH remote.
+- The fetch and push handlers do not even request an OAuth token unless the
+  remote is a GitHub remote, and the credential helper remains gated on
+  `https://github.com`.
+
+`testConnection()` runs an authentication-only `ssh -T` with `BatchMode=yes`, so
+it can never hang on an invisible passphrase prompt, and `describeSshResult()`
+turns the outcome into one actionable sentence that names the host without
+echoing key paths back to the user.
+
+### 9.7 Token handling
 
 `accountToken()` asks GitHub CLI for one named account token in the main process.
 The token is never returned across IPC.
@@ -542,10 +622,11 @@ supports it.
 - Porcelain v1 status, including untracked files
 - `origin` URL if present
 - Existing local branches
-- Up to 30 history entries
+- Up to 30 history entries, used only as a HEAD signal for the History tab
 - Parsed changed files and approximate line counts
 - Ahead/behind values relative to the upstream or matching remote branch
 - Whether a configured upstream exists
+- `latestCommit`, the committer date of `HEAD`, or `null` with no commits
 
 GitHub owner/name is inferred from HTTPS or SSH GitHub remotes. For non-GitHub
 or missing remotes, owner falls back to the parent folder and name to the root
@@ -568,7 +649,29 @@ reading the file. Binary and large files retain zero cosmetic line counts.
 - Untracked binary files return `Binary file — preview unavailable`.
 - The renderer parses hunk headers and tracks old/new line numbers.
 
-### 12.4 Commit
+### 12.4 History reads
+
+The History tab does not use the 30 entries in the repository payload. It calls
+three narrow methods instead, so opening a repository never pays for its whole
+history.
+
+- `readHistoryPage()` returns one batch. Paging is anchored to an explicit
+  commit resolved on the first page, not to `HEAD`, so a `HEAD` that moves
+  while the user scrolls cannot make later pages skip or repeat commits. It
+  reports `endOfHistory` rather than imposing a cap.
+- `readCommitDetail()` returns full and short hashes, subject and body,
+  separate author and committer identities, parents, decorations, and the
+  changed files with their add/modify/delete state and line counts. A merge is
+  compared against its **first parent**; a root commit has no parent and is
+  compared against the empty tree, so its files read as added.
+- `readCommitFileDiff()` returns one file's diff against that same parent.
+
+Commit hashes and file paths arrive over IPC and are untrusted.
+`assertCommitHash()` checks the shape and `assertCommitInRepository()` runs
+`git cat-file -e <hash>^{commit}` against the open repository, so a real hash
+from a different clone is refused. File paths always travel after `--`.
+
+### 12.5 Commit
 
 Commit behavior is intentionally file-selective:
 
@@ -581,15 +684,16 @@ Commit behavior is intentionally file-selective:
 
 Do not silently commit every working-tree change.
 
-### 12.5 Fetch and push
+### 12.6 Fetch and push
 
 - Fetch runs `git fetch origin --prune`.
 - Push runs `git push --set-upstream origin HEAD`.
+- Both accept an optional SSH command, applied only to an SSH remote.
 - Fetch/push require an `origin` remote.
 - Push requires a named local branch.
 - The renderer chooses fetch when there is nothing to publish, otherwise push.
 
-### 12.6 Clone
+### 12.7 Clone
 
 Clone runs:
 
@@ -606,7 +710,7 @@ The main process validates:
 
 After a successful clone, Relay fully reads and remembers the new repository.
 
-### 12.7 Branch switching
+### 12.8 Branch switching
 
 Relay currently switches only to an existing local branch using
 `git switch <branch>`. Input rejects characters outside word characters,
@@ -659,6 +763,9 @@ Current invoke channels:
 | `relay:open-repository` | `openRepository(path)` | absolute path | Full repository model |
 | `relay:refresh-repository` | `refreshRepository(path)` | absolute path | Full repository model |
 | `relay:get-file-diff` | `getFileDiff(repo, file)` | repository and file paths | Unified diff text |
+| `relay:read-history` | `readHistory(path, options)` | path, skip, limit, anchor | One batch of commits plus `anchor` and `endOfHistory` |
+| `relay:read-commit` | `readCommit(path, hash)` | path and commit hash | Full commit metadata and changed files |
+| `relay:read-commit-diff` | `readCommitDiff(path, hash, file)` | path, hash, file path | That file's diff in that commit |
 | `relay:commit` | `commit(input)` | selected files/message/account | Refreshed repository |
 | `relay:fetch-origin` | `fetchOrigin(path, accountId)` | repository and optional account | Refreshed repository |
 | `relay:push-origin` | `pushOrigin(path, accountId)` | repository and optional account | Refreshed repository |
@@ -668,6 +775,14 @@ Current invoke channels:
 | `relay:set-account-email` | `setAccountEmail(id, email)` | account ID and email | Updated public state |
 | `relay:set-repository-account` | `setRepositoryAccount(path, id)` | path and nullable account | Updated public state |
 | `relay:remove-account` | `removeAccount(id)` | account ID | Logs out locally and returns state |
+| `relay:set-repository-order` | `setRepositoryOrder(mode, direction)` | sort mode and direction | Updated public state |
+| `relay:set-manual-order` | `setManualOrder(paths)` | ordered repository paths | Updated public state |
+| `relay:save-ssh-profile` | `saveSshProfile(profile)` | SSH profile without key material | Updated public state |
+| `relay:remove-ssh-profile` | `removeSshProfile(id)` | profile ID | Updated public state; no key file is touched |
+| `relay:set-repository-ssh-profile` | `setRepositorySshProfile(path, id)` | path and nullable profile | Updated public state |
+| `relay:test-ssh-profile` | `testSshProfile(profile)` | SSH profile | `{ ok, message }` with no sensitive material |
+| `relay:get-menu` | `getMenu()` | none | Platform flag and the menu descriptor |
+| `relay:menu-command` | `runMenuCommand(id)` | menu command ID | Runs the command; rejects unknown IDs |
 | `relay:open-external` | `openExternal(url)` | HTTPS URL | Opens system browser |
 
 Current main-to-renderer event channels:
@@ -681,6 +796,18 @@ Validate all IPC inputs in the main process even if the renderer already
 validates them. The renderer is not the security boundary.
 
 ## 15. Native Menus
+
+`electron/application-menu.cjs` holds one menu definition. Both the native
+Electron template and the descriptor the renderer draws on Windows are derived
+from it, so the two cannot drift; a test asserts they agree.
+
+On macOS the system menu bar is the only menu. On Windows the native menu bar
+would occupy a second chrome row, so it is hidden with `autoHideMenuBar` and
+`setMenuBarVisibility(false)` while remaining **installed**, which is what keeps
+its accelerators working, and the renderer draws the same menus on the title
+row. That in-window bar carries `menubar`/`menu` roles, mnemonic underlines,
+Alt to open, arrow-key navigation, and Escape to close, and routes every command
+through `relay:menu-command`, which accepts only IDs present in the definition.
 
 The File menu contains:
 
@@ -696,8 +823,9 @@ not retain stale React state.
 
 When adding a menu action:
 
-1. Add the menu item and emitted action in `electron/main.cjs`.
-2. Extend `MenuAction` in `app/page.tsx`.
+1. Add the item to `MENU_DEFINITION` in `electron/application-menu.cjs`, and
+   extend `runMenuCommand()` in `electron/main.cjs` if it is not a role.
+2. Extend `MenuAction` in `app/page.tsx` if the renderer handles it.
 3. Add the action callback in `menuActionsRef.current`.
 4. Verify both macOS and Windows labels/accelerators.
 5. Extend the architecture regression test if the action is important.
@@ -768,15 +896,25 @@ source or branding.
 Key layout:
 
 ```text
-title bar: current repository | Relay | active account
-toolbar: current branch | repository identity | fetch/push
+title row (Windows only): Relay | File Edit View Window | window controls
+repository action row: current repository | current branch | fetch/push  ...  active account
 workspace:
-  repository sidebar
+  repository sidebar (ordering control, then the repository list)
   main panel:
-    Changes or History tabs
-    file list + commit box | diff viewer
+    Changes tab: file list + commit box | diff viewer
+    History tab: commit list | commit detail, changed files, diff
 status bar: signed-in identity | repository account settings
 ```
+
+macOS has no title row: its window controls sit in the repository action row,
+which is the drag region. Windows keeps a title row with the menus on it and
+the native window controls in a title bar overlay.
+
+Typography reads from the tokens at the top of `app/globals.css`. Primary
+control and body text is `--text-body` (13px) and secondary metadata is
+`--text-meta`/`--text-sm` (11-12px). `--text-badge` (10px) is the only size
+below 11px and belongs only on compact, non-essential badges. Do not reintroduce
+one-off pixel sizes.
 
 Design rules:
 
@@ -813,6 +951,12 @@ Build the desktop renderer only:
 
 ```bash
 npm run desktop:build
+```
+
+Regenerate the application icons after editing either icon master:
+
+```bash
+npm run icons:build
 ```
 
 Build and open Electron:
@@ -936,7 +1080,8 @@ For Windows when building from macOS:
 
 ### 19.6 Current automated tests
 
-`tests/rendered-html.test.mjs` checks:
+`tests/rendered-html.test.mjs` checks, against temporary Git fixtures where
+real repository behavior is involved:
 
 - Relay server-renders in the no-repository state.
 - Old demo text such as `git-fixture` and `All systems operational` is absent.
@@ -947,8 +1092,22 @@ For Windows when building from macOS:
 - Account menu outside-click handling exists.
 - Repository removal copy promises files remain untouched.
 - CSS contains no linear gradients.
+- A store written before ordering existed upgrades without reshuffling, and the
+  manual order stays consistent with the remembered repositories.
+- The `HEAD` commit date used for sorting reads, including `null` with no commits.
+- History pages without gaps, duplicates, or a cap, and describes root, merge,
+  and deletion commits correctly.
+- Commit hashes that are malformed, absent, or from another repository are
+  refused.
+- The native menu and the in-window menu bar come from one definition.
+- There is one repository action row and no duplicate account pill.
+- The commit-email modal submits from the keyboard exactly once.
+- SSH remote parsing, GitHub separation, and failure messages that leak nothing.
+- A clone, fetch, and push over a real Git SSH transport, asserting no GitHub
+  credential appears in the exchange.
 
-These are regression guards, not a complete integration suite.
+These are regression guards, not a complete integration suite. They do not
+launch Electron and do not cover Windows.
 
 ## 20. Packaging and Release Model
 
@@ -962,6 +1121,12 @@ package.json
 
 It additionally copies platform-specific Git and GitHub CLI trees from
 `runtime/` into the app resources.
+
+Icons are supplied as real containers, `build/icon.icns` and `build/icon.ico`,
+not as a single PNG for electron-builder to convert. Its conversion put a 512px
+image in the `ic13` (128@2x) slot and a 1024px image in `ic14` (256@2x), so
+macOS rescaled the icon at every Retina size. Regenerate with `npm run
+icons:build` after editing either master; the output is byte-stable across runs.
 
 Configured artifacts:
 
@@ -1071,6 +1236,11 @@ Before completing a change, ask:
 - Could a command prompt invisibly and hang?
 - Could an error or log contain a token?
 - Could an external URL use a non-HTTPS scheme?
+- Could a GitHub token reach a host that is not github.com?
+- Could a private key path, key contents, or a passphrase reach the store, the
+  renderer, a log, or an error message?
+- Could a commit hash or file path from IPC address an object outside the open
+  repository?
 - Could a renderer navigation replace the local app?
 - Does repository removal touch disk data?
 - Does a public commit include generated installers, runtime binaries, local app
@@ -1114,17 +1284,29 @@ Agents should understand these before extending the project:
   SSH environment; other HTTPS hosts receive no Relay credential.
 - Relay supports fetch and push but not pull, merge, rebase, stash, discard,
   reset, tag, remote management, or conflict resolution.
+- History paging uses `--skip`, which Git resolves by walking, so a very deep
+  history gets slower the further the user scrolls.
+- History search filters only the commits already loaded, not the whole history.
+- A merge commit is always compared against its first parent; there is no
+  parent selector.
+- SSH identities cover the transport only. Relay does not create keys, add them
+  to an agent, edit `~/.ssh/config`, or handle passphrases.
+- The Windows in-window menu bar is Relay's own. Its accessibility relies on
+  ARIA roles rather than the native menu, which stays installed and hidden so
+  its accelerators keep working.
 - Branch UI lists and switches local branches only. It does not create branches
   or directly check out remote-only branches.
 - Status parsing collapses Git's full index/worktree matrix to A/M/D and has
-  limited rename/quoted-path handling.
+  limited rename/quoted-path handling. Commit file lists collapse the same way.
 - Ahead/behind fallback is approximate when upstream information is incomplete.
 - Diffs are text-oriented and not suitable for images or rich binary previews.
 - Commit creation has no signing support.
 - Git and GitHub CLI third-party runtimes are not reproducibly downloaded by a
   repository script. Release packaging requires a prepared local `runtime/`.
 - The current automated suite does not launch Electron and does not test Windows
-  directly.
+  directly. Everything added for the Windows title bar overlay, its window
+  controls, display scaling, and Windows OpenSSH path handling is unverified on
+  a real Windows machine.
 - Builds are unsigned and unnotarized.
 - Hosted Vinext/Cloudflare/Drizzle scaffolding makes the dependency graph and
   `npm test` heavier than the desktop application alone requires.
