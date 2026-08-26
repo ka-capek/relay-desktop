@@ -775,6 +775,8 @@ Current invoke channels:
 | `relay:set-account-email` | `setAccountEmail(id, email)` | account ID and email | Updated public state |
 | `relay:set-repository-account` | `setRepositoryAccount(path, id)` | path and nullable account | Updated public state |
 | `relay:remove-account` | `removeAccount(id)` | account ID | Logs out locally and returns state |
+| `relay:backfill-repository-metadata` | `backfillRepositoryMetadata()` | none | Fills in first/latest commit for repositories remembered before those fields existed |
+| `relay:list-account-emails` | `listAccountEmails(accountId)` | account ID | Commit-email choices; degrades to the noreply address without the `user:email` scope |
 | `relay:set-repository-order` | `setRepositoryOrder(mode, direction)` | sort mode and direction | Updated public state |
 | `relay:set-manual-order` | `setManualOrder(paths)` | ordered repository paths | Updated public state |
 | `relay:save-ssh-profile` | `saveSshProfile(profile)` | SSH profile without key material | Updated public state |

@@ -104,6 +104,17 @@
             "!mingw64/libexec/git-core/*.runtimeconfig.json",
             "!mingw64/libexec/git-core/git-credential-manager*",
             "!mingw64/libexec/git-core/git-lfs.exe",
+            "!mingw64/bin/Avalonia*.dll",
+            "!mingw64/bin/Microsoft.*.dll",
+            "!mingw64/bin/System.*.dll",
+            "!mingw64/bin/SkiaSharp.dll",
+            "!mingw64/bin/libSkiaSharp.dll",
+            "!mingw64/bin/HarfBuzzSharp.dll",
+            "!mingw64/bin/libHarfBuzzSharp.dll",
+            "!mingw64/bin/git-credential-manager.exe",
+            "!mingw64/bin/git-credential-manager.exe.config",
+            "!mingw64/bin/*.deps.json",
+            "!mingw64/bin/*.runtimeconfig.json",
             "!mingw64/bin/git-lfs.exe"
           ]
         },
