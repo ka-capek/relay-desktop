@@ -18,6 +18,7 @@ const {
 const { scanForRepositories } = require("./repository-discovery.cjs");
 const { commandIds, menuDescriptor, menuTemplate } = require("./application-menu.cjs");
 const { partitionRepositories } = require("./github-repositories.cjs");
+const { fetchAvatar, forgetAvatar, readCachedAvatar } = require("./avatar-cache.cjs");
 const {
   isGitHubRemote,
   normalizeProfile: normalizeSshProfile,
@@ -111,7 +112,10 @@ function writeStore(store) {
 }
 
 function publicAccount(account) {
-  return account;
+  // The renderer has no network access, so the image travels as a data URL read
+  // from the on-disk cache. A cache miss leaves it null and the initials avatar
+  // is used, which is also the offline first-run behaviour.
+  return { ...account, avatar: readCachedAvatar(app.getPath("userData"), account.id) };
 }
 
 function publicState(store) {
@@ -233,6 +237,9 @@ async function syncGitHubAccounts() {
       handle,
       email: profile?.email || known?.email || `${profileId}+${handle}@users.noreply.github.com`,
       initials: initials(name),
+      // Public profile data, not a credential. The image itself is fetched in
+      // the main process and cached on disk; see resolveAvatars.
+      avatarUrl: profile?.avatar_url || known?.avatarUrl || null,
       status: known?.status || name,
       tone: known?.tone || ["coral", "violet", "blue"][Number(profile?.id || 0) % 3],
       authSource: "github-cli",
@@ -247,7 +254,23 @@ async function syncGitHubAccounts() {
     if (!accountIds.has(accountId)) delete store.repositoryAccounts[repositoryPath];
   }
   writeStore(store);
+  await cacheMissingAvatars(store);
   return publicState(store);
+}
+
+/**
+ * Downloads avatars that are not cached yet.
+ *
+ * Only ever runs during account synchronization, never on the path that simply
+ * reads state. A failure is cosmetic: the account keeps its initials avatar,
+ * which is also what an offline first run shows.
+ */
+async function cacheMissingAvatars(store) {
+  const userDataPath = app.getPath("userData");
+  await Promise.all(store.accounts.map(async (account) => {
+    if (!account.avatarUrl || readCachedAvatar(userDataPath, account.id)) return;
+    await fetchAvatar(userDataPath, account.id, account.avatarUrl);
+  }));
 }
 
 function rememberRepository(repository) {
@@ -620,6 +643,7 @@ function registerIpc() {
     const account = store.accounts.find((item) => item.id === accountId);
     if (!account) throw new Error("Account not found.");
     await removeGitHubAccount(githubContext(), account.handle);
+    forgetAvatar(app.getPath("userData"), account.id);
     return syncGitHubAccounts();
   });
 

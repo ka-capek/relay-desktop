@@ -12,6 +12,14 @@ const { applyManualOrder, needsMetadataBackfill, normalizeOrdering } = require("
 const { commandIds, menuDescriptor, menuTemplate } = require("../electron/application-menu.cjs");
 const { isPushable, partitionRepositories } = require("../electron/github-repositories.cjs");
 const {
+  MAX_AVATAR_BYTES,
+  fetchAvatar,
+  forgetAvatar,
+  isGitHubAvatarUrl,
+  readCachedAvatar,
+  resolveAvatar,
+} = require("../electron/avatar-cache.cjs");
+const {
   cloneRepository,
   fetchOrigin,
   commitFiles,
@@ -170,6 +178,70 @@ test("reads the HEAD commit date used to sort the sidebar", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("only ever fetches avatars from GitHub's own hosts", () => {
+  assert.equal(isGitHubAvatarUrl("https://avatars.githubusercontent.com/u/1?v=4"), true);
+  // A tampered store must not turn this into a request to somewhere else.
+  assert.equal(isGitHubAvatarUrl("https://avatars.githubusercontent.com.evil.example/u/1"), false);
+  assert.equal(isGitHubAvatarUrl("https://evil.example/u/1.png"), false);
+  assert.equal(isGitHubAvatarUrl("http://avatars.githubusercontent.com/u/1"), false);
+  assert.equal(isGitHubAvatarUrl("file:///etc/passwd"), false);
+  assert.equal(isGitHubAvatarUrl(""), false);
+});
+
+test("caches avatars on disk and falls back cleanly when they cannot be had", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "relay-avatar-"));
+  try {
+    const png = Buffer.from("89504e470d0a1a0a" + "00".repeat(32), "hex");
+    let requests = 0;
+    const respond = (type, body) => async () => {
+      requests += 1;
+      return { ok: true, headers: { get: () => type }, arrayBuffer: async () => body };
+    };
+    const url = "https://avatars.githubusercontent.com/u/1";
+
+    assert.equal(readCachedAvatar(root, "github-1"), null);
+
+    const first = await resolveAvatar(root, "github-1", url, respond("image/png", png));
+    assert.match(first, /^data:image\/png;base64,/);
+    assert.equal(requests, 1);
+
+    // A second resolve is served from disk, so launching costs no requests.
+    assert.equal(await resolveAvatar(root, "github-1", url, respond("image/png", png)), first);
+    assert.equal(requests, 1);
+
+    // Offline with a cache still shows the picture; without one it returns null
+    // so the initials avatar is used rather than a broken image.
+    const offline = async () => { throw new Error("offline"); };
+    assert.equal(await resolveAvatar(root, "github-1", url, offline), first);
+    assert.equal(await resolveAvatar(root, "github-404", url, offline), null);
+
+    // Anything that is not a plausible image is refused.
+    assert.equal(await fetchAvatar(root, "github-2", url, respond("text/html", Buffer.from("<html>"))), null);
+    assert.equal(await fetchAvatar(root, "github-3", url, respond("image/png", Buffer.alloc(MAX_AVATAR_BYTES + 1))), null);
+
+    // Removing an account takes its cached picture with it.
+    forgetAvatar(root, "github-1");
+    assert.equal(readCachedAvatar(root, "github-1"), null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("renders avatars without giving the renderer network access", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const main = await readFile(new URL("../electron/main.cjs", import.meta.url), "utf8");
+
+  // Every avatar site goes through the one component that falls back to initials.
+  assert.equal(page.match(/<AccountAvatar account=/g).length, 6);
+  assert.doesNotMatch(page, /className=\{`avatar \$\{[a-zA-Z]+\.tone\}`\}/);
+  assert.match(page, /onError=\{\(\) => setFailed\(true\)\}/);
+
+  // The image reaches the renderer as data on the state payload; the renderer
+  // never holds an avatar URL to request.
+  assert.match(main, /readCachedAvatar\(app\.getPath\("userData"\), account\.id\)/);
+  assert.doesNotMatch(page, /avatars\.githubusercontent\.com/);
 });
 
 test("offers only repositories the account can actually push to", () => {

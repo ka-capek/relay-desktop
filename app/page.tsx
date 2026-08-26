@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 type Account = {
   id: string;
+  /** GitHub profile picture as a data URL, or null to fall back to initials. */
+  avatar?: string | null;
   name: string;
   handle: string;
   email: string;
@@ -259,6 +261,32 @@ function sshHostFromRemote(remote: string) {
 }
 
 type IconName = "alert" | "branch" | "check" | "chevron" | "clone" | "close" | "edit" | "external" | "folder" | "github" | "grip" | "info" | "key" | "lock" | "more" | "plus" | "refresh" | "repository" | "route" | "search" | "settings" | "sort" | "trash" | "upload";
+
+/**
+ * An account's GitHub picture, falling back to its initials.
+ *
+ * The image arrives from the main process as a data URL; the renderer never
+ * requests it. If it is missing, or fails to decode, the initials show instead
+ * so there is never a broken image.
+ */
+function AccountAvatar({ account, className = "" }: { account: Account; className?: string }) {
+  const [failed, setFailed] = useState(false);
+  if (account.avatar && !failed) {
+    return (
+      /* Electron renderer, not Next.js: next/image needs a server, and this is
+         an inline data URL already held in memory, so there is nothing for it
+         to optimize or fetch. */
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        className={`avatar-image ${className}`}
+        src={account.avatar}
+        alt=""
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  return <span className={`${className} ${account.tone}`}>{account.initials}</span>;
+}
 
 function RelayMark({ size = 30 }: { size?: number }) {
   return (
@@ -1476,7 +1504,7 @@ export default function Home() {
         <div className="toolbar-spacer" />
         <div className="account-wrap" ref={accountMenuRef}>
           <button className={`account-trigger ${accountMenuOpen ? "active" : ""}`} onClick={() => setAccountMenuOpen(!accountMenuOpen)} aria-expanded={accountMenuOpen} aria-label="Switch GitHub account">
-            {activeAccount ? <span className={`avatar ${activeAccount.tone}`}>{activeAccount.initials}</span> : <span className="avatar empty-avatar"><Icon name="plus" size={15} /></span>}
+            {activeAccount ? <AccountAvatar account={activeAccount} className="avatar" /> : <span className="avatar empty-avatar"><Icon name="plus" size={15} /></span>}
             <span className="account-copy"><small>Active account</small><strong>{activeAccount ? `@${activeAccount.handle}` : "Add account"}</strong></span>
             <Icon name="chevron" className="chevron" />
           </button>
@@ -1486,7 +1514,7 @@ export default function Home() {
               {accounts.length === 0 && <div className="menu-empty">No GitHub accounts connected</div>}
               {accounts.map((account) => (
                 <button key={account.id} className={`account-option ${account.id === appState.activeAccountId ? "selected" : ""}`} onClick={() => switchAccount(account.id)}>
-                  <span className={`avatar large ${account.tone}`}>{account.initials}</span>
+                  <AccountAvatar account={account} className="avatar large" />
                   <span><strong>{account.status}</strong><small>@{account.handle} · {account.email}</small></span>
                   {account.id === appState.activeAccountId && <Icon name="check" className="check" size={17} />}
                 </button>
@@ -1576,7 +1604,7 @@ export default function Home() {
                   <button className="repo-item" onClick={() => openRepository(repo.path)} title={repo.path}>
                     <Icon name="repository" className="repo-icon" size={17} />
                     <span className="repo-text"><strong>{repo.name}</strong><small>{repo.owner}</small></span>
-                    {pinned && <span className={`mini-avatar ${pinned.tone}`}>{pinned.initials}</span>}
+                    {pinned && <AccountAvatar account={pinned} className="mini-avatar" />}
                     {repo.changes > 0 && <span className="change-count">{repo.changes}</span>}
                   </button>
                   <button className="repo-remove" onClick={() => removeRepositoryFromRelay(repo.path)} aria-label={`Remove ${repo.name} from Relay`} title="Remove from Relay"><Icon name="trash" size={14} /></button>
@@ -1617,7 +1645,7 @@ export default function Home() {
                 </div>
                 <div className="commit-box">
                   <div className="commit-identity">
-                    {repositoryAccount ? <><span className={`mini-avatar ${repositoryAccount.tone}`}>{repositoryAccount.initials}</span><span>Commit as <strong>@{repositoryAccount.handle}</strong></span></> : <><span className="mini-avatar empty-avatar"><Icon name="plus" size={12} /></span><span>No GitHub account connected</span></>}
+                    {repositoryAccount ? <><AccountAvatar account={repositoryAccount} className="mini-avatar" /><span>Commit as <strong>@{repositoryAccount.handle}</strong></span></> : <><span className="mini-avatar empty-avatar"><Icon name="plus" size={12} /></span><span>No GitHub account connected</span></>}
                   </div>
                   <input className="summary-input" value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="Summary (required)" aria-label="Commit summary" />
                   <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Description" aria-label="Commit description" />
@@ -1793,7 +1821,7 @@ export default function Home() {
               {accounts.map((account) => (
                 <label key={account.id} className={routingChoice === account.id ? "selected" : ""}>
                   <input type="radio" name="routing" value={account.id} checked={routingChoice === account.id} onChange={(event) => setRoutingChoice(event.target.value)} />
-                  <span className={`avatar ${account.tone}`}>{account.initials}</span>
+                  <AccountAvatar account={account} className="avatar" />
                   <span><strong>{account.status}</strong><small>@{account.handle}</small></span>
                 </label>
               ))}
@@ -1877,7 +1905,7 @@ export default function Home() {
             <h2 id="manage-title">Connected accounts</h2>
             <p>Removing an account signs it out locally and removes its credential from this computer.</p>
             <div className="managed-accounts">
-              {accounts.map((account) => <div className="managed-account" key={account.id}><span className={`avatar ${account.tone}`}>{account.initials}</span><span><strong>{account.status}</strong><small>@{account.handle} · {account.email}</small></span><div className="managed-account-actions"><button onClick={() => editAccountEmail(account)}><Icon name="edit" size={14} />Email</button><button className="danger" onClick={() => removeAccount(account.id)}><Icon name="trash" size={14} />Remove</button></div></div>)}
+              {accounts.map((account) => <div className="managed-account" key={account.id}><AccountAvatar account={account} className="avatar" /><span><strong>{account.status}</strong><small>@{account.handle} · {account.email}</small></span><div className="managed-account-actions"><button onClick={() => editAccountEmail(account)}><Icon name="edit" size={14} />Email</button><button className="danger" onClick={() => removeAccount(account.id)}><Icon name="trash" size={14} />Remove</button></div></div>)}
             </div>
             <button className="primary-modal-button" onClick={() => { setManageAccountsOpen(false); openAccountModal(); }}>Add account</button>
           </section>

@@ -115,6 +115,12 @@ body {
 .account-copy { min-width: 0; }
 .account-copy strong { display: block; font-size: var(--text-body); font-weight: 670; }
 
+/* The image variant shares the circle geometry with the initials variant, so
+   a fallback swaps in without the layout moving. */
+.avatar-image { display: block; flex: 0 0 auto; border-radius: 50%; object-fit: cover; background: #dfe5e0; }
+.avatar.avatar-image { width: 31px; height: 31px; }
+.avatar.large.avatar-image { width: 36px; height: 36px; }
+.mini-avatar.avatar-image { width: 24px; height: 24px; }
 .avatar, .mini-avatar { display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; color: white; font-weight: 720; }
 .avatar { width: 31px; height: 31px; font-size: var(--text-meta); }
 .avatar.large { width: 36px; height: 36px; font-size: var(--text-body); }
