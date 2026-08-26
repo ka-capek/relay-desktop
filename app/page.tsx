@@ -23,6 +23,8 @@ type RepositorySummary = {
   addedAt: string;
   /** Committer date of the current HEAD, or null in a repository with no commits. */
   latestCommit: string | null;
+  /** Date of the repository's first commit. This is what "age" sorts by. */
+  firstCommit: string | null;
 };
 
 /**
@@ -142,6 +144,7 @@ type Repository = {
   behind: number;
   hasUpstream: boolean;
   latestCommit: string | null;
+  firstCommit: string | null;
 };
 
 type AppState = {
@@ -191,6 +194,7 @@ type RelayDesktop = {
   setRepositoryAccount: (repositoryPath: string, accountId: string | null) => Promise<AppState>;
   setRepositoryOrder: (mode: RepositoryOrderMode, direction: RepositoryOrderDirection) => Promise<AppState>;
   setManualOrder: (repositoryPaths: string[]) => Promise<AppState>;
+  backfillRepositoryMetadata: () => Promise<{ state: AppState; updated: number }>;
   saveSshProfile: (profile: Partial<SshProfile>) => Promise<AppState>;
   removeSshProfile: (profileId: string) => Promise<AppState>;
   setRepositorySshProfile: (repositoryPath: string, profileId: string | null) => Promise<AppState>;
@@ -344,8 +348,13 @@ function sortRepositories(repositories: RepositorySummary[], order: RepositoryOr
 
   if (order.mode === "age") {
     return sorted.sort((a, b) => {
-      const left = timestamp(a.addedAt);
-      const right = timestamp(b.addedAt);
+      // The repository's own age, not when Relay first saw it. A folder scan
+      // stamps every repository it finds with the same instant, so addedAt
+      // orders by the scan's read order and looks random.
+      const left = timestamp(a.firstCommit);
+      const right = timestamp(b.firstCommit);
+      // A repository with no commits has no age, so it sorts last either way.
+      if ((left === null) !== (right === null)) return left === null ? 1 : -1;
       if (left !== null && right !== null && left !== right) return (left - right) * sign;
       return compareByName(a, b);
     });
@@ -563,6 +572,15 @@ export default function Home() {
         const state = await api.getState();
         if (cancelled) return;
         setAppState(state);
+
+        // Repositories remembered before firstCommit/latestCommit existed have
+        // neither, which would leave the age and latest-commit sorts ordering a
+        // list of nulls. Filling them in is a Git read per repository, so it
+        // runs after the first paint rather than blocking startup, and a
+        // failure only means those sorts stay degraded.
+        api.backfillRepositoryMetadata()
+          .then((result) => { if (!cancelled && result.updated > 0) setAppState(result.state); })
+          .catch(() => undefined);
       } catch (error) {
         if (!cancelled) showNotice(messageFrom(error), true);
       } finally {
@@ -761,6 +779,7 @@ export default function Home() {
         // reset the age it is sorted by, or its place in the manual order.
         addedAt: known?.addedAt || new Date().toISOString(),
         latestCommit: next.latestCommit ?? known?.latestCommit ?? null,
+        firstCommit: next.firstCommit ?? known?.firstCommit ?? null,
       };
       return {
         ...current,

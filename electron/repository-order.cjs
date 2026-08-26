@@ -53,9 +53,25 @@ function normalizeOrdering(store) {
     // addedAt, and it is never later than the real first-added time.
     if (!repository.addedAt) repository.addedAt = repository.lastOpened || new Date().toISOString();
     if (repository.latestCommit === undefined) repository.latestCommit = null;
+    // Age sorts by this. Stores written before it existed backfill lazily; see
+    // needsMetadataBackfill.
+    if (repository.firstCommit === undefined) repository.firstCommit = null;
   }
 
   return store;
+}
+
+/**
+ * Repositories still missing the fields the sidebar sorts by.
+ *
+ * A store written before those fields existed would otherwise leave "age" and
+ * "latest commit" sorting a list of nulls until every repository happened to be
+ * opened, which reads as the feature being broken.
+ */
+function needsMetadataBackfill(store) {
+  return store.repositories
+    .filter((repository) => !repository.firstCommit && repository.firstCommit !== false)
+    .map((repository) => repository.path);
 }
 
 /** Applies a renderer-supplied manual order, ignoring unknown and duplicate paths. */
@@ -77,6 +93,7 @@ function applyManualOrder(store, repositoryPaths) {
 
 module.exports = {
   DEFAULT_ORDER,
+  needsMetadataBackfill,
   REPOSITORY_ORDER_DIRECTIONS,
   REPOSITORY_ORDER_MODES,
   applyManualOrder,

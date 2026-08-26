@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld("relayDesktop", {
   setActiveAccount: (accountId) => ipcRenderer.invoke("relay:set-active-account", accountId),
   setAccountEmail: (accountId, email) => ipcRenderer.invoke("relay:set-account-email", accountId, email),
   setRepositoryAccount: (repositoryPath, accountId) => ipcRenderer.invoke("relay:set-repository-account", repositoryPath, accountId),
+  backfillRepositoryMetadata: () => ipcRenderer.invoke("relay:backfill-repository-metadata"),
   setRepositoryOrder: (mode, direction) => ipcRenderer.invoke("relay:set-repository-order", mode, direction),
   setManualOrder: (repositoryPaths) => ipcRenderer.invoke("relay:set-manual-order", repositoryPaths),
   removeAccount: (accountId) => ipcRenderer.invoke("relay:remove-account", accountId),

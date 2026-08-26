@@ -8,7 +8,7 @@ import test from "node:test";
 
 const require = createRequire(import.meta.url);
 const { GITHUB_DEVICE_URL, loginProgressFromOutput } = require("../electron/github-auth.cjs");
-const { applyManualOrder, normalizeOrdering } = require("../electron/repository-order.cjs");
+const { applyManualOrder, needsMetadataBackfill, normalizeOrdering } = require("../electron/repository-order.cjs");
 const { commandIds, menuDescriptor, menuTemplate } = require("../electron/application-menu.cjs");
 const {
   cloneRepository,
@@ -24,6 +24,7 @@ const {
   sshCommandFor,
 } = require("../electron/ssh-service.cjs");
 const {
+  firstCommitDate,
   readCommitDetail,
   readCommitFileDiff,
   readHistoryPage,
@@ -169,6 +170,53 @@ test("reads the HEAD commit date used to sort the sidebar", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("sorts age by the repository's first commit, not when Relay saw it", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "relay-age-"));
+  try {
+    const stamp = (iso) => ({
+      GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso,
+      GIT_AUTHOR_NAME: "T", GIT_AUTHOR_EMAIL: "t@example.com",
+      GIT_COMMITTER_NAME: "T", GIT_COMMITTER_EMAIL: "t@example.com",
+    });
+    const run = (args, env) => execFileSync("git", args, { cwd: root, stdio: "pipe", env: { ...process.env, ...env } });
+
+    run(["init", "-q", "-b", "main", "."]);
+    await writeFile(path.join(root, "a.txt"), "1\n");
+    run(["add", "."]);
+    run(["commit", "-q", "-m", "first"], stamp("2019-03-04T10:00:00Z"));
+    await writeFile(path.join(root, "a.txt"), "2\n");
+    run(["add", "."]);
+    run(["commit", "-q", "-m", "latest"], stamp("2026-08-01T10:00:00Z"));
+
+    const summary = await readRepositorySummary(root);
+    // Age is the root commit, which is years before HEAD.
+    assert.match(summary.firstCommit, /^2019-03-04T/);
+    assert.match(summary.latestCommit, /^2026-08-01T/);
+    assert.notEqual(summary.firstCommit, summary.latestCommit);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("backfills the sort fields for repositories remembered without them", () => {
+  // A folder scan stamps every repository with the same instant, so addedAt
+  // cannot order them; this is why age had to stop using it.
+  const scanned = "2026-08-25T18:56:57.170Z";
+  const store = normalizeOrdering({
+    repositories: [
+      { path: "/a", name: "a", lastOpened: scanned },
+      { path: "/b", name: "b", lastOpened: scanned, firstCommit: "2020-01-01T00:00:00Z" },
+    ],
+  });
+
+  assert.equal(store.repositories[0].firstCommit, null);
+  // Only the repository that is actually missing the field is queued.
+  assert.deepEqual(needsMetadataBackfill(store), ["/a"]);
+
+  store.repositories[0].firstCommit = "2021-05-05T00:00:00Z";
+  assert.deepEqual(needsMetadataBackfill(store), []);
 });
 
 test("pages through history without gaps, duplicates or an artificial cap", async () => {

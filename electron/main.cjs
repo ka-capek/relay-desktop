@@ -28,6 +28,7 @@ const {
   REPOSITORY_ORDER_DIRECTIONS,
   REPOSITORY_ORDER_MODES,
   applyManualOrder,
+  needsMetadataBackfill,
   normalizeOrdering,
 } = require("./repository-order.cjs");
 const {
@@ -267,6 +268,7 @@ function rememberRepository(repository) {
     // manual order, so the first-added time is carried forward untouched.
     addedAt: known?.addedAt || new Date().toISOString(),
     latestCommit: repository.latestCommit ?? known?.latestCommit ?? null,
+    firstCommit: repository.firstCommit ?? known?.firstCommit ?? null,
   };
   store.repositories = [summary, ...store.repositories.filter((item) => item.path !== summary.path)].slice(0, 5000);
   normalizeOrdering(store);
@@ -290,6 +292,7 @@ async function rememberRepositoryPaths(repositoryPaths) {
   for (const summary of summaries) {
     const known = knownByPath.get(summary.path);
     summary.addedAt = known?.addedAt || summary.lastOpened;
+    summary.firstCommit = summary.firstCommit ?? known?.firstCommit ?? null;
     if (known) summary.lastOpened = known.lastOpened;
   }
   store.repositories = [
@@ -303,6 +306,42 @@ async function rememberRepositoryPaths(repositoryPaths) {
     added: summaries.filter((repository) => !existingPaths.has(repository.path)).length,
     readable: summaries.length,
   };
+}
+
+/**
+ * Fills in the sort fields for repositories remembered before they existed.
+ *
+ * Reads summaries in batches, tolerates repositories that have moved or become
+ * unreadable, and leaves everything else in the store untouched. Runs once:
+ * afterwards every repository has a firstCommit value, or is gone.
+ */
+async function backfillRepositoryMetadata() {
+  const store = readStore();
+  const pending = needsMetadataBackfill(store);
+  if (pending.length === 0) return { state: publicState(store), updated: 0 };
+
+  const summaries = [];
+  for (let index = 0; index < pending.length; index += 10) {
+    const batch = pending.slice(index, index + 10);
+    const values = await Promise.all(batch.map((repositoryPath) => readRepositorySummary(repositoryPath).catch(() => null)));
+    summaries.push(...values.filter(Boolean));
+  }
+
+  // Re-read: a Git operation may have rewritten the store while this ran.
+  const current = readStore();
+  const byPath = new Map(summaries.map((summary) => [summary.path, summary]));
+  let updated = 0;
+  for (const repository of current.repositories) {
+    const summary = byPath.get(repository.path);
+    if (!summary) continue;
+    repository.firstCommit = summary.firstCommit;
+    repository.latestCommit = summary.latestCommit;
+    repository.branch = summary.branch;
+    repository.changes = summary.changes;
+    updated += 1;
+  }
+  writeStore(current);
+  return { state: publicState(current), updated };
 }
 
 function sendMenuAction(action) {
@@ -560,6 +599,9 @@ function registerIpc() {
     writeStore(store);
     return publicState(store);
   });
+
+  // Called once by the renderer after startup, off the critical path.
+  ipcMain.handle("relay:backfill-repository-metadata", () => backfillRepositoryMetadata());
 
   ipcMain.handle("relay:set-repository-order", (_event, mode, direction) => {
     if (!REPOSITORY_ORDER_MODES.includes(mode)) throw new Error("Unknown repository sort order.");

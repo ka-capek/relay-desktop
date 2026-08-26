@@ -137,15 +137,34 @@ async function latestCommitDate(root) {
   return value.trim() || null;
 }
 
+/**
+ * Date of the repository's first commit.
+ *
+ * This is what "age" means in the sidebar. The time Relay first remembered a
+ * repository is useless for ordering: a folder scan stamps every repository it
+ * finds with the same instant, so sorting by it produces the scan's read order
+ * rather than anything meaningful.
+ *
+ * Finding root commits walks the history, so the value is stored and reused. It
+ * cannot change unless the history is rewritten. A repository with several root
+ * commits, from a merged unrelated history, uses the earliest.
+ */
+async function firstCommitDate(root) {
+  const value = await git(root, ["log", "--max-parents=0", "--format=%cI"]).catch(() => "");
+  const dates = value.split("\n").map((line) => line.trim()).filter(Boolean).sort();
+  return dates[0] || null;
+}
+
 async function readRepository(repositoryPath) {
   const root = await git(repositoryPath, ["rev-parse", "--show-toplevel"]);
-  const [branch, status, remote, branches, history, latestCommit] = await Promise.all([
+  const [branch, status, remote, branches, history, latestCommit, firstCommit] = await Promise.all([
     git(root, ["branch", "--show-current"]).catch(() => ""),
     git(root, ["-c", "core.quotepath=false", "status", "--porcelain=v1", "--untracked-files=all"]),
     git(root, ["remote", "get-url", "origin"]).catch(() => ""),
     git(root, ["for-each-ref", "--format=%(refname:short)", "refs/heads/"]).catch(() => ""),
     git(root, ["log", "-30", "--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ae%x1f%aI%x1e"]).catch(() => ""),
     latestCommitDate(root),
+    firstCommitDate(root),
   ]);
 
   let statText = "";
@@ -186,16 +205,18 @@ async function readRepository(repositoryPath) {
     behind: Number.isFinite(behind) ? behind : 0,
     hasUpstream,
     latestCommit,
+    firstCommit,
   };
 }
 
 async function readRepositorySummary(repositoryPath) {
   const root = await git(repositoryPath, ["rev-parse", "--show-toplevel"]);
-  const [branch, status, remote, latestCommit] = await Promise.all([
+  const [branch, status, remote, latestCommit, firstCommit] = await Promise.all([
     git(root, ["branch", "--show-current"]).catch(() => ""),
     git(root, ["-c", "core.quotepath=false", "status", "--porcelain=v1", "--untracked-files=all"]),
     git(root, ["remote", "get-url", "origin"]).catch(() => ""),
     latestCommitDate(root),
+    firstCommitDate(root),
   ]);
   const identity = repositoryIdentity(remote, root);
   return {
@@ -206,6 +227,7 @@ async function readRepositorySummary(repositoryPath) {
     changes: status.split("\n").filter(Boolean).length,
     lastOpened: new Date().toISOString(),
     latestCommit,
+    firstCommit,
   };
 }
 
@@ -481,6 +503,7 @@ async function switchBranch(repositoryPath, branch) {
 
 module.exports = {
   cloneRepository,
+  firstCommitDate,
   isSshRemote,
   originRemoteUrl,
   commitFiles,
