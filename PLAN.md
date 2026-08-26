@@ -48,8 +48,8 @@ The entire project is a cost paid for a smaller, lighter client.
 | Decision | Choice | Consequence |
 | --- | --- | --- |
 | Language | C++20 | Fixed constraint |
-| Toolkit | **Qt 6 Widgets** | Static vs dynamic **not yet decided**; see §2.1 |
-| Licence | **Undecided** | GPLv3 is *not* forced by static linking; see §3 |
+| Toolkit | **Qt 6 Widgets, dynamically linked** | Forced by the licence choice; see §3 |
+| Licence | **MIT for Relay's own code** | Owner wants permissive. This rules out GPLv3, and therefore rules out the easy static-Qt route |
 | Scope | **Full parity with 0.5.0** | Months of sustained work; see section 4 |
 | GitHub auth | **Keep `gh` for the first release** | Reversed after review; see §5 |
 | Git | **Child-process `git`, bundled** | Preserves the current semantics exactly; ~40 MB |
@@ -101,56 +101,91 @@ states; the same metric (physical footprint / private dirty, not summed RSS)
 applied to both implementations; and the exact commands recorded so anyone can
 reproduce them.
 
-Provisional, to be confirmed or revised by that measurement: installed under
-100 MB, idle memory under 80 MB. One process is a consequence, not a goal — it
-also concentrates crash and security blast radius, and Git and SSH child
-processes exist regardless.
+### 2.2 What the decisions actually add up to
+
+Two decisions taken since the first draft — a permissive licence, which forces
+dynamic Qt, and retaining `gh` — both cost disk. Adding the parts up, using the
+corrected ranges and the measured Git and `gh` payloads:
+
+| Component | macOS | Windows |
+| --- | ---: | ---: |
+| Qt, dynamic | 30–55 MB | 35–70 MB |
+| Relay's own binary | ~5 MB | ~5 MB |
+| Bundled Git, trimmed | 40 MB | 97 MB |
+| Bundled `gh` | 38 MB | 40 MB |
+| **Installed total** | **~115–140 MB** | **~180–210 MB** |
+| Electron today | 382 MB | ~528 MB unpacked |
+
+**The earlier "under 100 MB" target is not reachable while Git and `gh` are
+bundled.** It should be dropped rather than quietly missed. The realistic disk
+outcome is roughly a 3x reduction, not the order of magnitude the first draft
+implied. Getting below 100 MB requires making Git and `gh` external
+dependencies, which is already a separate item in `TODO.md` and can be done to
+the Electron client without any rewrite.
+
+Windows is the worse case because its bundled Git is 97 MB against macOS's
+40 MB. Trimming it further needs testing on a Windows machine.
+
+**Disk is not the goal; memory is.** None of the above affects idle memory,
+where the case is much stronger: a single Qt process should sit in the tens of
+MB against Electron's measured 233 MB across four processes. Provisional target,
+to be confirmed by Phase 1: **idle under 80 MB**. One process is a consequence
+of the architecture, not a goal in itself — it also concentrates crash and
+security blast radius, and Git and SSH child processes exist regardless.
 
 ---
 
-## 3. Licensing, which must be settled before any code
+## 3. Licensing, and what it forces
 
-The repository is public and currently has **no licence at all** — no `LICENSE`
-file, and `package.json` declares none. By default that is "all rights
-reserved". That needs fixing regardless of the rewrite.
+**Decision: Relay's own code is MIT.** The owner wants a permissive licence and
+does not want to spend time on the question. That decision is cheap to state and
+has one expensive consequence, which is the point of this section.
 
-**Correction to the first draft.** It claimed static Qt linking requires GPLv3
-absent a commercial licence. That is too categorical and was the load-bearing
-claim behind choosing GPLv3. LGPLv3 permits static linking if the distributor
-meets the relinking obligations: supplying object files or equivalent, build
-instructions, the corresponding Qt source, and whatever else a recipient needs
-to relink and run the result. Dynamic linking is merely the easier route, which
-is why Qt recommends it.
+### It settles the static-versus-dynamic question
 
-Since Relay would publish its source anyway, LGPL-static compliance may be
-practical. GPLv3 remains a reasonable deliberate choice — it is simply not
-forced, and must not be adopted on the strength of a false premise.
+Qt's open-source licence is LGPLv3. The interaction with a permissive project
+licence is:
 
-Three things the first draft got wrong or missed:
+| Relay's licence | Qt linkage | Workable? |
+| --- | --- | --- |
+| MIT | **LGPL Qt, dynamically linked** | **Yes. This is the normal, well-trodden path.** |
+| MIT | LGPL Qt, statically linked | Legally possible, but every release must ship object files or equivalent so a recipient can relink against their own Qt. Operationally painful for a solo project. |
+| MIT | GPL Qt, statically linked | **No.** GPL would govern the combined work, which contradicts a permissive licence. |
 
-- **"GPL mostly formalises the status quo" is false.** A public
-  all-rights-reserved repository grants no right to modify and redistribute.
-  GPLv3 grants exactly that. It is a substantive change, and grants already made
-  cannot be withdrawn.
-- **Bundled Git carries its own GPLv2 obligations**, independent of Relay's
-  licence. Git is GPLv2-only and cannot be relabelled GPLv3. Relay invokes it as
-  a separate process, which is ordinarily aggregation rather than a derivative
+So the smallest-binary option is off the table. **Qt is linked dynamically**, and
+the earlier draft's static/GPLv3 direction is abandoned — which is fine, because
+the review already established that the static-versus-dynamic size gap is far
+smaller than the first draft claimed.
+
+MIT rather than Apache-2.0 for simplicity; Apache-2.0 differs mainly in adding an
+explicit patent grant, and is a reasonable substitute if that is wanted.
+
+### What still has to be done
+
+- Add `LICENSE` (MIT) and declare it in project metadata. The repository is
+  currently public with **no licence at all**, which grants nobody anything.
+  Worth doing for the Electron client immediately, independent of the rewrite.
+- **Comply with LGPLv3 for Qt itself.** Relay being MIT does not exempt Qt.
+  Ship Qt's licence and notices, state that Qt is used under LGPLv3, link
+  dynamically, and make Qt's corresponding source available. Do not statically
+  link Qt without revisiting this section.
+- **Bundled Git carries its own GPLv2 obligations**, unaffected by Relay's
+  licence. Git is GPLv2-only and cannot be relabelled. Relay runs it as a
+  separate process, which is ordinarily aggregation rather than a derivative
   work, but the installer must still preserve Git's licence and notices and make
   the exact corresponding source for the shipped binaries available. Git for
   Windows bundles many separately licensed components needing a notice
-  inventory. The macOS runtime appears to ship a Git Credential Manager
-  `NOTICE` but no Git `COPYING`. **Audit this now; it is a current-product
-  problem, not a rewrite problem.**
-- **"Confirm every contributor consents" was not a real clearance process.** An
-  AI tool is not a copyright holder whose consent can be collected. The genuine
-  questions are which portions carry sufficient human authorship, whether any
-  employer or contractor acquired rights, and what the tool terms say. What is
-  needed is an IP provenance inventory, not consent from assistants.
+  inventory. The macOS runtime appears to ship a Git Credential Manager `NOTICE`
+  but no Git `COPYING`. **This is a defect in the shipping product today, not a
+  rewrite problem.** The same applies to the bundled GitHub CLI.
+- An IP provenance note. Much of this repository was written by AI assistants
+  under the owner's authorship. Adding a `Co-Authored-By` trailer neither
+  creates nor transfers copyright, and an AI tool is not a rights holder whose
+  consent can be collected. Under a permissive licence this matters far less
+  than it would under copyleft, which is a genuine secondary benefit of the
+  choice.
 
-None of the above is legal advice. If GPLv3 is adopted, it should be on advice
-from someone competent to give it.
-
----
+None of this is legal advice.
 
 ## 4. What full parity actually means
 
@@ -419,11 +454,46 @@ only then, if C++ remains non-negotiable, proceed — while being clear that it 
 a language-preference rewrite rather than an optimisation, developed alongside a
 maintained Electron client rather than replacing it up front.
 
-## 11. Open questions
+## 11. How to execute this
 
-- Which Qt version, and where is the pinned static build kept?
-- Which module owns the GitHub REST calls, and does it use `QNetworkAccessManager`?
-- Is `relay-data.json` kept byte-compatible so a user can move between clients
-  during the transition, or is a one-way migration acceptable?
-- Does the native client keep the name and app ID, or ship alongside?
-- Syntax highlighting in the diff view: in scope, or explicitly out?
+This plan is intended to be handed to a coding agent, steered by the owner.
+Guidance for whoever does that:
+
+- **Phase 1 is a stop/go gate, not a formality.** Its purpose is to kill the
+  project cheaply if the measured numbers do not justify the effort. An agent
+  will be inclined to push through it. Do not let it.
+- **Do not let the agent start with the UI.** The interesting part is the diff
+  view and it will want to build that first. Phase 1's vertical slice is the
+  right place for it; bulk UI porting is Phase 3 onward.
+- **`AGENTS.md` describes the Electron client**, and remains the best
+  specification of the behaviour being reproduced — particularly sections 9
+  (accounts and credentials), 12 (Git semantics) and 14 (the IPC contract).
+  Point the agent at it. It is accurate as of this commit.
+- **The Git-fixture tests in `tests/rendered-html.test.mjs` are the most
+  valuable artefact the Electron project produced.** Port them early; they
+  encode real behaviour for root commits, merges, hash validation and SSH
+  transport.
+- **Watch for silent scope growth.** Full parity is 33 IPC channels. An agent
+  will happily add a 34th.
+- Anything in §9 that the agent does not raise, it has not thought about.
+
+## 12. Open questions
+
+Settled since the first draft: toolkit (Qt 6 Widgets), linkage (dynamic, forced
+by the licence), licence (MIT), authentication (keep `gh`), and the Electron
+client's fate (feature-freeze, keep security fixes).
+
+Still open:
+
+- Which Qt version to pin, and how it is acquired reproducibly on both
+  platforms.
+- Whether `relay-data.json` stays byte-compatible so a user can move between
+  clients during the transition. **Note the hazard in §5**: the Electron client
+  deletes any account whose `authSource` is not `github-cli`. Retaining `gh`
+  makes compatibility achievable, but it must be decided deliberately.
+- Whether the native client keeps the name and app ID, or ships alongside.
+- Syntax highlighting in the diff view: in scope, or explicitly out. The
+  Electron client does not have it.
+- Whether the Electron client gets the "make Git and `gh` external" work from
+  `TODO.md` first, which would deliver most of the disk saving without any
+  rewrite and would sharpen the comparison.
