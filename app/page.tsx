@@ -189,7 +189,8 @@ type RelayDesktop = {
   fetchOrigin: (repositoryPath: string, accountId: string | null) => Promise<Repository>;
   pushOrigin: (repositoryPath: string, accountId: string | null) => Promise<Repository>;
   switchBranch: (repositoryPath: string, branch: string) => Promise<Repository>;
-  connectAccount: () => Promise<AppState>;
+  connectAccount: () => Promise<{ state: AppState; connectedAccountId: string | null }>;
+  listAccountEmails: (accountId: string) => Promise<{ choices: EmailChoice[]; current: string }>;
   onGitHubLoginProgress: (callback: (progress: GitHubLoginProgress) => void) => () => void;
   setActiveAccount: (accountId: string) => Promise<AppState>;
   setAccountEmail: (accountId: string, email: string) => Promise<AppState>;
@@ -207,6 +208,8 @@ type RelayDesktop = {
   getMenu: () => Promise<{ isMac: boolean; menus: MenuDescriptor[] }>;
   runMenuCommand: (command: string) => Promise<void>;
 };
+
+type EmailChoice = { email: string; label: string; primary: boolean; noreply: boolean };
 
 type MenuAction = "open-repository" | "clone-repository" | "scan-folder" | "remove-repository";
 
@@ -529,6 +532,8 @@ export default function Home() {
   const [hiddenRepositoryCount, setHiddenRepositoryCount] = useState(0);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [accountEmail, setAccountEmail] = useState("");
+  const [emailChoices, setEmailChoices] = useState<EmailChoice[]>([]);
+  const [emailPromptIsNewAccount, setEmailPromptIsNewAccount] = useState(false);
   const [routingChoice, setRoutingChoice] = useState("follow");
   const [loginProgress, setLoginProgress] = useState<GitHubLoginProgress | null>(null);
   const [deviceCodeCopyStatus, setDeviceCodeCopyStatus] = useState<DeviceCodeCopyStatus>("idle");
@@ -1009,11 +1014,16 @@ export default function Home() {
       deviceCodeCopyTimerRef.current = null;
       setDeviceCodeCopyStatus("idle");
       setLoginProgress({ code: null, verificationUrl: null, message: "Preparing GitHub sign-in…" });
-      const state = await window.relayDesktop.connectAccount();
+      const { state, connectedAccountId } = await window.relayDesktop.connectAccount();
       setAppState(state);
       setLoginProgress(null);
       closeAccountModal();
-      showNotice(`Connected @${state.accounts.find((account) => account.id === state.activeAccountId)?.handle}`);
+      const connected = state.accounts.find((account) => account.id === connectedAccountId)
+        ?? state.accounts.find((account) => account.id === state.activeAccountId);
+      showNotice(`Connected @${connected?.handle}`);
+      // The account is already connected and usable; this prompt only refines
+      // which address its commits carry, so dismissing it changes nothing.
+      if (connected) await promptForCommitEmail(connected, true);
     } catch (error) {
       showNotice(messageFrom(error), true);
     } finally {
@@ -1058,8 +1068,28 @@ export default function Home() {
   }
 
   function editAccountEmail(account: Account) {
+    void promptForCommitEmail(account, false);
+  }
+
+  /**
+   * Opens the commit-email modal for an account.
+   *
+   * Shared by the connect flow and Manage accounts, so there is one modal and
+   * one submit path rather than two that can drift apart.
+   */
+  async function promptForCommitEmail(account: Account, isNewAccount: boolean) {
     setEditingAccountId(account.id);
     setAccountEmail(account.email);
+    setEmailPromptIsNewAccount(isNewAccount);
+    setEmailChoices([]);
+    try {
+      const result = await window.relayDesktop!.listAccountEmails(account.id);
+      setEmailChoices(result.choices);
+    } catch {
+      // Without the addresses GitHub knows, the field still accepts a typed
+      // address and a blank value still means the noreply address.
+      setEmailChoices([]);
+    }
   }
 
   async function saveAccountEmail(event?: React.FormEvent<HTMLFormElement>) {
@@ -1973,14 +2003,32 @@ export default function Home() {
           <section className="modal email-modal" role="dialog" aria-modal="true" aria-labelledby="email-title">
             <button className="modal-close" onClick={() => setEditingAccountId(null)} aria-label="Close"><Icon name="close" size={17} /></button>
             <div className="modal-icon"><Icon name="edit" size={21} /></div>
-            <h2 id="email-title">Change commit email</h2>
-            <p>This email is written into new commits made with @{accounts.find((account) => account.id === editingAccountId)?.handle}. Existing commits are not changed.</p>
+            <h2 id="email-title">{emailPromptIsNewAccount ? "Choose a commit email" : "Change commit email"}</h2>
+            <p>
+              This email is written into new commits made with @{accounts.find((account) => account.id === editingAccountId)?.handle}. Existing commits are not changed.
+              {emailPromptIsNewAccount && " The account is already connected; skipping keeps GitHub's noreply address."}
+            </p>
             {/* noValidate keeps validation in the main process, so Enter and the
                 button both surface the same message a click surfaces today. */}
             <form onSubmit={saveAccountEmail} noValidate>
+              {emailChoices.length > 0 && (
+                <div className="email-choices" role="group" aria-label="Addresses GitHub knows for this account">
+                  {emailChoices.map((choice) => (
+                    <button
+                      type="button"
+                      key={choice.email}
+                      className={`email-choice ${accountEmail.trim().toLowerCase() === choice.email.toLowerCase() ? "selected" : ""}`}
+                      onClick={() => setAccountEmail(choice.email)}
+                    >
+                      <span><strong>{choice.email}</strong><small>{choice.label}</small></span>
+                      {accountEmail.trim().toLowerCase() === choice.email.toLowerCase() && <Icon name="check" size={16} />}
+                    </button>
+                  ))}
+                </div>
+              )}
               <label className="form-field"><span>Commit email</span><input type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} placeholder="Leave blank to use GitHub noreply" /></label>
               <button type="submit" className="primary-modal-button" disabled={busy === "email"}>{busy === "email" ? "Saving…" : "Save email"}</button>
-              <button type="button" className="secondary-modal-button" onClick={() => setEditingAccountId(null)}>Cancel</button>
+              <button type="button" className="secondary-modal-button" onClick={() => setEditingAccountId(null)}>{emailPromptIsNewAccount ? "Skip for now" : "Cancel"}</button>
             </form>
           </section>
         </div>

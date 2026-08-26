@@ -19,6 +19,7 @@ const { scanForRepositories } = require("./repository-discovery.cjs");
 const { commandIds, menuDescriptor, menuTemplate } = require("./application-menu.cjs");
 const { partitionRepositories } = require("./github-repositories.cjs");
 const { fetchAvatar, forgetAvatar, readCachedAvatar } = require("./avatar-cache.cjs");
+const { emailChoices, resolveCommitEmail } = require("./account-email.cjs");
 const {
   isGitHubRemote,
   normalizeProfile: normalizeSshProfile,
@@ -572,6 +573,9 @@ function registerIpc() {
   });
 
   ipcMain.handle("relay:connect-account", async (event) => {
+    // Noted before the login so the account it added can be identified, which
+    // is what the commit-email prompt is asked about.
+    const before = new Set(readStore().accounts.map((account) => account.id));
     let devicePageOpened = false;
     await loginWithGitHub(githubContext(), (progress) => {
       if (event.sender.isDestroyed()) return;
@@ -588,7 +592,41 @@ function registerIpc() {
         }
       });
     });
-    return syncGitHubAccounts();
+
+    const state = await syncGitHubAccounts();
+    const connected = state.accounts.find((account) => !before.has(account.id)) || null;
+    return { state, connectedAccountId: connected?.id || null };
+  });
+
+  /**
+   * Commit-email options for an account.
+   *
+   * /user/emails needs the user:email scope. Without it, or if the request
+   * fails for any other reason, the noreply address is still offered and the
+   * user can type an address, so a missing scope degrades the prompt instead of
+   * failing the login that just succeeded.
+   */
+  ipcMain.handle("relay:list-account-emails", async (_event, accountId) => {
+    const store = readStore();
+    const account = store.accounts.find((item) => item.id === accountId);
+    if (!account) throw new Error("Account not found.");
+
+    let addresses = null;
+    try {
+      const token = await accountToken(githubContext(), account.handle);
+      const response = await fetch("https://api.github.com/user/emails", {
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${token}`,
+          "User-Agent": "Relay-Desktop",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      });
+      if (response.ok) addresses = await response.json();
+    } catch {
+      // Falls through to the noreply-only list below.
+    }
+    return { choices: emailChoices(account, addresses), current: account.email };
   });
 
   ipcMain.handle("relay:set-active-account", async (_event, accountId) => {
@@ -603,9 +641,7 @@ function registerIpc() {
     const store = readStore();
     const account = store.accounts.find((item) => item.id === accountId);
     if (!account) throw new Error("Account not found.");
-    const email = String(requestedEmail || "").trim() || `${account.githubId}+${account.handle}@users.noreply.github.com`;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid email address.");
-    account.email = email;
+    account.email = resolveCommitEmail(account, requestedEmail);
     writeStore(store);
     return publicState(store);
   });

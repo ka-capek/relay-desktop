@@ -367,6 +367,16 @@ input[type="checkbox"] { width: 13px; height: 13px; accent-color: var(--green); 
 .device-code.error { border-color: #c98b7b; background: #fbf3f1; }
 .device-code.error small { color: #9b4e3d; }
 .login-progress { display: flex; align-items: center; gap: 9px; margin: 13px 0; padding: 11px; border-radius: 8px; background: #edf4ef; color: #496053; font-size: var(--text-sm); }
+.email-choices { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin: 12px 0 4px; }
+.email-choice { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 9px 11px; border: 1px solid #dde2dd; border-radius: 8px; background: white; cursor: pointer; text-align: left; }
+.email-choice:hover { background: #f8faf8; }
+.email-choice.selected { border-color: #60917a; background: #eff6f2; box-shadow: 0 0 0 1px #60917a; }
+.email-choice > span { min-width: 0; }
+.email-choice strong, .email-choice small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.email-choice strong { font-size: var(--text-sm); }
+.email-choice small { margin-top: 3px; color: #7b8680; font-size: var(--text-meta); }
+.email-choice .icon { color: var(--green); flex: 0 0 auto; }
+
 .ssh-section { margin: 16px 0 4px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
 .ssh-section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .ssh-section-heading > span { display: flex; align-items: center; gap: 7px; color: #46534d; font-size: var(--text-body); font-weight: 650; }

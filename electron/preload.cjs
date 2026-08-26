@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld("relayDesktop", {
     ipcRenderer.on("relay:github-login-progress", listener);
     return () => ipcRenderer.removeListener("relay:github-login-progress", listener);
   },
+  listAccountEmails: (accountId) => ipcRenderer.invoke("relay:list-account-emails", accountId),
   setActiveAccount: (accountId) => ipcRenderer.invoke("relay:set-active-account", accountId),
   setAccountEmail: (accountId, email) => ipcRenderer.invoke("relay:set-account-email", accountId, email),
   setRepositoryAccount: (repositoryPath, accountId) => ipcRenderer.invoke("relay:set-repository-account", repositoryPath, accountId),

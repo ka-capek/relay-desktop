@@ -11,6 +11,7 @@ const { GITHUB_DEVICE_URL, loginProgressFromOutput } = require("../electron/gith
 const { applyManualOrder, needsMetadataBackfill, normalizeOrdering } = require("../electron/repository-order.cjs");
 const { commandIds, menuDescriptor, menuTemplate } = require("../electron/application-menu.cjs");
 const { isPushable, partitionRepositories } = require("../electron/github-repositories.cjs");
+const { emailChoices, noreplyAddress, resolveCommitEmail } = require("../electron/account-email.cjs");
 const {
   MAX_AVATAR_BYTES,
   fetchAvatar,
@@ -178,6 +179,52 @@ test("reads the HEAD commit date used to sort the sidebar", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("offers commit-email choices, and degrades without the user:email scope", () => {
+  const account = { githubId: 96548046, handle: "example" };
+  const noreply = noreplyAddress(account.githubId, account.handle);
+
+  // Without the scope the response is not a list; the noreply address is still
+  // offered so the prompt degrades rather than the login failing.
+  assert.deepEqual(emailChoices(account, undefined).map((c) => c.email), [noreply]);
+  assert.deepEqual(emailChoices(account, { message: "Requires user:email" }).map((c) => c.email), [noreply]);
+
+  const choices = emailChoices(account, [
+    { email: "me@example.com", verified: true, primary: true },
+    { email: "alt@example.com", verified: true, primary: false },
+    { email: "unverified@example.com", verified: false, primary: false },
+    { email: noreply, verified: true, primary: false },
+  ]);
+  // Noreply is always present and always first; unverified addresses are not
+  // offered, and the noreply entry is not duplicated.
+  assert.equal(choices[0].email, noreply);
+  assert.deepEqual(choices.map((c) => c.email), [noreply, "me@example.com", "alt@example.com"]);
+  assert.equal(choices.filter((c) => c.email === noreply).length, 1);
+
+  // Blank still means noreply, matching the modal's long-standing behaviour.
+  assert.equal(resolveCommitEmail(account, ""), noreply);
+  assert.equal(resolveCommitEmail(account, "   "), noreply);
+  assert.equal(resolveCommitEmail(account, " me@example.com "), "me@example.com");
+  assert.throws(() => resolveCommitEmail(account, "nope"), /valid email address/);
+});
+
+test("asks for a commit email when connecting, without blocking the login", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const main = await readFile(new URL("../electron/main.cjs", import.meta.url), "utf8");
+
+  // Connecting reports which account it added, and that account is prompted.
+  assert.match(main, /return \{ state, connectedAccountId: connected\?\.id \|\| null \}/);
+  assert.match(page, /if \(connected\) await promptForCommitEmail\(connected, true\)/);
+
+  // One modal and one submit path, shared with Manage accounts.
+  assert.match(page, /function editAccountEmail\(account: Account\) \{\s*void promptForCommitEmail\(account, false\);/);
+  assert.match(page, /Skip for now/);
+
+  // A profile is only fetched for an account Relay does not already know, so a
+  // chosen email cannot be overwritten by a later synchronization.
+  assert.match(main, /if \(!known\) profile = await githubProfile/);
+  assert.match(main, /email: profile\?\.email \|\| known\?\.email/);
 });
 
 test("only ever fetches avatars from GitHub's own hosts", () => {
