@@ -187,6 +187,38 @@ explicit patent grant, and is a reasonable substitute if that is wanted.
 
 None of this is legal advice.
 
+## 3.1 The design end goal
+
+The native client must reproduce the Electron client's visual design, not
+reinterpret it. The frozen Electron client is the specification: `app/page.tsx`
+for structure and `app/globals.css` for the visual system, at the freeze commit.
+
+What that means concretely, since an agent will otherwise drift:
+
+- **One repository action row**, ordered current repository, current branch,
+  then fetch/push/publish, with the account switcher pushed to the right. On
+  macOS the traffic lights sit on their own slim strip above it, and the action
+  row starts flush left. On Windows the Relay name and the File/Edit/View/Window
+  menus share the title row with the native window controls.
+- **Sidebar**: repositories heading with an add button, a filter field, the
+  ordering control, then the list. Rows are name over owner, with the pinned
+  account avatar and a right-aligned change count. No selection bar down the
+  left edge; the selected row is marked by background tint alone.
+- **Typography tokens**, not ad-hoc sizes: 13px primary, 11–12px secondary
+  metadata, 10px reserved for compact badges. The scale exists because 7–10px
+  text was unreadable at low OS scaling; do not reintroduce one-off sizes.
+- **Flat, code-native SVG icons** in a single icon set. No emoji, no icon
+  fonts, no gradients on icons. Panel and modal shadows are fine.
+- **Restrained green accents** for action and selection; coral, violet and blue
+  only as avatar fallback tones.
+- The empty state, the account popover, and every modal are part of the design,
+  not afterthoughts.
+
+Note that any screenshot taken from an installed 0.5.0 build predates two
+deliberate changes now on `main`: the "Current repository" caption was removed,
+and the macOS traffic lights moved off the action row. **The code is the
+specification, not a screenshot.**
+
 ## 4. What full parity actually means
 
 Corrected after review, which caught a double count. The real figures:
