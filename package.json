@@ -41,7 +41,28 @@
       "extraResources": [
         {
           "from": "runtime/git/mac-arm64",
-          "to": "git"
+          "to": "git",
+          "filter": [
+            "**/*",
+            "!libexec/git-core/*.dll",
+            "!libexec/git-core/*.deps.json",
+            "!libexec/git-core/*.runtimeconfig.json",
+            "!libexec/git-core/libcoreclr*",
+            "!libexec/git-core/libhostfxr*",
+            "!libexec/git-core/libhostpolicy*",
+            "!libexec/git-core/libclrjit*",
+            "!libexec/git-core/libSkiaSharp*",
+            "!libexec/git-core/libHarfBuzzSharp*",
+            "!libexec/git-core/createdump",
+            "!libexec/git-core/git-credential-manager*",
+            "!libexec/git-core/git-lfs",
+            "!mingw64/libexec/git-core/*.dll",
+            "!mingw64/libexec/git-core/*.deps.json",
+            "!mingw64/libexec/git-core/*.runtimeconfig.json",
+            "!mingw64/libexec/git-core/git-credential-manager*",
+            "!mingw64/libexec/git-core/git-lfs.exe",
+            "!mingw64/bin/git-lfs.exe"
+          ]
         },
         {
           "from": "runtime/gh/mac-arm64",
@@ -63,7 +84,28 @@
       "extraResources": [
         {
           "from": "runtime/git/win-x64",
-          "to": "git"
+          "to": "git",
+          "filter": [
+            "**/*",
+            "!libexec/git-core/*.dll",
+            "!libexec/git-core/*.deps.json",
+            "!libexec/git-core/*.runtimeconfig.json",
+            "!libexec/git-core/libcoreclr*",
+            "!libexec/git-core/libhostfxr*",
+            "!libexec/git-core/libhostpolicy*",
+            "!libexec/git-core/libclrjit*",
+            "!libexec/git-core/libSkiaSharp*",
+            "!libexec/git-core/libHarfBuzzSharp*",
+            "!libexec/git-core/createdump",
+            "!libexec/git-core/git-credential-manager*",
+            "!libexec/git-core/git-lfs",
+            "!mingw64/libexec/git-core/*.dll",
+            "!mingw64/libexec/git-core/*.deps.json",
+            "!mingw64/libexec/git-core/*.runtimeconfig.json",
+            "!mingw64/libexec/git-core/git-credential-manager*",
+            "!mingw64/libexec/git-core/git-lfs.exe",
+            "!mingw64/bin/git-lfs.exe"
+          ]
         },
         {
           "from": "runtime/gh/win-x64",

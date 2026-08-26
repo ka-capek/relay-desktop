@@ -187,6 +187,57 @@ connect flow.
 - Known GitHub addresses are offered, with noreply always among them.
 - Dismissing the prompt still leaves a working, connected account.
 
+## Shrink the installed footprint
+
+**Problem:** The packaged macOS app was 490 MB. Measured:
+
+| Part | Size | Share |
+| --- | --- | --- |
+| Electron and Chromium | 287 MB | 59% |
+| Bundled Git | 148 MB | 30% |
+| Bundled GitHub CLI | 37 MB | 8% |
+| Relay itself | 17 MB | 3% |
+
+114 MB of the bundled Git was Git Credential Manager's .NET runtime and
+git-lfs. Relay disables the credential manager on every network operation and
+installs its own command-scoped helper, and never invokes lfs, so roughly a
+quarter of the application was a credential manager it actively switches off.
+
+Excluding those at packaging time took the app to 382 MB and the bundled Git to
+40 MB, with a real HTTPS clone through the packaged binary still working. That
+is done.
+
+### Remaining decision: stop bundling Git and the GitHub CLI
+
+This would remove a further 78 MB, and the code already supports it:
+`gitExecutable()` falls back to `git` on `PATH` and `githubCliPath()` falls back
+to `gh`, so it is a packaging change rather than a service rewrite.
+
+The cost is the first run. Git is often already present on macOS through the
+Xcode command line tools and can be prompted for; the GitHub CLI is rarely
+installed on either platform, and it is the smaller of the two at 37 MB.
+
+### Work
+
+- Decide per tool rather than as one switch. Dropping Git is the larger saving
+  and the smaller inconvenience; dropping the GitHub CLI saves least and hurts
+  most.
+- If either is unbundled, detect it at startup and explain precisely what to
+  install and how, per platform, rather than failing at the first Git command.
+- Check the version found on `PATH` is new enough for the commands Relay uses.
+- Keep working when a tool appears or disappears while Relay is running.
+- Verify on both platforms, including a Windows machine with no Git installed.
+
+### Acceptance criteria
+
+- A first run with the tool missing explains what to install, and recovers
+  without a restart once it is.
+- No Git operation fails with a raw "command not found".
+- The measured installer size is recorded against the numbers above.
+
+**Note:** even unbundling both leaves Electron's 287 MB, so the footprint goal
+is mostly gated on the native rewrite rather than on this item.
+
 ## Resizable panes
 
 **Problem:** Every pane is a fixed width: the repository sidebar, the file list,
