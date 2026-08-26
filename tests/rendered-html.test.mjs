@@ -84,8 +84,10 @@ test("server-renders Relay with no repository selected", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>Relay — Git, without the account juggling<\/title>/i);
-  assert.match(html, /Current repository/);
+  // The "Current repository" caption was removed; the picker shows the
+  // repository itself, or the empty-state prompt.
   assert.match(html, /Open a repository/);
+  assert.doesNotMatch(html, /Current repository/);
   assert.match(html, /No repository open/);
   assert.match(html, /Open, clone, or scan a folder for repositories\./);
   assert.doesNotMatch(html, /git-fixture|All systems operational/i);
@@ -317,8 +319,11 @@ test("keeps one repository action row without a duplicate account pill", async (
 
   // macOS folds the chrome into the single action row; Windows keeps a title
   // row and reserves space for the native window controls.
-  assert.match(css, /html\.desktop\.macos \.titlebar \{ display: none; \}/);
-  assert.match(css, /html\.desktop\.macos \.repo-bar \{ -webkit-app-region: drag;/);
+  // macOS gives the traffic lights their own strip so the action row can start
+  // flush left; Windows keeps its title row.
+  assert.match(css, /html\.desktop\.macos \.titlebar \{ height: 34px;/);
+  assert.match(css, /html\.desktop\.macos \.app-shell \{ grid-template-rows: 34px 58px/);
+  assert.match(css, /html\.desktop\.macos \.repo-bar \{ padding-left: 8px; \}/);
   assert.match(css, /html\.desktop\.windows \.titlebar \{ padding-right: 150px;/);
 });
 
@@ -435,6 +440,20 @@ test("clones, fetches and pushes over SSH without a token", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("keeps repository rows plain with right-aligned change counts", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+
+  // The green bar down the left edge of the selected row is gone; the row is
+  // still distinguishable by its background tint.
+  assert.match(css, /\.repo-row\.selected \{ background: #e1e9e3; \}/);
+  assert.doesNotMatch(css, /\.repo-row\.selected \{[^}]*inset 3px 0/);
+
+  // Counts share a right edge instead of stopping short of a reserved gutter,
+  // and step aside for the remove button rather than overlapping it.
+  assert.match(css, /\.change-count \{ margin-left: auto;/);
+  assert.match(css, /\.repo-row:hover \.change-count \{ opacity: 0; \}/);
 });
 
 test("submits the commit-email modal from the keyboard", async () => {

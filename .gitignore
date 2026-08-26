@@ -44,3 +44,6 @@ yarn-error.log*
 
 # typescript incremental build state
 tsconfig.tsbuildinfo
+
+# agent worktrees and local agent state
+/.claude/

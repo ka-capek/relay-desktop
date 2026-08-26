@@ -643,8 +643,8 @@ function createWindow() {
     // Windows draws its own title row with the menus on it, and keeps the real
     // minimize/maximize/close through the title bar overlay.
     titleBarStyle: "hidden",
-    // Centres the traffic lights in the 58px repository action row.
-    trafficLightPosition: isMac ? { x: 18, y: 23 } : undefined,
+    // Centres the traffic lights in the 34px macOS title strip.
+    trafficLightPosition: isMac ? { x: 18, y: 11 } : undefined,
     titleBarOverlay: isMac ? undefined : {
       color: "#fbfcfa",
       symbolColor: "#3b4741",

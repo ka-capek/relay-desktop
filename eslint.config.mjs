@@ -9,6 +9,8 @@ import tseslint from "typescript-eslint";
 
 const eslintConfig = defineConfig([
   globalIgnores([
+    // Transient agent worktrees, not project source.
+    ".claude/**",
     ".next/**",
     ".wrangler/**",
     "desktop-dist/**",

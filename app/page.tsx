@@ -256,6 +256,18 @@ function sshHostFromRemote(remote: string) {
 
 type IconName = "alert" | "branch" | "check" | "chevron" | "clone" | "close" | "edit" | "external" | "folder" | "github" | "grip" | "info" | "key" | "lock" | "more" | "plus" | "refresh" | "repository" | "route" | "search" | "settings" | "sort" | "trash" | "upload";
 
+function RelayMark({ size = 30 }: { size?: number }) {
+  return (
+    <svg className="relay-mark" width={size} height={size} viewBox="0 0 1024 1024" aria-hidden="true">
+      <rect x="20" y="20" width="984" height="984" rx="228" fill="#1d5f45" />
+      <path d="M338 296v432M338 430h176c96 0 174 78 174 174v124" fill="none" stroke="#f7f2e2" strokeWidth="116" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="338" cy="296" r="94" fill="#ef8a4c" />
+      <circle cx="338" cy="728" r="94" fill="#7cc199" />
+      <circle cx="688" cy="728" r="94" fill="#ef8a4c" />
+    </svg>
+  );
+}
+
 function Icon({ name, size = 16, className = "" }: { name: IconName; size?: number; className?: string }) {
   let content;
   switch (name) {
@@ -1423,8 +1435,8 @@ export default function Home() {
 
       <section className="repo-bar">
         <button className="repo-picker" aria-label="Open repository" onClick={chooseRepository}>
-          <span className="repo-mark">R</span>
-          <span><small>Current repository</small>{repository ? <>{repository.owner} / <strong>{repository.name}</strong></> : <strong>Open a repository</strong>}</span>
+          <RelayMark size={30} />
+          <span>{repository ? <>{repository.owner} / <strong>{repository.name}</strong></> : <strong>Open a repository</strong>}</span>
           <Icon name="chevron" className="chevron" />
         </button>
         <label className={`branch-control ${!repository ? "disabled" : ""}`}>
