@@ -173,7 +173,7 @@ type RelayDesktop = {
   getState: () => Promise<AppState>;
   selectRepository: () => Promise<Repository | null>;
   chooseCloneDirectory: () => Promise<string | null>;
-  listGitHubRepositories: (accountId: string) => Promise<GitHubRepository[]>;
+  listGitHubRepositories: (accountId: string) => Promise<{ repositories: GitHubRepository[]; hidden: number }>;
   cloneRepository: (input: { remoteUrl: string; parentPath: string; repositoryName: string; accountId: string | null; sshProfileId: string | null }) => Promise<{ repository: Repository; state: AppState }>;
   scanFolder: () => Promise<{ state: AppState; found: number; added: number; readable: number; folderPath: string } | null>;
   removeRepository: (repositoryPath: string) => Promise<AppState>;
@@ -498,6 +498,7 @@ export default function Home() {
   const [selectedGitHubRepositoryId, setSelectedGitHubRepositoryId] = useState<string | null>(null);
   const [githubRepositoriesLoading, setGitHubRepositoriesLoading] = useState(false);
   const [githubRepositoriesError, setGitHubRepositoriesError] = useState("");
+  const [hiddenRepositoryCount, setHiddenRepositoryCount] = useState(0);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [accountEmail, setAccountEmail] = useState("");
   const [routingChoice, setRoutingChoice] = useState("follow");
@@ -865,9 +866,12 @@ export default function Home() {
     if (!window.relayDesktop) return;
     setGitHubRepositories([]);
     setGitHubRepositoriesError("");
+    setHiddenRepositoryCount(0);
     setGitHubRepositoriesLoading(true);
     try {
-      setGitHubRepositories(await window.relayDesktop.listGitHubRepositories(accountId));
+      const result = await window.relayDesktop.listGitHubRepositories(accountId);
+      setGitHubRepositories(result.repositories);
+      setHiddenRepositoryCount(result.hidden);
     } catch (error) {
       setGitHubRepositoriesError(messageFrom(error));
     } finally {
@@ -1893,7 +1897,7 @@ export default function Home() {
             </div>
             {cloneSource === "github" && activeAccount ? (
               <div className="github-repository-picker">
-                <div className="github-repository-heading"><span>Available to <strong>@{activeAccount.handle}</strong></span><span>{githubRepositoriesLoading ? "Loading…" : `${visibleGitHubRepositories.length} repositories`}</span></div>
+                <div className="github-repository-heading"><span>Writable by <strong>@{activeAccount.handle}</strong></span><span>{githubRepositoriesLoading ? "Loading…" : `${visibleGitHubRepositories.length} repositories`}</span></div>
                 <label className="github-repository-search"><Icon name="search" size={15} /><input value={githubRepositorySearch} onChange={(event) => setGitHubRepositorySearch(event.target.value)} placeholder="Filter repositories" aria-label="Filter GitHub repositories" /></label>
                 <div className="github-repository-list">
                   {githubRepositoriesLoading && <div className="repository-list-state"><Icon name="refresh" className="spin" size={18} />Loading repositories from GitHub…</div>}
@@ -1909,6 +1913,11 @@ export default function Home() {
                   ))}
                 </div>
                 {visibleGitHubRepositories.length > 250 && <div className="repository-list-limit">Showing the first 250 results. Filter by name to find another repository.</div>}
+                {!githubRepositoriesLoading && !githubRepositoriesError && hiddenRepositoryCount > 0 && (
+                  <div className="repository-list-limit">
+                    {hiddenRepositoryCount} repositor{hiddenRepositoryCount === 1 ? "y is" : "ies are"} hidden because @{activeAccount.handle} cannot push to {hiddenRepositoryCount === 1 ? "it" : "them"}, or {hiddenRepositoryCount === 1 ? "it is" : "they are"} archived. Paste its URL on the URL tab to clone it read-only.
+                  </div>
+                )}
               </div>
             ) : (
               <label className="form-field"><span>Repository URL</span><input value={cloneForm.remoteUrl} onChange={(event) => { const remoteUrl = event.target.value; setCloneForm((current) => ({ ...current, remoteUrl, repositoryName: repositoryNameFromUrl(remoteUrl) })); }} placeholder="https://github.com/owner/repository.git" /></label>

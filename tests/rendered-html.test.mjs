@@ -10,6 +10,7 @@ const require = createRequire(import.meta.url);
 const { GITHUB_DEVICE_URL, loginProgressFromOutput } = require("../electron/github-auth.cjs");
 const { applyManualOrder, needsMetadataBackfill, normalizeOrdering } = require("../electron/repository-order.cjs");
 const { commandIds, menuDescriptor, menuTemplate } = require("../electron/application-menu.cjs");
+const { isPushable, partitionRepositories } = require("../electron/github-repositories.cjs");
 const {
   cloneRepository,
   fetchOrigin,
@@ -24,7 +25,6 @@ const {
   sshCommandFor,
 } = require("../electron/ssh-service.cjs");
 const {
-  firstCommitDate,
   readCommitDetail,
   readCommitFileDiff,
   readHistoryPage,
@@ -170,6 +170,31 @@ test("reads the HEAD commit date used to sort the sidebar", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("offers only repositories the account can actually push to", () => {
+  const page = [
+    { id: 1, name: "owned", full_name: "me/owned", permissions: { push: true, admin: true } },
+    { id: 2, name: "collab", full_name: "org/collab", permissions: { push: true } },
+    { id: 3, name: "maintained", full_name: "org/maintained", permissions: { maintain: true } },
+    { id: 4, name: "readonly", full_name: "org/readonly", permissions: { pull: true, push: false } },
+    { id: 5, name: "archived", full_name: "me/archived", archived: true, permissions: { push: true, admin: true } },
+    { id: 6, name: "odd-shape", full_name: "org/odd-shape" },
+  ];
+
+  const { repositories, hidden } = partitionRepositories(page);
+  assert.deepEqual(repositories.map((repository) => repository.name), ["owned", "collab", "maintained", "odd-shape"]);
+  // Read-only and archived are withheld, and the count is reported so the UI
+  // can say so rather than silently showing a shorter list.
+  assert.equal(hidden, 2);
+
+  // An archived repository cannot be pushed to whatever its permissions claim.
+  assert.equal(isPushable(page[4]), false);
+  // An unexpected response shape must not hide a repository the user owns.
+  assert.equal(isPushable(page[5]), true);
+
+  // The sanitized rows carry no permissions block onward to the renderer.
+  assert.ok(repositories.every((repository) => !("permissions" in repository)));
 });
 
 test("sorts age by the repository's first commit, not when Relay saw it", async () => {

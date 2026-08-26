@@ -17,6 +17,7 @@ const {
 } = require("./git-service.cjs");
 const { scanForRepositories } = require("./repository-discovery.cjs");
 const { commandIds, menuDescriptor, menuTemplate } = require("./application-menu.cjs");
+const { partitionRepositories } = require("./github-repositories.cjs");
 const {
   isGitHubRemote,
   normalizeProfile: normalizeSshProfile,
@@ -179,6 +180,7 @@ async function githubProfile(handle) {
 async function githubRepositories(account) {
   const token = await accountToken(githubContext(), account.handle);
   const repositories = [];
+  let hidden = 0;
   let nextUrl = "https://api.github.com/user/repos?visibility=all&affiliation=owner%2Ccollaborator%2Corganization_member&sort=updated&direction=desc&per_page=100";
 
   while (nextUrl) {
@@ -198,24 +200,18 @@ async function githubRepositories(account) {
 
     const page = await response.json();
     if (!Array.isArray(page)) throw new Error("GitHub returned an unexpected repository list.");
-    repositories.push(...page.map((repository) => ({
-      id: String(repository.id),
-      name: repository.name,
-      fullName: repository.full_name,
-      owner: repository.owner?.login || repository.full_name?.split("/")[0] || "GitHub",
-      description: repository.description || "",
-      private: Boolean(repository.private),
-      archived: Boolean(repository.archived),
-      fork: Boolean(repository.fork),
-      cloneUrl: repository.clone_url,
-      updatedAt: repository.updated_at,
-    })));
+    // Repositories the account can only read are dropped here: cloning one and
+    // then failing to push is a worse outcome than not offering it. The
+    // permissions arrive with this same response, so nothing extra is fetched.
+    const { repositories: pushable, hidden: hiddenOnPage } = partitionRepositories(page);
+    repositories.push(...pushable);
+    hidden += hiddenOnPage;
 
     const link = response.headers.get("link") || "";
     nextUrl = link.match(/<([^>]+)>;\s*rel="next"/)?.[1] || "";
   }
 
-  return repositories;
+  return { repositories, hidden };
 }
 
 async function syncGitHubAccounts() {
