@@ -1,0 +1,52 @@
+# Relay third-party notices
+
+This file describes the native `@RELAY_NOTICE_PLATFORM@` release payload. It is
+generated at package time so its versions and source locations stay attached to
+the artifact they describe.
+
+## Relay
+
+Relay's own source is distributed under the MIT License. The complete terms
+are included beside this file as `Relay-MIT.txt`.
+
+## Qt @RELAY_NOTICE_QT_VERSION@
+
+Relay uses Qt dynamically under the GNU Lesser General Public License,
+version 3. The complete license is included as `Qt-LGPL-3.0.txt`.
+
+Corresponding source for the exact packaged Qt version:
+
+@RELAY_QT_SOURCE_URI@
+
+The Qt shared libraries remain replaceable. Relay does not prohibit reverse
+engineering for debugging modifications to those libraries. Qt also contains
+third-party components under their own licenses; the authoritative SPDX SBOM
+and notices from the selected Qt distribution must be retained with the release
+source record.
+
+## Git @RELAY_NOTICE_GIT_VERSION@
+
+Bundled in this artifact: `@RELAY_NOTICE_GIT_BUNDLED@`.
+
+Git is a separate child-process program distributed under GPL-2.0-only. When
+bundled, the complete license is included as `Git-GPL-2.0.txt` and component
+licenses present in the runtime tree remain in that tree.
+
+Corresponding source for the exact packaged Git distribution, including the
+redistributed Git for Windows/MSYS2 components where applicable:
+
+@RELAY_GIT_SOURCE_URI@
+
+## GitHub CLI @RELAY_NOTICE_GH_VERSION@
+
+Bundled in this artifact: `@RELAY_NOTICE_GIT_BUNDLED@`.
+
+GitHub CLI is a separate child-process program distributed under the MIT
+License. When bundled, the complete terms are included as
+`GitHub-CLI-MIT.txt`.
+
+Source for the exact packaged GitHub CLI version:
+
+@RELAY_GH_SOURCE_URI@
+
+These notices are a release-engineering record, not legal advice.

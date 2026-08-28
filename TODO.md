@@ -284,7 +284,7 @@ custom-drawn view story is poor, which the diff pane needs.
 
 **Foundation**
 
-- Establish a CMake + C++20 build producing macOS Apple Silicon and Windows x64
+- Establish a CMake + C++26 build producing macOS Apple Silicon and Windows x64
   binaries, matching the current supported target list exactly.
 - Pin a Qt 6 LTS version. Resolve the licensing position explicitly before any
   release: LGPLv3 requires dynamic linking to Qt and the ability for a user to

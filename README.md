@@ -1,8 +1,10 @@
 # Relay
 
 Relay is a small GitHub Desktop-style client focused on easy multi-account
-switching. It is a real Electron app for Apple silicon Macs and 64-bit Windows,
-with Git and GitHub CLI bundled in the installer.
+switching. Relay 0.5.0 is the shipping Electron client for Apple silicon Macs
+and 64-bit Windows. A C++26/Qt 6 native successor now lives alongside it under
+`native/`; the Electron client remains the parity specification until the
+native release passes its cross-platform stop/go gate.
 
 ## Download
 
@@ -28,6 +30,31 @@ stops Apple Silicon reporting it as damaged.
 npm install
 npm run desktop:open
 ```
+
+## Native C++26 development
+
+The native client requires CMake 3.30+, Ninja, and the pinned Qt 6.11.1 with
+Core, Gui, Widgets, Network, Svg, Concurrent, and Test. Qt is dynamically
+linked. On Apple Silicon with Homebrew Qt:
+
+```bash
+cmake --preset macos-debug
+cmake --build --preset macos-debug --parallel
+ctest --preset macos-debug
+open build-native/macos-debug/native/Relay.app
+```
+
+The Windows x64 presets are `windows-debug` and `windows-release`; configure
+them from a native Windows environment with a matching Qt installation. Build
+artifacts stay under ignored `build-native/` directories.
+
+The native client deliberately reuses Electron's public metadata and GitHub CLI
+locations, including `relay-data.json` and the sibling `github-cli/` directory.
+Startup still clears the selected repository, credentials remain in `gh`'s OS
+credential store, and the C++ presentation layer never receives a token.
+
+Measurements and the exact commands used to collect them are recorded in
+`docs/native-measurements.md`.
 
 ## Desktop builds
 

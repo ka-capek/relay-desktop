@@ -47,7 +47,7 @@ The entire project is a cost paid for a smaller, lighter client.
 
 | Decision | Choice | Consequence |
 | --- | --- | --- |
-| Language | C++20 | Fixed constraint |
+| Language | **C++26** | Fixed constraint; requested by the owner before implementation began |
 | Toolkit | **Qt 6 Widgets, dynamically linked** | Forced by the licence choice; see §3 |
 | Licence | **MIT for Relay's own code** | Owner wants permissive. This rules out GPLv3, and therefore rules out the easy static-Qt route |
 | Scope | **Full parity with 0.5.0** | Months of sustained work; see section 4 |
@@ -339,7 +339,7 @@ Ordered so the risky and unknown parts come first, and so there is something
 runnable early.
 
 **Phase 0 — decide and prepare**
-Licence in place. Qt built statically and pinned on both platforms. CMake
+Licence in place. Qt dynamically linked and pinned on both platforms. CMake
 project producing a running empty window on macOS and Windows. No product code.
 *Exit: `cmake --build` produces a window on both platforms from a documented command.*
 
@@ -357,7 +357,7 @@ Phase 1 produces a real installer on macOS and Windows containing:
 - the custom diff view against a large real diff
 - `gh` authentication, retained
 - the trimmed Git payload
-- **both static and dynamic builds, measured against each other**
+- the dynamically linked build required by Relay's MIT/LGPL licensing decision
 
 *Exit: installed size, download size and memory in idle, repository-open,
 large-diff and long-history states are measured on both platforms and recorded.
@@ -425,9 +425,9 @@ Two things are lost outright and need replacing:
 | Risk | Reality |
 | --- | --- |
 | **It stalls half-finished** | Highest risk by far. Electron Relay is frozen at 0.5.0, so a stall leaves users on a client nobody is improving. Phase 1 exists to fail early instead. |
-| Static Qt turns out to be painful | Building Qt from source is slow and fiddly, and pinning it across two platforms is ongoing work. |
-| GPLv3 is regretted later | Relicensing after third-party contributions is impractical. Settle it in Phase 0. |
-| Token custody bug | Relay has never held a token. This is new, security-critical, and deserves outside review. |
+| Dynamic Qt deployment turns out to be painful | Pruning and deploying Qt plugins and transitive TLS/image dependencies reproducibly across two platforms is ongoing work. |
+| MIT/LGPL compliance drifts | Every package must preserve dynamic relinking, Qt notices and corresponding-source availability. Validate the staged payload in CI. |
+| Token custody bug | Relay must continue holding tokens only transiently inside the service/controller layer. A single-process memory-unsafe client makes this boundary especially security-critical. |
 | Diff view performance | The one place a naive Qt implementation will be clearly worse than Chromium. |
 | Qt does not look native | The existing complaint is that Windows looks worse than macOS. Qt does not fix that automatically and can make macOS look less native too. |
 | Scope | Full parity was chosen over a reduced core. That is the long path, by choice. |
@@ -459,8 +459,8 @@ labelled parity, regression-prevention, or explicit non-goal before Phase 2.
 Accessibility (screen readers, focus order, an accessible representation of a
 custom-painted diff) · HiDPI and Windows fractional scaling · internationalization
 and `QLocale` parity with the current `Intl` behaviour · crash handling and
-child-process cleanup · auto-update, which a **static** Qt build makes more
-pressing since every Qt or OpenSSL fix requires a full rebuild and reship ·
+child-process cleanup · auto-update, since every bundled Qt or OpenSSL fix still
+requires a full rebuild and reship ·
 code signing and notarization, which conflicts with "unsigned is out of scope"
 if credentials are ever held · persistence schema versioning and corruption
 recovery · proxies, corporate TLS roots, timeouts and rate limits · the thread

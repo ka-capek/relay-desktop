@@ -4,9 +4,10 @@ This document is the authoritative engineering guide for coding agents working
 on Relay. Read it before changing code, running release commands, modifying Git
 or GitHub authentication, or publishing anything.
 
-It describes the repository as implemented at Relay `0.5.0`. When this document
-and the code disagree, treat the code as the immediate source of truth and
-update this document in the same change.
+It describes the shipping Electron implementation at Relay `0.5.0` and the
+C++26/Qt native successor now being built alongside it. When this document and
+the code disagree, treat the code as the immediate source of truth and update
+this document in the same change.
 
 ## 1. Product Definition
 
@@ -69,8 +70,11 @@ Preserve these behaviors unless the user explicitly requests a product change:
    green status dot or an "All systems operational" message.
 10. **macOS and Windows must have equivalent File-menu functionality.** Windows
     uses the normal visible application menu; macOS uses the system menu bar.
-11. **The renderer never receives a GitHub token and never has direct Node.js
-    access.** All privileged operations cross the preload bridge.
+11. **The presentation layer never receives a GitHub token.** In Electron the
+    renderer has no direct Node.js access and all privileged operations cross
+    the preload bridge. In the native client, widgets receive only sanitized
+    domain models from `RelayController`; tokens stay transiently inside the
+    controller/service operation that launches Git or calls GitHub.
 12. **External navigation is HTTPS-only and opens in the system browser.**
 
 These invariants are partly covered by tests, but many remain behavioral and
@@ -110,6 +114,22 @@ That path can server-render the React UI and is used by the current test command
 but it is not the installed desktop runtime. Do not confuse `npm run dev` with
 running the Electron application.
 
+### 4.1 Native successor stack
+
+The native successor uses:
+
+- C++26, required with compiler extensions disabled
+- Qt 6.11.1 exactly: Core, Gui, Widgets, Network, Svg, Concurrent, and Test
+- CMake 3.30+ with Ninja and checked-in platform presets
+- Dynamically linked Qt under LGPLv3; Relay's own code remains MIT
+- The same bundled/system Git and official GitHub CLI child-process model
+- The same `relay-data.json` and isolated `github-cli/` locations as Electron
+- Model/view widgets for every unbounded list, including a virtualized table
+  diff rather than a widget per line
+
+The native code lives under `native/`. Do not delete or feature-expand the
+Electron client while it remains the frozen parity specification.
+
 ## 5. Architectural Overview
 
 ```text
@@ -136,7 +156,31 @@ Bundled/system Git   OS credential store through gh
 The trust boundary is the preload bridge. The renderer is unprivileged and must
 remain that way.
 
-### 5.1 Runtime process responsibilities
+### 5.1 Native architecture
+
+```text
+Qt Widgets views and item models
+        |
+        | sanitized domain values and queued signals
+        v
+RelayController
+        |                 |                    |
+        v                 v                    v
+GitService          GitHubAuth/API       RelayStore/discovery
+(QProcess, worker   (`gh`, Qt Network,   (legacy-compatible JSON,
+threads)             no token signals)   atomic writes, BFS)
+        |                 |
+        v                 v
+Bundled/system Git   OS credential store through gh
+```
+
+Synchronous service methods are headless building blocks and must run in worker
+threads when called from the application. `RelayController` owns request
+generations and drops stale repository, diff, history, and commit responses.
+`AsyncProcess` provides direct cancellation for single-process vertical slices.
+Widgets never call Git, `gh`, the filesystem store, or GitHub REST directly.
+
+### 5.2 Electron runtime process responsibilities
 
 **Renderer (`app/page.tsx`)**
 
@@ -220,6 +264,26 @@ remain that way.
 | `package.json` | Scripts, dependencies, Electron entry, packaging configuration |
 | `tests/rendered-html.test.mjs` | Current server-render and architecture regression tests |
 | `TODO.md` | Explicitly requested product backlog; items are not implemented until verified |
+
+### Native successor
+
+| Path | Purpose |
+| --- | --- |
+| `CMakeLists.txt`, `CMakePresets.json` | C++26 project, Qt dependency pin, macOS arm64 and Windows x64 presets |
+| `native/include/relay/domain.hpp` | Sanitized shared domain models and legacy JSON conversion |
+| `native/src/process_runner.cpp` | Bounded child-process execution plus cancellable asynchronous operations |
+| `native/src/git_service.cpp` | Native port of Git commands, parsers, history, diffs, mutations, and transport routing |
+| `native/src/github_auth.cpp` | Isolated `gh` account discovery, login, switching, logout, and transient token lookup |
+| `native/src/github_api.cpp` | Profile, email, and pushable-repository REST calls without exposing tokens to views |
+| `native/src/relay_store.cpp` | Atomic, owner-only, Electron-compatible metadata persistence |
+| `native/src/repository_discovery.cpp` | Bounded non-destructive breadth-first repository scanning |
+| `native/src/repository_order.cpp` | Ordering normalization, sorting, and manual-order compatibility |
+| `native/src/ssh_service.cpp` | Non-GitHub SSH profile parsing, command construction, and connection tests |
+| `native/src/avatar_cache.cpp` | Restricted-host, size-bounded, offline avatar cache |
+| `native/src/diff_model.cpp`, `native/src/diff_view.cpp` | Virtualized accessible unified-diff parser and table view |
+| `native/src/list_models.cpp` | Repository, file, history, and commit-file models |
+| `native/tests/` | QtTest unit, integration, large-diff, Git-fixture, and app smoke tests |
+| `docs/native-measurements.md` | Reproducible native size and physical-footprint measurements |
 
 ### Hosted/scaffolding path
 
@@ -1004,6 +1068,22 @@ Use `desktop:*` commands for desktop-product requests. `npm test` currently
 runs the Vinext build before Node tests, so it validates server rendering and
 source wiring but does not launch Electron.
 
+Native macOS development:
+
+```bash
+cmake --preset macos-debug
+cmake --build --preset macos-debug --parallel
+ctest --preset macos-debug
+open build-native/macos-debug/native/Relay.app
+```
+
+Use the corresponding `windows-debug` preset from a native Windows x64
+environment. Homebrew Qt is acceptable for development but not the final
+packaging baseline because its frameworks carry Homebrew-specific transitive
+library paths. Release/measurement builds must use the pinned official Qt
+distribution and reject staged dependencies under `/opt/homebrew` or
+`/usr/local`.
+
 ## 19. Testing and Verification Strategy
 
 Match verification effort to risk.
@@ -1351,12 +1431,15 @@ A change is done when all applicable items are true:
 
 - Requested behavior works through the actual user-facing path.
 - No product invariant was accidentally regressed.
-- Renderer/main/preload boundaries remain secure.
+- Presentation/controller/service boundaries remain secure. Electron changes
+  also preserve renderer/main/preload isolation.
 - Credentials remain out of renderer state, logs, disk metadata, and Git.
 - Lint passes.
 - Syntax checks pass for changed CommonJS modules.
 - Desktop renderer builds.
 - Relevant automated tests pass.
+- Native changes configure and build with the applicable CMake preset and pass
+  CTest, including `app_smoke` when UI or startup code changed.
 - Relevant Git or GitHub integration was exercised safely.
 - Cross-platform packaging implications were considered.
 - Visual behavior was inspected if UI changed.
