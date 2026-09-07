@@ -86,6 +86,7 @@ jobs:
           if (!(Test-Path $ucrt)) { throw "Missing SDK debug runtime: $ucrt" }
           Copy-Item $ucrt $build
           Copy-Item "$env:QT_ROOT_DIR/plugins/platforms/qoffscreend.dll" "$build/platforms/"
+          "QT_QPA_FONTDIR=$env:WINDIR/Fonts" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           & mt.exe "-inputresource:$build/tst_domain.exe;#1" "-out:$build/test.manifest"
           Get-Content "$build/test.manifest"
           try { & "$build/tst_domain.exe" -functions }
