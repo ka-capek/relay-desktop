@@ -372,6 +372,9 @@ Windows CI uses aqt's `--external` 7-Zip backend: py7zr rejected the Qt
 the SDK directory: parallel 7-Zip workers also raced creating that directory
 in run 34117737965. Keep download verification and fail if 7-Zip is unavailable.
 
+The source installer includes verbatim GNU license texts from `native/licenses/`
+so an outage at gnu.org cannot interrupt an otherwise complete installation.
+
 ### 5.5 Native themes and graph colors
 
 `theme.cpp` applies a semantic palette to QPalette, QSS and painted delegates.

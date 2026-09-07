@@ -150,10 +150,8 @@ PY
 licenses="$app/Contents/Resources/licenses"
 mkdir -p "$licenses"
 cp "$source_dir/LICENSE" "$licenses/Relay-MIT.txt"
-for license in lgpl-3.0 gpl-3.0; do
-  /usr/bin/curl --fail --show-error --location --retry 3 --connect-timeout 15 --max-time 120 \
-    "https://www.gnu.org/licenses/$license.txt" -o "$licenses/$license.txt"
-done
+cp "$source_dir/native/licenses/LGPL-3.0.txt" "$licenses/lgpl-3.0.txt"
+cp "$source_dir/native/licenses/GPL-3.0.txt" "$licenses/gpl-3.0.txt"
 cat > "$licenses/Qt-source.txt" <<'NOTICE'
 Qt 6.11.1 is dynamically linked, unmodified, under LGPLv3.
 Corresponding source: https://download.qt.io/archive/qt/6.11/6.11.1/single/

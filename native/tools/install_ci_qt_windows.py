@@ -40,9 +40,9 @@ def main():
             sevenzip = str(candidate)
     if not sevenzip:
         raise RuntimeError("Install 7-Zip before preparing the Windows Qt SDK.")
-    result = Cli().run(["install-qt", "windows", "desktop", "6.11.1",
+    result = Cli().run(["--config", str(settings), "install-qt", "windows", "desktop", "6.11.1",
                         "win64_msvc2022_64", "--outputdir", str(destination),
-                        "--external", sevenzip, "--config", str(settings)])
+                        "--external", sevenzip])
     if result:
         raise SystemExit(result)
     if not (root / "lib/cmake/Qt6/Qt6Config.cmake").is_file():
