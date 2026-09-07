@@ -82,6 +82,12 @@ jobs:
           $build = Join-Path $PWD 'build-native/windows-debug'
           & "$env:QT_ROOT_DIR/bin/windeployqt.exe" --debug --compiler-runtime --no-translations --dir $build "$build/Relay.exe" "$build/tst_main_window.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $ucrt = Join-Path $env:WindowsSdkDir "bin/$($env:WindowsSDKVersion.TrimEnd('\'))/x64/ucrt/ucrtbased.dll"
+          if (!(Test-Path $ucrt)) { throw "Missing SDK debug runtime: $ucrt" }
+          Copy-Item $ucrt $build
+          Copy-Item "$env:QT_ROOT_DIR/plugins/platforms/qoffscreend.dll" "$build/platforms/"
+          & "$build/tst_domain.exe" -functions
+          if ($LASTEXITCODE -ne 0) { throw "Windows test launch failed: $LASTEXITCODE" }
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
