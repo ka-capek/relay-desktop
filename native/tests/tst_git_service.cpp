@@ -98,6 +98,146 @@ class GitServiceTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void previewsImageBeforeAndAfterWithoutTextConversion() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    QImage before(8, 8, QImage::Format_ARGB32);
+    before.fill(Qt::red);
+    QVERIFY(before.save(root.path() + QStringLiteral("/image.png")));
+    commitAll(root.path(), QStringLiteral("red"));
+    const auto hash = runGit(root.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    QImage after(10, 6, QImage::Format_ARGB32);
+    after.fill(Qt::blue);
+    QVERIFY(after.save(root.path() + QStringLiteral("/image.png")));
+    relay::GitService service;
+    const auto preview = service.readFilePreview(root.path(), QStringLiteral("image.png"));
+    QCOMPARE(preview.before.size(), QSize(8, 8));
+    QCOMPARE(preview.after.size(), QSize(10, 6));
+    QCOMPARE(preview.before.pixelColor(0, 0), QColor(Qt::red));
+    QCOMPARE(preview.after.pixelColor(0, 0), QColor(Qt::blue));
+    const auto historical = service.readFilePreview(root.path(), QStringLiteral("image.png"), hash);
+    QVERIFY(historical.before.isNull());
+    QCOMPARE(historical.after.pixelColor(0, 0), QColor(Qt::red));
+    writeFile(root.path() + QStringLiteral("/image.png"), QByteArrayLiteral("not an image\n"));
+    const auto unavailable = service.readFilePreview(root.path(), QStringLiteral("image.png"));
+    QVERIFY(unavailable.before.isNull());
+    QVERIFY(unavailable.after.isNull());
+    QVERIFY(unavailable.diff.startsWith(QStringLiteral("Image preview unavailable")));
+  }
+
+  void untrackedSymlinkNeverPreviewsTargetContents() {
+#ifndef Q_OS_WIN
+    QTemporaryDir root;
+    QTemporaryDir outside;
+    initRepository(root.path());
+    writeFile(outside.path() + QStringLiteral("/private.txt"), QByteArrayLiteral("PRIVATE TARGET CONTENT\n"));
+    QVERIFY(QFile::link(outside.path() + QStringLiteral("/private.txt"), root.path() + QStringLiteral("/link")));
+    relay::GitService service;
+    const auto state = service.readRepository(root.path());
+    QCOMPARE(state.files.size(), 1);
+    const auto preview = service.getFileDiff(root.path(), QStringLiteral("link"));
+    QVERIFY(preview.startsWith(QStringLiteral("Symbolic link")));
+    QVERIFY(!preview.contains(QStringLiteral("PRIVATE TARGET CONTENT")));
+#endif
+  }
+
+  void previewsPreserveTrailingSpacesAndDoNotInventAnExtraLine() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    const auto file = root.filePath(QStringLiteral("text.txt"));
+    writeFile(file, QByteArrayLiteral("before\n"));
+    commitAll(root.path(), QStringLiteral("Initial"));
+    writeFile(file, QByteArrayLiteral("after   \n"));
+    relay::GitService service;
+    QVERIFY(service.getFileDiff(root.path(), QStringLiteral("text.txt")).endsWith(QStringLiteral("+after   \n")));
+    writeFile(root.filePath(QStringLiteral("new.txt")), QByteArrayLiteral("one\n"));
+    const auto diff = service.getFileDiff(root.path(), QStringLiteral("new.txt"));
+    QVERIFY(diff.contains(QStringLiteral("@@ -0,0 +1,1 @@")));
+    QVERIFY(!diff.endsWith(QStringLiteral("\n+")));
+  }
+
+  void resolvesThePushUrlIndependentlyOfTheFetchUrl() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    runGit(root.path(), {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"),
+                        QStringLiteral("https://example.test/team/repo.git")});
+    runGit(root.path(), {QStringLiteral("remote"), QStringLiteral("set-url"), QStringLiteral("--push"),
+                        QStringLiteral("origin"), QStringLiteral("https://github.com/team/repo.git")});
+    relay::GitService service;
+    QCOMPARE(service.originRemoteUrl(root.path()), QStringLiteral("https://example.test/team/repo.git"));
+    QCOMPARE(service.originRemoteUrl(root.path(), true), QStringLiteral("https://github.com/team/repo.git"));
+    runGit(root.path(), {QStringLiteral("remote"), QStringLiteral("set-url"), QStringLiteral("--add"),
+                        QStringLiteral("--push"), QStringLiteral("origin"), QStringLiteral("https://example.test/other.git")});
+    QVERIFY_EXCEPTION_THROWN(service.originRemoteUrl(root.path(), true), relay::ProcessError);
+  }
+
+  void credentialHelperScopesSecretsToGithubAndTreatsHandlesAsData() {
+    QTemporaryDir root;
+    const auto ask = [&](const QByteArray& input) {
+      QProcess process;
+      auto environment = QProcessEnvironment::systemEnvironment();
+      environment.insert(QStringLiteral("GIT_TERMINAL_PROMPT"), QStringLiteral("0"));
+      environment.insert(QStringLiteral("GIT_CONFIG_NOSYSTEM"), QStringLiteral("1"));
+      environment.insert(QStringLiteral("GIT_CONFIG_GLOBAL"), root.filePath(QStringLiteral("no-config")));
+      environment.insert(QStringLiteral("GIT_ASKPASS"), QString{});
+      environment.insert(QStringLiteral("RELAY_GIT_TOKEN"), QStringLiteral("test-token"));
+      environment.insert(QStringLiteral("RELAY_GIT_USERNAME"), QStringLiteral("$(echo injected)"));
+      process.setProcessEnvironment(environment);
+      process.start(QStringLiteral("git"), {QStringLiteral("-c"), QStringLiteral("credential.helper="),
+          QStringLiteral("-c"), QStringLiteral("credential.helper=") + relay::GitService::githubCredentialHelper(),
+          QStringLiteral("credential"), QStringLiteral("fill")});
+      if (!process.waitForStarted(5000)) return QByteArray{};
+      process.write(input);
+      process.closeWriteChannel();
+      if (!process.waitForFinished(5000)) { process.kill(); process.waitForFinished(); return QByteArray{}; }
+      return process.readAllStandardOutput();
+    };
+    const auto github = ask(QByteArrayLiteral("protocol=https\nhost=github.com\n\n"));
+    QVERIFY(github.contains("password=test-token"));
+    QVERIFY(github.contains("username=$(echo injected)"));
+    QVERIFY(!ask(QByteArrayLiteral("protocol=https\nhost=example.test\n\n")).contains("test-token"));
+    QVERIFY(!ask(QByteArrayLiteral("protocol=http\nhost=github.com\n\n")).contains("test-token"));
+  }
+
+  void createsBranchesAndRejectsOptionLikeNames() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    writeFile(root.filePath(QStringLiteral("a.txt")), QByteArrayLiteral("a\n"));
+    commitAll(root.path(), QStringLiteral("Initial"));
+    relay::GitService service;
+    service.createBranch(root.path(), QStringLiteral("feature/test"));
+    QCOMPARE(service.readRepository(root.path()).branch, QStringLiteral("feature/test"));
+    service.switchBranch(root.path(), QStringLiteral("main"));
+    QVERIFY_EXCEPTION_THROWN(service.createBranch(root.path(), QStringLiteral("--force")), relay::ProcessError);
+    QVERIFY_EXCEPTION_THROWN(service.switchBranch(root.path(), QStringLiteral("--detach")), relay::ProcessError);
+    QCOMPARE(service.readRepository(root.path()).branch, QStringLiteral("main"));
+  }
+
+  void pullsFastForwardAndPreservesDivergentCommits() {
+    QTemporaryDir root;
+    const auto upstream = root.filePath(QStringLiteral("upstream"));
+    const auto local = root.filePath(QStringLiteral("local"));
+    QVERIFY(QDir().mkpath(upstream));
+    initRepository(upstream);
+    writeFile(QDir(upstream).filePath(QStringLiteral("first.txt")), QByteArrayLiteral("first\n"));
+    commitAll(upstream, QStringLiteral("Initial"));
+    relay::GitService service;
+    static_cast<void>(service.cloneRepository(upstream, local));
+    writeFile(QDir(upstream).filePath(QStringLiteral("second.txt")), QByteArrayLiteral("second\n"));
+    commitAll(upstream, QStringLiteral("Second"));
+    service.pullOrigin(local);
+    QCOMPARE(runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}),
+             runGit(upstream, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}));
+    writeFile(QDir(local).filePath(QStringLiteral("local.txt")), QByteArrayLiteral("local\n"));
+    commitAll(local, QStringLiteral("Local"));
+    const auto head = runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    writeFile(QDir(upstream).filePath(QStringLiteral("remote.txt")), QByteArrayLiteral("remote\n"));
+    commitAll(upstream, QStringLiteral("Remote"));
+    QVERIFY_EXCEPTION_THROWN(service.pullOrigin(local), relay::ProcessError);
+    QCOMPARE(runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), head);
+    QVERIFY(QFileInfo::exists(QDir(local).filePath(QStringLiteral("local.txt"))));
+  }
+
   void resolvesBundledRuntimeAndEnvironment() {
     QTemporaryDir resources;
     QTemporaryDir source;
@@ -134,8 +274,8 @@ class GitServiceTest final : public QObject {
               QByteArray("a\0b", 3));
 
     const auto files = relay::GitService::parseStatus(
-        QStringLiteral("R  old.txt -> renamed.txt\n D deleted.txt\n?? plain.txt\n?? binary.dat"),
-        QStringLiteral("3\t2\trenamed.txt\n0\t4\tdeleted.txt"), root.path());
+        QStringLiteral("R  renamed.txt\0old.txt\0 D deleted.txt\0?? plain.txt\0?? binary.dat\0"),
+        QStringLiteral("3\t2\trenamed.txt\0" "0\t4\tdeleted.txt\0"), root.path());
     QCOMPARE(files.size(), 4);
 
     const auto& renamed = fileNamed(files, QStringLiteral("renamed.txt"));
@@ -149,8 +289,8 @@ class GitServiceTest final : public QObject {
 
     const auto& plain = fileNamed(files, QStringLiteral("plain.txt"));
     QVERIFY(plain.status == relay::FileStatus::added);
-    // This deliberately matches the Electron split("\n") behavior.
-    QCOMPARE(plain.added, 3);
+    // A terminating newline is not an additional line of content.
+    QCOMPARE(plain.added, 2);
     QCOMPARE(fileNamed(files, QStringLiteral("binary.dat")).added, 0);
   }
 
@@ -211,6 +351,80 @@ class GitServiceTest final : public QObject {
     QVERIFY_THROWS_EXCEPTION(
         relay::ProcessError,
         service.switchBranch(root.path(), QStringLiteral("bad branch")));
+  }
+
+  void commitsRenamesAndStagedDeletionsWithoutUnselectedChanges() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    writeFile(root.filePath(QStringLiteral("old.txt")), QByteArrayLiteral("original\n"));
+    writeFile(root.filePath(QStringLiteral("gone.txt")), QByteArrayLiteral("remove\n"));
+    writeFile(root.filePath(QStringLiteral("other.txt")), QByteArrayLiteral("untouched\n"));
+    commitAll(root.path(), QStringLiteral("Initial"));
+    runGit(root.path(), {QStringLiteral("mv"), QStringLiteral("old.txt"), QStringLiteral("new.txt")});
+    runGit(root.path(), {QStringLiteral("rm"), QStringLiteral("gone.txt")});
+    writeFile(root.filePath(QStringLiteral("other.txt")), QByteArrayLiteral("unselected\n"));
+    runGit(root.path(), {QStringLiteral("add"), QStringLiteral("other.txt")});
+    relay::Account account;
+    account.name = QStringLiteral("Test"); account.email = QStringLiteral("test@example.com");
+    relay::GitService service;
+    service.commitFiles(root.path(), {QStringLiteral("new.txt"), QStringLiteral("gone.txt")},
+                        QStringLiteral("Rename and delete"), {}, account);
+    const auto tree = runGit(root.path(), {QStringLiteral("ls-tree"), QStringLiteral("--name-only"), QStringLiteral("HEAD")});
+    QVERIFY(tree.contains(QStringLiteral("new.txt")));
+    QVERIFY(!tree.contains(QStringLiteral("old.txt")));
+    QVERIFY(!tree.contains(QStringLiteral("gone.txt")));
+    QCOMPARE(runGit(root.path(), {QStringLiteral("show"), QStringLiteral("HEAD:other.txt")}), QStringLiteral("untouched"));
+    QCOMPARE(service.readRepository(root.path()).files.size(), 1);
+    const auto detail = service.readCommitDetail(root.path(), runGit(root.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}));
+    QCOMPARE(fileNamed(detail.files, QStringLiteral("new.txt")).path, QStringLiteral("new.txt"));
+    const auto diff = service.readCommitFileDiff(root.path(), detail.fullHash, QStringLiteral("new.txt"));
+    QVERIFY(diff.contains(QStringLiteral("rename from old.txt")));
+    QVERIFY(diff.contains(QStringLiteral("rename to new.txt")));
+  }
+
+  void preservesUnusualPathsInStatusHistoryAndSelection() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    QStringList names{QStringLiteral("-dash [brackets].txt"), QString::fromUtf8("žluťoučký.txt"), QStringLiteral(" space .txt")};
+#ifndef Q_OS_WIN
+    names.append({QStringLiteral("name -> suffix.txt"), QStringLiteral("tab\tfile.txt"), QStringLiteral("line\nfile.txt"),
+                  QStringLiteral("quote\"file.txt"), QStringLiteral(":(glob)*")});
+#endif
+    for (const auto& name : names) writeFile(root.path() + u'/' + name, QByteArrayLiteral("initial\n"));
+    commitAll(root.path(), QStringLiteral("Initial"));
+    for (const auto& name : names) writeFile(root.path() + u'/' + name, QByteArrayLiteral("changed\n"));
+    writeFile(root.filePath(QStringLiteral("secret.txt")), QByteArrayLiteral("do not commit\n"));
+    relay::GitService service;
+    const auto repo = service.readRepository(root.path());
+    QCOMPARE(repo.files.size(), names.size() + 1);
+    QCOMPARE(service.readRepositorySummary(root.path()).changes, names.size() + 1);
+    for (const auto& name : names) {
+      QCOMPARE(fileNamed(repo.files, name).path, name);
+      QVERIFY(service.getFileDiff(root.path(), name).contains(QStringLiteral("+changed")));
+    }
+    relay::Account account;
+    account.name = QStringLiteral("Test"); account.email = QStringLiteral("test@example.com");
+    for (const auto& name : names) {
+      service.commitFiles(root.path(), {name}, QStringLiteral("One selected file"), {}, account);
+      const auto hash = runGit(root.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+      const auto detail = service.readCommitDetail(root.path(), hash);
+      QCOMPARE(detail.files.size(), 1);
+      QCOMPARE(detail.files.constFirst().path, name);
+      QVERIFY(service.readCommitFileDiff(root.path(), hash, name).contains(QStringLiteral("+changed")));
+    }
+    QCOMPARE(service.readRepository(root.path()).files.size(), 1);
+    QCOMPARE(service.readRepository(root.path()).files.constFirst().path, QStringLiteral("secret.txt"));
+  }
+
+  void boundsUntrackedPreviews() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    QFile file(root.filePath(QStringLiteral("large.txt")));
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QVERIFY(file.resize(3 * 1024 * 1024));
+    file.close();
+    relay::GitService service;
+    QVERIFY(service.getFileDiff(root.path(), QStringLiteral("large.txt")).contains(QStringLiteral("too large")));
   }
 
   void handlesRepositoryWithoutCommitsOrOrigin() {

@@ -106,9 +106,9 @@ class RelayStoreTest final : public QObject {
     QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
     QCOMPARE(file.write("not json"), 8);
     file.close();
-    const auto recovered = store.read();
-    QCOMPARE(recovered.value(QStringLiteral("repositories")).toArray().size(), 0);
-    QVERIFY(recovered.value(QStringLiteral("selectedRepositoryPath")).isNull());
+    QVERIFY_EXCEPTION_THROWN(store.read(), relay::StoreError);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll(), QByteArrayLiteral("not json"));
   }
 };
 

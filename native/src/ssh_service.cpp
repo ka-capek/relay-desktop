@@ -80,6 +80,7 @@ QString SshService::commandFor(const SshProfile& profile) const {
   const auto normalized = normalizeProfile(profile);
   if (!normalized) return {};
   QStringList parts{shellQuote(executable())};
+  if (!normalized->user.isEmpty()) parts.append({QStringLiteral("-l"), shellQuote(normalized->user)});
   if (!normalized->identityFile.isEmpty()) {
     parts.append({QStringLiteral("-i"), shellQuote(normalized->identityFile)});
     if (normalized->identitiesOnly) {

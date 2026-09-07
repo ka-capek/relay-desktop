@@ -1,0 +1,120 @@
+name: Native desktop validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - '.github/workflows/native.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.target }} / Qt 6.11.1
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-debug
+            runner: macos-15
+            qt-host: mac
+            qt-arch: clang_64
+          - target: windows-debug
+            runner: windows-2025
+            qt-host: windows
+            qt-arch: win64_msvc2022_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build tools
+        run: python -m pip install cmake==3.31.6 ninja==1.13.2
+      # CMake 3.31 supports C++26 with upstream clang++'s GNU frontend,
+      # but not with AppleClang, cl.exe, or clang-cl. Keep the real C++26
+      # requirement; the presets select clang++ explicitly on both targets.
+      - name: Install macOS LLVM
+        if: runner.os == 'macOS'
+        run: brew install llvm@20
+      - uses: jurplel/install-qt-action@v4
+        if: runner.os == 'macOS'
+        with:
+          version: '6.11.1'
+          host: ${{ matrix.qt-host }}
+          target: desktop
+          arch: ${{ matrix.qt-arch }}
+          cache: true
+      - name: Install Windows Qt
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m pip install aqtinstall==3.3.0
+          python native/tools/install_ci_qt_windows.py
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      # clang++ uses the MSVC target, SDK, STL, and dynamic CRT, matching
+      # the official Qt MSVC binaries; it does not use the MinGW ABI.
+      # windows-2025 currently includes upstream LLVM 20.1.8.
+      - name: Record Windows compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '& "$env:ProgramFiles/LLVM/bin/clang++.exe" --version'
+      - name: Record macOS compiler
+        if: runner.os == 'macOS'
+        run: /opt/homebrew/opt/llvm@20/bin/clang++ --version
+      - name: Configure
+        shell: bash
+        run: cmake --preset "${{ matrix.target }}" -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+      - name: Build
+        run: cmake --build --preset ${{ matrix.target }} --parallel 3
+      - name: Deploy Windows test runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $build = Join-Path $PWD 'build-native/windows-debug'
+          & "$env:QT_ROOT_DIR/bin/windeployqt.exe" --debug --compiler-runtime --no-translations --dir $build "$build/Relay.exe" "$build/tst_main_window.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $ucrt = Join-Path $env:WindowsSdkDir "bin/$($env:WindowsSDKVersion.TrimEnd('\'))/x64/ucrt/ucrtbased.dll"
+          if (!(Test-Path $ucrt)) { throw "Missing SDK debug runtime: $ucrt" }
+          Copy-Item $ucrt $build
+          Copy-Item "$env:QT_ROOT_DIR/plugins/platforms/qoffscreend.dll" "$build/platforms/"
+          "QT_QPA_FONTDIR=$env:WINDIR/Fonts" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & mt.exe "-inputresource:$build/tst_domain.exe;#1" "-out:$build/test.manifest"
+          Get-Content "$build/test.manifest"
+          try { & "$build/tst_domain.exe" -functions }
+          catch {
+            Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='SideBySide'} -MaxEvents 3 | Format-List Message
+            throw
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Windows test launch failed: $LASTEXITCODE" }
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+          RELAY_SCREENSHOT_DIR: ${{ github.workspace }}/build-native/screenshots
+        run: ctest --preset ${{ matrix.target }} --timeout 60
+      - name: Validate Apple Silicon installer
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        shell: bash
+        run: |
+          bash native/tools/install-macos.sh --source "$GITHUB_WORKSPACE" --qt-dir "$QT_ROOT_DIR" --no-open
+          /usr/bin/open -W "$HOME/Applications/Relay Native.app" --args --smoke-test
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}-diagnostics
+          path: |
+            build-native/${{ matrix.target }}/Testing/Temporary/
+            build-native/${{ matrix.target }}/native/tests/*.txt
+            build-native/screenshots/
+          if-no-files-found: ignore

@@ -31,22 +31,96 @@ npm install
 npm run desktop:open
 ```
 
+## Install the native client on Apple Silicon
+
+On macOS 14 or newer, download and run the installer:
+
+```bash
+curl -fL https://raw.githubusercontent.com/ka-capek/relay-desktop/codex/native-completion/native/tools/install-macos.sh -o /tmp/relay-install-macos.sh
+bash /tmp/relay-install-macos.sh
+```
+
+It prepares Homebrew dependencies, downloads the current native branch, builds
+with LLVM 20 and Qt 6.11.1, deploys Qt, verifies a local signature and startup,
+and installs `~/Applications/Relay Native.app`. It opens the app on completion;
+use `--no-open` to skip that. Homebrew may request your macOS password. If Xcode
+Command Line Tools are missing, finish their installation and rerun the script.
+
+An existing native app is saved beside the new one as a dated backup. Your
+repositories, checkout and account settings are not changed by the installer.
+Build tools and Qt are cached under `~/Library/Caches/RelayNativeInstaller`.
+Git and GitHub CLI remain Homebrew dependencies; keep them installed. The app's
+Launch Services environment includes Homebrew, so it also works from Finder.
+This is a local source build, not a notarized distribution.
+
+To install an existing checkout, run `bash native/tools/install-macos.sh --source "$PWD"`; `--qt-dir /path/to/Qt/6.11.1/macos` reuses an existing SDK.
+`--skip-deps` is available when the required Homebrew tools are already present.
+
+## Native themes and branch graph
+
+Open Settings (`⌘,` on macOS) → **Appearance** to choose **Light**, **Dark**,
+**Catppuccin Latte**, or **Catppuccin Mocha**. Save applies the theme immediately
+and remembers it across restarts. Menus, controls, lists, diffs and the graph
+share the same palette.
+
+Use **Export…** for an editable JSON palette, then **Import…** to load your own
+or a shared theme. You can also enter only the colors you want to override:
+
+```json
+{
+  "accent": "#cba6f7",
+  "accentHover": "#b4befe",
+  "selection": "#45405c",
+  "onAccent": "#1e1e2e",
+  "branches": ["#cba6f7", "#89b4fa", "#a6e3a1", "#fab387"]
+}
+```
+
+Overrides stay active when changing the base theme; **Reset overrides** restores
+its defaults. Importing copies colors into Relay's settings; it does not retain
+a dependency on the source file or execute theme code. Colors use `#RRGGBB`;
+`branches` accepts 2–32 colors. Export includes every supported color role.
+The [bundled palettes](native/resources/themes) are additional examples.
+Choose contrasting text/background and accent/onAccent pairs for custom themes.
+
+In History, select **Graph** beside the search field to show all branches.
+Parallel lines retain their colors when lanes move or another branch ends,
+including across loaded pages. Commit dots and ref labels use the same colors;
+merge dots are hollow. Colors are reused after a line ends and repeat if more
+lines are active than the palette has colors. Search temporarily hides graph
+connections so filtered-out commits cannot imply a false connection. Return to
+**List** for the ordinary current-branch history.
+
+Catppuccin presets adapt the [Catppuccin palette](https://github.com/catppuccin/catppuccin),
+with darker Latte status/graph colors for readability. Chevron icons come from
+[Lucide](https://github.com/lucide-icons/lucide). Their licenses are included in
+the application resources.
+
 ## Native C++26 development
 
 The native client requires CMake 3.30+, Ninja, and the pinned Qt 6.11.1 with
 Core, Gui, Widgets, Network, Svg, Concurrent, and Test. Qt is dynamically
-linked. On Apple Silicon with Homebrew Qt:
+linked. The presets use upstream LLVM 20 `clang++` for C++26 (the default
+AppleClang/MSVC compiler modes are insufficient for this CMake configuration).
+On Apple Silicon, install `llvm@20` through Homebrew and provide the exact Qt
+version separately if the current Homebrew Qt differs:
 
 ```bash
-cmake --preset macos-debug
+brew install llvm@20
+cmake --preset macos-debug -DCMAKE_PREFIX_PATH=/path/to/Qt/6.11.1/macos
 cmake --build --preset macos-debug --parallel
 ctest --preset macos-debug
 open build-native/macos-debug/native/Relay.app
 ```
 
 The Windows x64 presets are `windows-debug` and `windows-release`; configure
-them from a native Windows environment with a matching Qt installation. Build
-artifacts stay under ignored `build-native/` directories.
+them from an x64 Visual Studio developer environment with C++ Build Tools/SDK,
+LLVM 20 installed under `%ProgramFiles%/LLVM`, and the Qt MSVC 2022 x64 build.
+`clang++` targets the MSVC ABI and dynamic runtime; the preset uses Microsoft's
+`link.exe` to preserve valid Qt application manifests. Override
+`-DCMAKE_CXX_COMPILER=...` for a different LLVM location. Use a fresh build
+directory when changing compilers. Build artifacts stay under ignored
+`build-native/` directories.
 
 The native client deliberately reuses Electron's public metadata and GitHub CLI
 locations, including `relay-data.json` and the sibling `github-cli/` directory.
@@ -55,6 +129,26 @@ credential store, and the C++ presentation layer never receives a token.
 
 Measurements and the exact commands used to collect them are recorded in
 `docs/native-measurements.md`.
+
+The [current native implementation and verification status](docs/native-completion-2026-09-07.md)
+records the source changes, independent reviews and remaining release gates.
+The native successor is not yet a verified replacement release.
+
+Native development builds include application-menu **Settings**, multi-account
+management and repository bindings, configurable diff text size and local Git
+identity. History defaults to a normal commit list; Settings can switch to an
+all-branch graph. Both modes share commit details and text/image previews.
+
+Repository menus provide branch creation/rename/deletion, remote checkout,
+merge, unpublished-commit rebase, stash/restore, recoverable selected-file
+discard, revert/cherry-pick, latest-commit undo/message editing and local tags.
+A conflict dialog handles resolution, continue, abort and skip. New repositories
+can be initialized locally or published through an explicit GitHub dialog.
+Production login/publication and installers still require native-platform checks.
+
+A native [CI workflow](.github/workflows/native.yml) is prepared for pinned Qt
+builds and tests on macOS arm64 and Windows x64. Its presence is not evidence
+that those jobs have passed.
 
 ## Desktop builds
 

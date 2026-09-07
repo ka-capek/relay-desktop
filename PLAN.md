@@ -1,6 +1,10 @@
 # Relay Native: plan for replacing the Electron client with C++
 
-Status: **proposed, not started.** Nothing in this document is implemented.
+Status (2026-09-07): **native implementation exists; release verification is
+unfinished.** `native/` contains the C++26/Qt application, services, UI, tests,
+and packaging scripts. This document retains the original design rationale;
+its historical estimates and unchecked tasks are not a current implementation
+inventory. See [the current implementation report](docs/native-completion-2026-09-07.md).
 
 This plan supersedes the "Replace Electron with a native C++ client" entry in
 `TODO.md`, which was a sketch written before the decisions below were taken.

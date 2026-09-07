@@ -121,6 +121,12 @@ The native successor uses:
 - C++26, required with compiler extensions disabled
 - Qt 6.11.1 exactly: Core, Gui, Widgets, Network, Svg, Concurrent, and Test
 - CMake 3.30+ with Ninja and checked-in platform presets
+- Upstream LLVM 20 `clang++` for the presets: Homebrew `llvm@20` on macOS,
+  `%ProgramFiles%/LLVM` on Windows with an x64 Visual Studio developer environment.
+  Windows uses the MSVC target, Microsoft `link.exe`, and dynamic CRT matching
+  Qt's MSVC binaries. LLVM 20's implicit linker produced invalid namespace-qualified
+  UAC attributes in the merged Qt manifest, preventing process startup;
+  CMake 3.31 does not map C++26 for AppleClang, cl.exe or clang-cl.
 - Dynamically linked Qt under LGPLv3; Relay's own code remains MIT
 - The same bundled/system Git and official GitHub CLI child-process model
 - The same `relay-data.json` and isolated `github-cli/` locations as Electron
@@ -180,6 +186,130 @@ generations and drops stale repository, diff, history, and commit responses.
 `AsyncProcess` provides direct cancellation for single-process vertical slices.
 Widgets never call Git, `gh`, the filesystem store, or GitHub REST directly.
 
+The native clone browser uses a separate request generation: only the newest
+account-repository lookup may publish success or failure. Changing the dialog's
+account clears its previous repository selection before requesting another
+list. `runAsync` checks optional freshness predicates before reading a future
+and unwraps `QUnhandledException` so service error messages survive QtConcurrent.
+
+### 5.3 Historical native continuation and review, 2026-09-06
+
+The owner reaffirmed C++/Qt, GitHub Desktop-style interaction, and multiple
+accounts. A normal commit list is the first milestone; a branch graph is a
+later optional history mode. Do not expose a nonfunctional graph toggle.
+Five independent adversarial reviews and their disposition are recorded in
+`docs/native-review-2026-09-06.md`.
+
+Current native behavior beyond the frozen Electron specification:
+
+- Settings is reachable from Edit on Windows/Linux and the application menu
+  on macOS via `QAction::PreferencesRole`. General settings persist
+  `preferences.refreshOnFocus` (default true) and `preferences.diffFontSize`
+  (default 12, range 10–24) in the existing public JSON store. Accounts links
+  to account management. Unknown preference fields survive writes.
+- Edit actions target the focused text editor or diff. History and file
+  selection work with keyboard navigation; history refreshes on branch/HEAD
+  changes and clears obsolete details. Draft commit messages are kept per
+  repository for the current application session.
+- Repository → New branch creates and switches to a validated local branch.
+  Pull origin fetches then fast-forwards the configured origin upstream. It
+  refuses divergent history rather than silently creating a merge. Full merge
+  and conflict resolution UI is not implemented.
+- Repository mutations are serialized, refresh cannot invalidate an active
+  mutation, and stale repository read failures are suppressed. Successful
+  clones retain recents and account bindings even if selection changes.
+- Persistence failures restore the previously saved public state. Repository
+  activation happens only after its metadata is saved. Corrupt/unreadable
+  stores produce an error and are preserved, rather than silently becoming
+  empty stores that could overwrite account bindings.
+- Git status/name-status/numstat use NUL-delimited records. UI-selected paths
+  are literal pathspecs; a rename includes both paths, and pre-staged deletions
+  can be committed without staging an already absent path. Diff content keeps
+  significant trailing whitespace. Untracked text previews are limited to
+  2 MiB; the process runner fails on output overflow rather than silently
+  returning a truncated successful result. Git operations time out after
+  120 seconds.
+- Authentication discovers bundled `gh` first. Missing/invalid/expired CLI
+  account responses preserve existing settings. Login is cancellable and
+  bounded to 15 minutes. SSH does not require a GitHub OAuth token. The
+  command-scoped credential helper responds only to HTTPS github.com `get`
+  requests and receives account values as environment data, never shell text.
+  Push identity routing uses the origin push URL; multiple push URLs are
+  explicitly unsupported. SSH profile usernames apply to actual transport.
+- macOS stays alive when its window closes and reopens on application
+  activation; Quit exits explicitly. Smoke mode uses a disposable profile.
+- CMake presets use schema 8 compatible with the declared 3.30 minimum and
+  disable unused C++ module scanning. NSIS shortcuts target the installed
+  executable directory. Stage verification excludes `otool` headers from
+  dependency checks and does not mistake ordinary directories for forbidden
+  payloads.
+
+Local Linux/Qt 6.8.2 tests supplement, but do not replace, the required native
+macOS arm64/Windows x64 Qt 6.11.1 builds and packaged authentication checks.
+
+### 5.4 Current native workflows, 2026-09-07
+
+`native/tools/install-macos.sh` is the local Apple Silicon installer (macOS
+14+). It uses isolated cached tools/Qt, a fresh temporary release build, Qt
+framework deployment, ad-hoc signature validation and a disposable-profile
+startup test before replacing `~/Applications/Relay Native.app`. Existing apps
+are retained as dated backups; the user's checkout and repositories are never
+reset or cleaned. Git/gh remain external Homebrew dependencies, exposed to
+Finder launches through the app's `LSEnvironment` PATH. It never changes shell
+profiles or signs in to accounts. CI exercises the installer from its checkout
+and the installed app through Launch Services. The script is not a substitute
+for the strict redistribution/release packaging pipeline.
+
+The latest inventory and release limits are in
+`docs/native-completion-2026-09-07.md`; it supersedes the feature inventory in
+section 5.3. Native additions live in `git_workflows.cpp` and `workflow_ui.cpp`
+with the same controller/service boundary as existing operations.
+
+- GitHub account and SSH profile bindings resolve canonical repository paths
+  and existing legacy aliases (including macOS `/var` versus `/private/var`).
+  Updating a binding removes aliases of that repository only; unavailable paths
+  remain preserved in metadata.
+- `Preferences` now includes `commitName`, `commitEmail` and `graphHistory`.
+  Normal history is default. Graph history snapshots local/remote branch tips,
+  sends revision lists over stdin and batch-validates them. Filtering does not
+  draw misleading edges across hidden commits.
+- `RepositoryAction` covers local branch rename/delete/remote checkout, merge,
+  unpublished rebase, conflict resolve/continue/abort/skip, stash/apply/drop,
+  recoverable discard, revert/cherry-pick, undo, message amend, tags and origin.
+  Git account identity is explicit for commit-producing actions; without an
+  account, Settings and effective Git configuration supply a displayed identity.
+- Discard retains a full recovery stash, reapplies its index/worktree, then
+  restores only the expanded selected paths. Before any stash, refuse tracked
+  files replaced by real directories; Git can otherwise delete ignored content
+  not included in the stash. Use a unique recovery message to avoid identical
+  stash-object collisions. Never replace this with `stash --all` automatically.
+- Do not globally enable literal pathspecs for stash commands. Git's internal
+  cleanup depends on generated magic pathspecs. Other user path arguments remain
+  literal. Apply stashes with `--index`, and retain the stash until explicit drop.
+- Known published commits cannot be undone/amended/rebased here. Local branch
+  deletion additionally requires containment in the current branch. No force
+  push is offered. Merge commits revert/cherry-pick against their first parent.
+- File previews are worker-produced `FilePreview` values. Widgets never read
+  files. Raster images are bounded to 10 MiB encoded and 16 megapixels decoded.
+  Symlinks do not dereference to target content. Decode failures must not be
+  labeled as an absent file side; selection changes clear old image previews.
+- A publication dialog captures the displayed account and defaults to private.
+  Its worker verifies GitHub's authenticated login before creating a repository.
+  Persist identity binding before the remote write. Keep partial-success and
+  uncertain-POST recovery messages; never automatically retry or delete remotes.
+  API traffic is HTTPS to api.github.com with redirects disabled and size/time
+  limits. Origin editing rejects embedded credentials and explicit push URLs
+  requiring separate handling.
+- Account and repository mutation locks exclude each other. Accepted account
+  changes immediately invalidate previous discovery. Opening/creating a repo
+  during a mutation is rejected before invalidating generations.
+- MainWindow displays the actual branch until a requested switch succeeds.
+  Conflict errors stay inside the modal dialog. Undo restores the previous
+  message only when it would not overwrite a user's existing draft.
+- `.github/workflows/native.yml` is source-only preparation for macOS/Windows
+  checks. It has not run in this environment. No installer, signing, remote
+  publication, or full upstream-feature-parity claim follows from Linux tests.
+
 ### 5.2 Electron runtime process responsibilities
 
 **Renderer (`app/page.tsx`)**
@@ -235,6 +365,41 @@ Widgets never call Git, `gh`, the filesystem store, or GitHub REST directly.
 - Stops descending after finding a repository root.
 - Tolerates unreadable and disappearing directories.
 - Returns at most 5,000 sorted repository paths.
+
+Windows CI uses aqt's `--external` 7-Zip backend: py7zr rejected the Qt
+`modules/SvgWidgets.json` link during parallel SDK extraction in run
+34117355064. Run extraction sequentially with `aqt-windows.ini` and precreate
+the SDK directory: parallel 7-Zip workers also raced creating that directory
+in run 34117737965. Keep download verification and fail if 7-Zip is unavailable.
+
+The source installer includes verbatim GNU license texts from `native/licenses/`
+so an outage at gnu.org cannot interrupt an otherwise complete installation.
+
+### 5.5 Native themes and graph colors
+
+`theme.cpp` applies a semantic palette to QPalette, QSS and painted delegates.
+Four bundled JSON palettes under `native/resources/themes/` provide Light,
+Dark, Catppuccin Latte and Mocha. Native preferences persist `themeId` and a
+`customTheme` JSON object. Appearance settings support base selection, editable
+overrides and import/export. Validate unknown keys, color syntax and branch
+palette length before saving/importing. Export resolved colors using QSaveFile;
+never store a dependency on the imported path or execute arbitrary theme code.
+Invalid persisted overrides fall back to the selected base; legacy settings use
+Light. Palette changes repaint existing controls and diffs without a restart.
+Qt Fusion and explicitly positioned licensed SVG chevrons avoid platform/QSS
+arrow placement conflicts; native menu roles remain intact. The shared core
+owns resources so application and UI tests use the same icons and palettes.
+
+History has a visible List/Graph selector. Graph colors belong to active lines
+of ancestry, independently of lane position, and survive pagination/compaction.
+Allocate unused color identities until a line ends; do not recolor a passing
+line when a neighboring branch finishes. First-parent connectors retain the
+child's color until joining; merge arms use their parent line colors. Graph
+mode omits day-header gaps (dates remain in metadata) and filtered results hide
+edges. Dots and reference chips share graph colors, with hollow merge dots.
+Tests cover concurrent tips, compaction, paging, preference persistence,
+malformed themes and screenshots of every preset's graph, diff and settings.
+
 
 ## 6. Authoritative File Map
 
