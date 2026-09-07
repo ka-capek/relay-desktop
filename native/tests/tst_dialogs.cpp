@@ -2,6 +2,8 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <QCheckBox>
+#include <QSpinBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -52,6 +54,55 @@ class DialogsTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void settingsExposeAndReturnEditablePreferences() {
+    relay::SettingsDialog dialog({true, 12});
+    auto* refresh = dialog.findChild<QCheckBox*>(QStringLiteral("refreshOnFocus"));
+    auto* size = dialog.findChild<QSpinBox*>(QStringLiteral("diffFontSize"));
+    QVERIFY(refresh && size);
+    QVERIFY(refresh->isChecked());
+    QCOMPARE(size->value(), 12);
+    refresh->setChecked(false);
+    size->setValue(18);
+    QVERIFY(!dialog.preferences().refreshOnFocus);
+    QCOMPARE(dialog.preferences().diffFontSize, 18);
+    QSignalSpy accounts(&dialog, &relay::SettingsDialog::manageAccountsRequested);
+    auto* manage = dialog.findChild<QPushButton*>(QStringLiteral("settingsManageAccounts"));
+    QVERIFY(manage);
+    manage->click();
+    QCOMPARE(accounts.size(), 1);
+  }
+
+  void switchingCloneAccountClearsThePreviousSelectionImmediately() {
+    relay::CloneDialog dialog;
+    dialog.setAccounts({account(QStringLiteral("one"), QStringLiteral("alice"),
+                                QStringLiteral("alice@example.com")),
+                        account(QStringLiteral("two"), QStringLiteral("bob"),
+                                QStringLiteral("bob@example.com"))}, QStringLiteral("one"));
+    dialog.setGithubRepositories({repository(QStringLiteral("alpha"),
+        QStringLiteral("alice/alpha"), QStringLiteral("https://github.com/alice/alpha.git"))});
+    dialog.setParentPath(QStringLiteral("/repos"));
+    auto* list = dialog.findChild<QListWidget*>(QStringLiteral("githubRepositoryList"));
+    auto* accounts = dialog.findChild<QComboBox*>(QStringLiteral("cloneAccount"));
+    auto* submit = dialog.findChild<QPushButton*>(QStringLiteral("cloneSubmit"));
+    QVERIFY(list && accounts && submit);
+    list->setCurrentRow(0);
+    QVERIFY(submit->isEnabled());
+    bool clearedBeforeRequest = false;
+    connect(&dialog, &relay::CloneDialog::accountChanged, &dialog, [&](const QString&) {
+      clearedBeforeRequest = list->count() == 0 && !dialog.isRequestValid();
+    });
+    accounts->setCurrentIndex(1);
+    QVERIFY(clearedBeforeRequest);
+    QVERIFY(!submit->isEnabled());
+    QCOMPARE(dialog.selectedAccountId(), QStringLiteral("two"));
+    QVERIFY(dialog.request().githubRepositoryId.isEmpty());
+    dialog.setGithubRepositories({repository(QStringLiteral("beta"),
+        QStringLiteral("bob/beta"), QStringLiteral("https://github.com/bob/beta.git"))});
+    list->setCurrentRow(0);
+    QVERIFY(submit->isEnabled());
+    QCOMPARE(dialog.request().remoteUrl, QStringLiteral("https://github.com/bob/beta.git"));
+  }
+
   void cloneDialogFiltersWritableRepositoriesAndReturnsTypedRequest() {
     relay::CloneDialog dialog;
     dialog.setAccounts({account(QStringLiteral("one"), QStringLiteral("alice"),

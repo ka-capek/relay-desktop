@@ -3,7 +3,7 @@
 #include "relay/domain.hpp"
 
 #include <QMainWindow>
-#include <QSet>
+#include <QHash>
 
 #include <optional>
 
@@ -11,6 +11,7 @@ class QAction;
 class QCheckBox;
 class QComboBox;
 class QEvent;
+class QDialog;
 class QLabel;
 class QLineEdit;
 class QListView;
@@ -20,6 +21,7 @@ class QPushButton;
 class QStackedWidget;
 class QTabWidget;
 class QToolButton;
+class QTimer;
 
 namespace relay {
 
@@ -41,6 +43,12 @@ class MainWindow final : public QMainWindow {
 
  private:
   void buildMenus();
+  void buildWorkflowMenus(QMenu* file, QMenu* repositoryMenu);
+  void updateWorkflowActions();
+  void showConflicts();
+  void showStashes();
+  void showPublishDialog();
+  void showSettingsDialog();
   void buildShell();
   QWidget* buildSidebar(QWidget* parent);
   QWidget* buildEmptyState(QWidget* parent);
@@ -51,6 +59,7 @@ class MainWindow final : public QMainWindow {
   void applyRepository(const Repository& repository);
   void rebuildAccountMenu();
   void updateSyncAction();
+  void clearCommitDetail();
   void updateCommitAction();
   void openRepositoryDialog();
   void scanFolderDialog();
@@ -61,6 +70,7 @@ class MainWindow final : public QMainWindow {
   void showAccountEmailDialog(const QString& accountId);
   void showSshProfilesDialog();
   void requestNextHistoryPage();
+  void updateStatus();
   void showNotice(const QString& message, bool error = false);
   [[nodiscard]] QString currentAccountId() const;
   [[nodiscard]] QString currentCommitHash() const;
@@ -107,14 +117,24 @@ class MainWindow final : public QMainWindow {
   QAction* removeAction_{};
   QAction* refreshAction_{};
   QAction* forceRefreshAction_{};
+  QAction* createBranchAction_{};
+  QAction* pullAction_{};
 
   AppState appState_;
   std::optional<Repository> repository_;
   std::optional<CommitDetail> commitDetail_;
-  QSet<QString> busyOperations_;
+  QHash<QString, int> busyOperations_;
+  QString workingPreviewPath_;
+  QString commitPreviewKey_;
   QString lastOpenedDeviceCode_;
   QString newlyConnectedAccountId_;
   bool accountConnectionPending_{};
+  QHash<QString, QPair<QString, QString>> commitDrafts_;
+  QList<QAction*> workflowActions_;
+  QPushButton* conflictButton_{};
+  QTimer* noticeTimer_{};
+  QDialog* loginDialog_{};
+  QLineEdit* loginCode_{};
 };
 
 }  // namespace relay

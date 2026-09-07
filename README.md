@@ -35,18 +35,26 @@ npm run desktop:open
 
 The native client requires CMake 3.30+, Ninja, and the pinned Qt 6.11.1 with
 Core, Gui, Widgets, Network, Svg, Concurrent, and Test. Qt is dynamically
-linked. On Apple Silicon with Homebrew Qt:
+linked. The presets use upstream LLVM 20 `clang++` for C++26 (the default
+AppleClang/MSVC compiler modes are insufficient for this CMake configuration).
+On Apple Silicon, install `llvm@20` through Homebrew and provide the exact Qt
+version separately if the current Homebrew Qt differs:
 
 ```bash
-cmake --preset macos-debug
+brew install llvm@20
+cmake --preset macos-debug -DCMAKE_PREFIX_PATH=/path/to/Qt/6.11.1/macos
 cmake --build --preset macos-debug --parallel
 ctest --preset macos-debug
 open build-native/macos-debug/native/Relay.app
 ```
 
 The Windows x64 presets are `windows-debug` and `windows-release`; configure
-them from a native Windows environment with a matching Qt installation. Build
-artifacts stay under ignored `build-native/` directories.
+them from an x64 Visual Studio developer environment with C++ Build Tools/SDK,
+LLVM 20 installed under `%ProgramFiles%/LLVM`, and the Qt MSVC 2022 x64 build.
+`clang++` targets the MSVC ABI and dynamic runtime. Override
+`-DCMAKE_CXX_COMPILER=...` for a different LLVM location. Use a fresh build
+directory when changing compilers. Build artifacts stay under ignored
+`build-native/` directories.
 
 The native client deliberately reuses Electron's public metadata and GitHub CLI
 locations, including `relay-data.json` and the sibling `github-cli/` directory.
@@ -55,6 +63,26 @@ credential store, and the C++ presentation layer never receives a token.
 
 Measurements and the exact commands used to collect them are recorded in
 `docs/native-measurements.md`.
+
+The [current native implementation and verification status](docs/native-completion-2026-09-07.md)
+records the source changes, independent reviews and remaining release gates.
+The native successor is not yet a verified replacement release.
+
+Native development builds include application-menu **Settings**, multi-account
+management and repository bindings, configurable diff text size and local Git
+identity. History defaults to a normal commit list; Settings can switch to an
+all-branch graph. Both modes share commit details and text/image previews.
+
+Repository menus provide branch creation/rename/deletion, remote checkout,
+merge, unpublished-commit rebase, stash/restore, recoverable selected-file
+discard, revert/cherry-pick, latest-commit undo/message editing and local tags.
+A conflict dialog handles resolution, continue, abort and skip. New repositories
+can be initialized locally or published through an explicit GitHub dialog.
+Production login/publication and installers still require native-platform checks.
+
+A native [CI workflow](.github/workflows/native.yml) is prepared for pinned Qt
+builds and tests on macOS arm64 and Windows x64. Its presence is not evidence
+that those jobs have passed.
 
 ## Desktop builds
 

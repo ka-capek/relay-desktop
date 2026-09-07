@@ -1,0 +1,85 @@
+name: Native desktop validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - '.github/workflows/native.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.target }} / Qt 6.11.1
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-debug
+            runner: macos-15
+            qt-host: mac
+            qt-arch: clang_64
+          - target: windows-debug
+            runner: windows-2025
+            qt-host: windows
+            qt-arch: win64_msvc2022_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build tools
+        run: python -m pip install cmake==3.31.6 ninja==1.12.1
+      # CMake 3.31 supports C++26 with upstream clang++'s GNU frontend,
+      # but not with AppleClang, cl.exe, or clang-cl. Keep the real C++26
+      # requirement; the presets select clang++ explicitly on both targets.
+      - name: Install macOS LLVM
+        if: runner.os == 'macOS'
+        run: brew install llvm@20
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.11.1'
+          host: ${{ matrix.qt-host }}
+          target: desktop
+          arch: ${{ matrix.qt-arch }}
+          modules: qtsvg
+          cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      # clang++ uses the MSVC target, SDK, STL, and dynamic CRT, matching
+      # the official Qt MSVC binaries; it does not use the MinGW ABI.
+      # windows-2025 currently includes upstream LLVM 20.1.8.
+      - name: Record Windows compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '& "$env:ProgramFiles/LLVM/bin/clang++.exe" --version'
+      - name: Record macOS compiler
+        if: runner.os == 'macOS'
+        run: /opt/homebrew/opt/llvm@20/bin/clang++ --version
+      - name: Configure
+        shell: bash
+        run: cmake --preset "${{ matrix.target }}" -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+      - name: Build
+        run: cmake --build --preset ${{ matrix.target }} --parallel 3
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+          RELAY_SCREENSHOT_DIR: ${{ github.workspace }}/build-native/screenshots
+        run: ctest --preset ${{ matrix.target }} --timeout 60
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}-diagnostics
+          path: |
+            build-native/${{ matrix.target }}/Testing/Temporary/
+            build-native/screenshots/
+          if-no-files-found: ignore

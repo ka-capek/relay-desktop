@@ -218,14 +218,17 @@ void DiffModel::parse() {
   qint64 oldLine = 0;
   qint64 newLine = 0;
   qsizetype offset = 0;
+  bool inHunk = false;
 
-  while (offset <= source.size()) {
+  while (offset < source.size()) {
     const qsizetype newline = source.indexOf(QChar{u'\n'}, offset);
     const qsizetype end = newline < 0 ? source.size() : newline;
     const QStringView line = source.mid(offset, end - offset);
 
+    if (line.startsWith(QStringView{u"diff --git "})) inHunk = false;
     const QRegularExpressionMatch hunk = hunkExpression().matchView(line);
     if (hunk.hasMatch()) {
+      inHunk = true;
       bool oldOk = false;
       bool newOk = false;
       const qint64 parsedOld = hunk.capturedView(1).toLongLong(&oldOk);
@@ -235,11 +238,11 @@ void DiffModel::parse() {
         newLine = parsedNew;
       }
       rows_.append(Row{offset, line.size(), -1, -1, DiffLineKind::hunk});
-    } else if (!isHeader(line)) {
-      if (line.startsWith(QChar{u'+'}) && !line.startsWith(QStringView{u"+++"})) {
+    } else if (inHunk || !isHeader(line)) {
+      if (line.startsWith(QChar{u'+'}) && (inHunk || !line.startsWith(QStringView{u"+++"}))) {
         rows_.append(Row{offset, line.size(), -1, newLine, DiffLineKind::addition});
         ++newLine;
-      } else if (line.startsWith(QChar{u'-'}) && !line.startsWith(QStringView{u"---"})) {
+      } else if (line.startsWith(QChar{u'-'}) && (inHunk || !line.startsWith(QStringView{u"---"}))) {
         rows_.append(Row{offset, line.size(), oldLine, -1, DiffLineKind::removal});
         ++oldLine;
       } else if (line.startsWith(QChar{u'\\'})) {

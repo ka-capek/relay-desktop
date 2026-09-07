@@ -10,6 +10,7 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QScopeGuard>
 
 namespace {
 
@@ -57,6 +58,277 @@ class RelayControllerTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void failedRepositorySaveCannotSwitchTheEffectiveCommitTarget() {
+    QTemporaryDir root;
+    const auto first = root.filePath(QStringLiteral("first"));
+    const auto second = root.filePath(QStringLiteral("second"));
+    QVERIFY(QDir().mkpath(first)); QVERIFY(QDir().mkpath(second));
+    initRepository(first); initRepository(second);
+    const auto config = controllerConfig(root);
+    relay::RelayController controller(config);
+    controller.start();
+    QSignalSpy opened(&controller, &relay::RelayController::currentRepositoryChanged);
+    controller.openRepository(first);
+    QVERIFY(opened.wait(5000));
+    QVERIFY(QFile::remove(config.storeFile));
+    QVERIFY(QDir().mkdir(config.storeFile));
+    QSignalSpy failed(&controller, &relay::RelayController::operationFailed);
+    controller.openRepository(second);
+    QVERIFY(failed.wait(5000));
+    QCOMPARE(controller.currentRepository()->path, QFileInfo(first).canonicalFilePath());
+    QCOMPARE(opened.size(), 1);
+  }
+
+  void failedPersistenceKeepsThePreviouslyVisibleIdentity() {
+    QTemporaryDir root;
+    const auto config = controllerConfig(root);
+    relay::AppState state;
+    relay::Account first;
+    first.id = QStringLiteral("github-1"); first.githubId = 1;
+    first.handle = QStringLiteral("personal"); first.email = QStringLiteral("personal@example.test");
+    auto second = first; second.id = QStringLiteral("github-2"); second.githubId = 2;
+    state.accounts = {first, second}; state.activeAccountId = first.id;
+    seedState(config, state);
+    relay::RelayController controller(config);
+    controller.start();
+    // An unreadable replacement at the temporary store path forces saving to fail.
+    QVERIFY(QFile::remove(config.storeFile));
+    QVERIFY(QDir().mkdir(config.storeFile));
+    QSignalSpy failures(&controller, &relay::RelayController::operationFailed);
+    controller.setRepositoryAccount(QStringLiteral("/fixture"), second.id);
+    QCOMPARE(failures.size(), 1);
+    QCOMPARE(controller.resolvedAccountId(QStringLiteral("/fixture")), first.id);
+    controller.setAccountEmail(first.id, QStringLiteral("changed@example.test"));
+    QCOMPARE(failures.size(), 2);
+    QCOMPARE(controller.state().accounts.first().email, first.email);
+  }
+
+  void refreshCannotSupersedePendingBranchMutation() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    writeFile(root.filePath(QStringLiteral("file.txt")), "initial\n");
+    runGit(root.path(), {QStringLiteral("add"), QStringLiteral(".")});
+    runGit(root.path(), {QStringLiteral("-c"), QStringLiteral("user.name=Test"), QStringLiteral("-c"), QStringLiteral("user.email=test@example.test"), QStringLiteral("commit"), QStringLiteral("-qm"), QStringLiteral("Initial")});
+    QSemaphore started, release;
+    auto config = controllerConfig(root);
+    config.operationGate = [&](const QString& operation, const QString&) {
+      if (operation == QStringLiteral("create-branch")) { started.release(); release.acquire(); }
+    };
+    relay::RelayController controller(config);
+    controller.start();
+    QSignalSpy changed(&controller, &relay::RelayController::currentRepositoryChanged);
+    QSignalSpy busy(&controller, &relay::RelayController::busyChanged);
+    controller.openRepository(root.path());
+    QVERIFY(changed.wait(5000));
+    changed.clear(); busy.clear();
+    const auto cleanup = qScopeGuard([&] { release.release(); });
+    controller.createBranch(QStringLiteral("feature"));
+    QVERIFY(started.tryAcquire(1, 5000));
+    controller.refreshRepository();
+    // Refresh must not start or invalidate the mutation's eventual snapshot.
+    QCOMPARE(busy.size(), 1);
+    release.release();
+    QVERIFY(changed.wait(5000));
+    QCOMPARE(controller.currentRepository()->branch, QStringLiteral("feature"));
+  }
+
+  void staleRepositoryReadFailuresAreIgnored() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    QSemaphore started, release;
+    auto config = controllerConfig(root);
+    config.operationGate = [&](const QString& operation, const QString& key) {
+      if (operation == QStringLiteral("open-repository") && key.endsWith(QStringLiteral("missing"))) {
+        started.release(); release.acquire();
+        throw std::runtime_error("Obsolete repository error");
+      }
+    };
+    relay::RelayController controller(config);
+    controller.start();
+    QSignalSpy changed(&controller, &relay::RelayController::currentRepositoryChanged);
+    QSignalSpy failures(&controller, &relay::RelayController::operationFailed);
+    QSignalSpy busy(&controller, &relay::RelayController::busyChanged);
+    const auto cleanup = qScopeGuard([&] { release.release(); });
+    controller.openRepository(root.filePath(QStringLiteral("missing")));
+    QVERIFY(started.tryAcquire(1, 5000));
+    controller.openRepository(root.path());
+    QVERIFY(changed.wait(5000));
+    release.release();
+    QTRY_COMPARE_WITH_TIMEOUT(busy.size(), 4, 5000);
+    QVERIFY(failures.isEmpty());
+    QCOMPARE(controller.currentRepository()->path, root.path());
+  }
+
+  void completedCloneKeepsAccountWhenSelectionChanges() {
+    QTemporaryDir root;
+    const auto source = root.filePath(QStringLiteral("source"));
+    QVERIFY(QDir().mkpath(source));
+    initRepository(source);
+    const auto globalConfig = root.filePath(QStringLiteral("gitconfig"));
+    runGit(root.path(), {QStringLiteral("config"), QStringLiteral("--file"), globalConfig,
+        QStringLiteral("url.%1.insteadOf").arg(source), QStringLiteral("git@github.com:relay-test/source")});
+    runGit(root.path(), {QStringLiteral("config"), QStringLiteral("--file"), globalConfig, QStringLiteral("protocol.file.allow"), QStringLiteral("always")});
+    const auto previousGlobal = qgetenv("GIT_CONFIG_GLOBAL");
+    const auto restoreEnvironment = qScopeGuard([&] {
+      if (previousGlobal.isNull()) qunsetenv("GIT_CONFIG_GLOBAL");
+      else qputenv("GIT_CONFIG_GLOBAL", previousGlobal);
+    });
+    qputenv("GIT_CONFIG_GLOBAL", globalConfig.toUtf8());
+    QSemaphore started, release;
+    auto config = controllerConfig(root);
+    config.operationGate = [&](const QString& operation, const QString&) {
+      if (operation == QStringLiteral("clone")) { started.release(); release.acquire(); }
+    };
+    relay::AppState state;
+    relay::Account personal;
+    personal.id = QStringLiteral("github-1"); personal.githubId = 1; personal.handle = QStringLiteral("personal");
+    personal.authSource = QStringLiteral("github-cli");
+    auto work = personal;
+    work.id = QStringLiteral("github-2"); work.githubId = 2; work.handle = QStringLiteral("work");
+    state.accounts = {personal, work}; state.activeAccountId = personal.id;
+    seedState(config, state);
+    relay::RelayController controller(config);
+    controller.start();
+    QSignalSpy changed(&controller, &relay::RelayController::currentRepositoryChanged);
+    QSignalSpy failures(&controller, &relay::RelayController::operationFailed);
+    QSignalSpy busy(&controller, &relay::RelayController::busyChanged);
+    const auto cleanup = qScopeGuard([&] { release.release(); });
+    controller.cloneRepository(QStringLiteral("git@github.com:relay-test/source"), root.path(), QStringLiteral("clone"), work.id);
+    QVERIFY(started.tryAcquire(1, 5000));
+    controller.setActiveAccount(work.id);
+    QCOMPARE(failures.size(), 1);
+    QCOMPARE(controller.state().activeAccountId, personal.id);
+    controller.createLocalRepository(root.filePath(QStringLiteral("blocked-create")));
+    QCOMPARE(failures.size(), 2);
+    QVERIFY(!QFileInfo::exists(root.filePath(QStringLiteral("blocked-create"))));
+    failures.clear();
+    controller.openRepository(source);
+    QVERIFY(changed.wait(5000));
+    release.release();
+    QTRY_COMPARE_WITH_TIMEOUT(busy.size(), 4, 5000);
+    QVERIFY2(failures.isEmpty(), failures.isEmpty() ? "" : qPrintable(failures.first().at(1).toString()));
+    QCOMPARE(controller.currentRepository()->path, source);
+    const auto clone = root.filePath(QStringLiteral("clone"));
+    QCOMPARE(controller.resolvedAccountId(clone), work.id);
+    QCOMPARE(relay::appStateFromJson(relay::RelayStore(config.storeFile).read()).repositoryAccounts.value(clone), work.id);
+  }
+
+  void preferencesSurviveRestartAndValidateFontSize() {
+    QTemporaryDir root;
+    const auto config = controllerConfig(root);
+    relay::RelayController first(config);
+    first.start();
+    first.setPreferences({false, 18});
+    relay::RelayController second(config);
+    second.start();
+    QVERIFY(!second.state().preferences.refreshOnFocus);
+    QCOMPARE(second.state().preferences.diffFontSize, 18);
+    second.setPreferences({true, 999});
+    QCOMPARE(second.state().preferences.diffFontSize, 24);
+    QVERIFY(second.currentRepository() == nullptr);
+  }
+
+  void commitsUseTheBoundAccountThenFallBackToTheActiveAccount() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const auto path = root.filePath(QStringLiteral("repository"));
+    QVERIFY(QDir().mkpath(path));
+    initRepository(path);
+    writeFile(QDir(path).filePath(QStringLiteral("first.txt")), QByteArrayLiteral("first\n"));
+    writeFile(QDir(path).filePath(QStringLiteral("second.txt")), QByteArrayLiteral("second\n"));
+
+    const auto config = controllerConfig(root);
+    relay::Account personal;
+    personal.id = QStringLiteral("github-1");
+    personal.githubId = 1;
+    personal.name = QStringLiteral("Personal Identity");
+    personal.handle = QStringLiteral("personal");
+    personal.email = QStringLiteral("personal@example.test");
+    personal.authSource = QStringLiteral("github-cli");
+    auto work = personal;
+    work.id = QStringLiteral("github-2");
+    work.githubId = 2;
+    work.name = QStringLiteral("Work Identity");
+    work.handle = QStringLiteral("work");
+    work.email = QStringLiteral("work@example.test");
+    relay::AppState state;
+    state.accounts = {personal, work};
+    state.activeAccountId = personal.id;
+    state.repositories = {summary(path, QStringLiteral("repository"))};
+    state.repositoryAccounts.insert(path, work.id);
+    seedState(config, state);
+
+    relay::RelayController controller(config);
+    controller.start();
+    QSignalSpy changed(&controller, &relay::RelayController::currentRepositoryChanged);
+    QSignalSpy failures(&controller, &relay::RelayController::operationFailed);
+    controller.openRepository(path);
+    QVERIFY(changed.wait(5000));
+    changed.clear();
+    controller.commit({QStringLiteral("first.txt")}, QStringLiteral("Work commit"), {});
+    QVERIFY(changed.wait(5000));
+    QVERIFY(failures.isEmpty());
+    relay::ProcessRequest log{QStringLiteral("git"),
+        {QStringLiteral("-C"), path, QStringLiteral("log"), QStringLiteral("-1"),
+         QStringLiteral("--format=%an|%ae|%cn|%ce")}};
+    QCOMPARE(QString::fromUtf8(relay::ProcessRunner::run(log).standardOutput).trimmed(),
+             QStringLiteral("Work Identity|work@example.test|Work Identity|work@example.test"));
+    QCOMPARE(controller.currentRepository()->files.size(), 1);
+    QCOMPARE(controller.currentRepository()->files.first().path, QStringLiteral("second.txt"));
+
+    controller.setRepositoryAccount(path, {});
+    changed.clear();
+    controller.commit({QStringLiteral("second.txt")}, QStringLiteral("Personal commit"), {});
+    QVERIFY(changed.wait(5000));
+    QVERIFY(failures.isEmpty());
+    QCOMPARE(QString::fromUtf8(relay::ProcessRunner::run(log).standardOutput).trimmed(),
+             QStringLiteral("Personal Identity|personal@example.test|Personal Identity|personal@example.test"));
+  }
+
+  void supersededAccountRepositoryFailureIsIgnored() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    auto config = controllerConfig(root);
+    relay::AppState state;
+    relay::Account first;
+    first.id = QStringLiteral("github-1");
+    first.githubId = 1;
+    first.handle = QStringLiteral("first");
+    first.authSource = QStringLiteral("github-cli");
+    auto second = first;
+    second.id = QStringLiteral("github-2");
+    second.githubId = 2;
+    second.handle = QStringLiteral("second");
+    state.accounts = {first, second};
+    state.activeAccountId = first.id;
+    seedState(config, state);
+
+    QSemaphore started;
+    QSemaphore release;
+    config.operationGate = [&](const QString& operation, const QString& key) {
+      if (operation != QStringLiteral("github-repositories")) return;
+      if (key == first.handle) {
+        started.release();
+        release.acquire();
+      }
+      // No credentials or network access: fail before invoking gh.
+      throw std::runtime_error(key.toStdString());
+    };
+    relay::RelayController controller(config);
+    controller.start();
+    QSignalSpy failures(&controller, &relay::RelayController::operationFailed);
+    QSignalSpy busy(&controller, &relay::RelayController::busyChanged);
+    controller.requestGitHubRepositories(first.id);
+    const auto cleanup = qScopeGuard([&] { release.release(); });
+    QVERIFY(started.tryAcquire(1, 5000));
+    controller.requestGitHubRepositories(second.id);
+    QTRY_COMPARE_WITH_TIMEOUT(failures.size(), 1, 5000);
+    QCOMPARE(failures.first().at(1).toString(), second.handle);
+    release.release();
+    QTRY_COMPARE_WITH_TIMEOUT(busy.size(), 4, 5000);
+    QCOMPARE(failures.size(), 1);
+  }
+
   void startupLoadsStateButNeverRestoresRepository() {
     QTemporaryDir root;
     QVERIFY(root.isValid());

@@ -532,7 +532,7 @@ QVariant HistoryCommitListModel::data(const QModelIndex& index, int role) const 
     case dayLabelRole:
       return dayLabel(*commit);
     case startsDayGroupRole:
-      return index.row() == 0 || dayLabel(*commit) != dayLabel(*commitAt(index.row() - 1));
+      return !(graphEnabled_ && search_.isEmpty()) && (index.row() == 0 || dayLabel(*commit) != dayLabel(*commitAt(index.row() - 1)));
     default:
       return {};
   }
@@ -561,6 +561,8 @@ void HistoryCommitListModel::resetHistory(QList<HistoryCommit> commits, QString 
                                           bool endOfHistory) {
   beginResetModel();
   commits_.clear();
+  graphRows_.clear();
+  graphLanes_.clear();
   visibleIndices_.clear();
   hashes_.clear();
   anchor_ = std::move(anchor);
@@ -570,6 +572,7 @@ void HistoryCommitListModel::resetHistory(QList<HistoryCommit> commits, QString 
   for (HistoryCommit& commit : commits) {
     if (hashes_.contains(commit.fullHash)) continue;
     hashes_.insert(commit.fullHash);
+    appendGraph(commit);
     commits_.append(std::move(commit));
   }
   rebuildVisible();
@@ -603,6 +606,7 @@ qsizetype HistoryCommitListModel::appendCommits(QList<HistoryCommit> commits) {
   for (HistoryCommit& commit : unique) {
     const bool visible = matchesSearch(commit);
     hashes_.insert(commit.fullHash);
+    appendGraph(commit);
     commits_.append(std::move(commit));
     if (visible) visibleIndices_.append(static_cast<int>(commits_.size() - 1));
   }
@@ -625,6 +629,49 @@ void HistoryCommitListModel::setSearch(QString search) {
   search_ = std::move(search);
   rebuildVisible();
   endResetModel();
+}
+
+void HistoryCommitListModel::setGraphEnabled(bool enabled) {
+  if (graphEnabled_ == enabled) return;
+  beginResetModel();
+  graphEnabled_ = enabled;
+  graphRows_.clear();
+  graphLanes_.clear();
+  if (enabled) for (const auto& commit : commits_) appendGraph(commit);
+  endResetModel();
+}
+
+const HistoryGraphRow* HistoryCommitListModel::graphRowAt(int row) const {
+  if (!graphEnabled_ || !search_.isEmpty() || row < 0 || row >= visibleIndices_.size()) return nullptr;
+  return &graphRows_.at(visibleIndices_.at(row));
+}
+
+void HistoryCommitListModel::appendGraph(const HistoryCommit& commit) {
+  if (!graphEnabled_) return;
+  const auto before = graphLanes_;
+  auto lane = graphLanes_.indexOf(commit.fullHash);
+  const bool incoming = lane >= 0;
+  if (lane < 0) { lane = graphLanes_.size(); graphLanes_.append(commit.fullHash); }
+  graphLanes_[lane].clear();
+  for (const auto& parent : commit.parents) {
+    if (graphLanes_.contains(parent)) continue;
+    const auto empty = graphLanes_.indexOf(QString{});
+    if (empty < 0) graphLanes_.append(parent);
+    else graphLanes_[empty] = parent;
+  }
+  graphLanes_.removeAll(QString{});
+  QHash<QString, int> destinations;
+  for (qsizetype i = 0; i < graphLanes_.size(); ++i) destinations.insert(graphLanes_.at(i), static_cast<int>(i));
+  HistoryGraphRow row;
+  row.lane = static_cast<int>(lane);
+  row.width = static_cast<int>(std::max({before.size(), graphLanes_.size(), lane + 1}));
+  row.incoming = incoming;
+  for (qsizetype index = 0; index < before.size(); ++index) {
+    if (before.at(index) != commit.fullHash)
+      row.passing.append({static_cast<int>(index), destinations.value(before.at(index), -1)});
+  }
+  for (const auto& parent : commit.parents) row.parents.append(destinations.value(parent, -1));
+  graphRows_.append(std::move(row));
 }
 
 void HistoryCommitListModel::setPagingState(QString anchor, bool endOfHistory) {

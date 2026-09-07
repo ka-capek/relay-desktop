@@ -6,6 +6,14 @@ class DiffModelTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void terminatingNewlineDoesNotCreateAContextLine() {
+    relay::DiffModel model;
+    model.setDiff(QStringLiteral("@@ -0,0 +1,2 @@\n+content\n+\n"));
+    QCOMPARE(model.rowCount(), 3);
+    QCOMPARE(model.lineAt(2).newLine, QStringLiteral("2"));
+    QCOMPARE(model.kindAt(2), relay::DiffLineKind::addition);
+  }
+
   void preservesElectronParserSemantics() {
     relay::DiffModel model;
     model.setDiff(QStringLiteral(
@@ -58,6 +66,18 @@ class DiffModelTest final : public QObject {
     QCOMPARE(finalContext.text, QStringLiteral("final context"));
   }
 
+  void preservesHeaderLikeContentWithinHunks() {
+    relay::DiffModel model;
+    model.setDiff(QStringLiteral("--- a/file\n+++ b/file\n@@ -1,3 +1,3 @@\n--- comment\n+++ counter\n---foo\n+++bar\n context"));
+    QCOMPARE(model.rowCount(), 6);
+    QCOMPARE(model.kindAt(1), relay::DiffLineKind::removal);
+    QCOMPARE(model.kindAt(2), relay::DiffLineKind::addition);
+    QCOMPARE(model.kindAt(3), relay::DiffLineKind::removal);
+    QCOMPARE(model.kindAt(4), relay::DiffLineKind::addition);
+    QCOMPARE(model.lineAt(5).oldLine, QStringLiteral("3"));
+    QCOMPARE(model.lineAt(5).newLine, QStringLiteral("3"));
+  }
+
   void filtersEveryElectronMetadataPrefix() {
     relay::DiffModel model;
     model.setDiff(QStringLiteral(
@@ -85,15 +105,14 @@ class DiffModelTest final : public QObject {
     QCOMPARE(model.lineAt(2).text, QStringLiteral("+after"));
   }
 
-  void retainsJavascriptSplitTrailingLine() {
+  void omitsSyntheticTrailingContextLine() {
     relay::DiffModel model;
     model.setDiff(QStringLiteral("@@ -1 +1 @@\n same\n"));
 
-    QCOMPARE(model.rowCount(), 3);
+    QCOMPARE(model.rowCount(), 2);
     QCOMPARE(model.lineAt(1).text, QStringLiteral("same"));
-    QCOMPARE(model.lineAt(2).text, QString{});
-    QCOMPARE(model.lineAt(2).oldLine, QStringLiteral("2"));
-    QCOMPARE(model.lineAt(2).newLine, QStringLiteral("2"));
+    QCOMPARE(model.lineAt(1).oldLine, QStringLiteral("1"));
+    QCOMPARE(model.lineAt(1).newLine, QStringLiteral("1"));
   }
 
   void exposesAccessibleLineDescriptions() {

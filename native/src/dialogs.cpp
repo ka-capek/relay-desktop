@@ -1,4 +1,5 @@
 #include "relay/dialogs.hpp"
+#include <QSpinBox>
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -20,6 +21,65 @@
 #include <utility>
 
 namespace relay {
+
+SettingsDialog::SettingsDialog(Preferences preferences, QWidget* parent) : QDialog(parent) {
+  setWindowTitle(tr("Settings"));
+  setObjectName(QStringLiteral("settingsDialog"));
+  resize(500, 300);
+  auto* layout = new QVBoxLayout(this);
+  auto* tabs = new QTabWidget(this);
+  auto* general = new QWidget(tabs);
+  auto* form = new QFormLayout(general);
+  refreshOnFocus_ = new QCheckBox(tr("Refresh repository when Relay becomes active"), general);
+  refreshOnFocus_->setObjectName(QStringLiteral("refreshOnFocus"));
+  refreshOnFocus_->setChecked(preferences.refreshOnFocus);
+  form->addRow(refreshOnFocus_);
+  diffFontSize_ = new QSpinBox(general);
+  diffFontSize_->setObjectName(QStringLiteral("diffFontSize"));
+  diffFontSize_->setRange(10, 24);
+  diffFontSize_->setValue(preferences.diffFontSize);
+  diffFontSize_->setSuffix(tr(" px"));
+  form->addRow(tr("Diff text size"), diffFontSize_);
+  graphHistory_ = new QCheckBox(tr("Show branch graph in History (all branches)"), general);
+  graphHistory_->setObjectName(QStringLiteral("graphHistory"));
+  graphHistory_->setChecked(preferences.graphHistory);
+  form->addRow(graphHistory_);
+  tabs->addTab(general, tr("General"));
+  auto* git = new QWidget(tabs);
+  auto* gitForm = new QFormLayout(git);
+  auto* identityHelp = new QLabel(tr("Used when no GitHub account is selected. Leave blank to use this repository’s Git configuration."), git);
+  identityHelp->setWordWrap(true);
+  gitForm->addRow(identityHelp);
+  commitName_ = new QLineEdit(preferences.commitName, git);
+  commitName_->setObjectName(QStringLiteral("defaultCommitName"));
+  commitEmail_ = new QLineEdit(preferences.commitEmail, git);
+  commitEmail_->setObjectName(QStringLiteral("defaultCommitEmail"));
+  gitForm->addRow(tr("Name"), commitName_);
+  gitForm->addRow(tr("Email"), commitEmail_);
+  tabs->addTab(git, tr("Git"));
+  auto* accounts = new QWidget(tabs);
+  auto* accountLayout = new QVBoxLayout(accounts);
+  auto* explanation = new QLabel(tr("Connect multiple GitHub accounts and choose their commit emails. You can assign a different account to each repository in Repository settings."), accounts);
+  explanation->setWordWrap(true);
+  accountLayout->addWidget(explanation);
+  auto* manage = new QPushButton(tr("Manage accounts…"), accounts);
+  manage->setObjectName(QStringLiteral("settingsManageAccounts"));
+  accountLayout->addWidget(manage, 0, Qt::AlignLeft);
+  accountLayout->addStretch();
+  connect(manage, &QPushButton::clicked, this, &SettingsDialog::manageAccountsRequested);
+  tabs->addTab(accounts, tr("Accounts"));
+  layout->addWidget(tabs);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
+  connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+  layout->addWidget(buttons);
+}
+
+Preferences SettingsDialog::preferences() const {
+  return {refreshOnFocus_->isChecked(), diffFontSize_->value(), commitName_->text().trimmed(),
+          commitEmail_->text().trimmed(), graphHistory_->isChecked()};
+}
+
 namespace {
 
 constexpr int githubIdRole = Qt::UserRole;
@@ -230,6 +290,9 @@ CloneDialog::CloneDialog(QWidget* parent) : QDialog(parent) {
   connect(nameEdit_, &QLineEdit::textChanged, this, &CloneDialog::updateValidation);
   connect(parentEdit_, &QLineEdit::textChanged, this, &CloneDialog::updateValidation);
   connect(accountCombo_, &QComboBox::currentIndexChanged, this, [this] {
+    // A repository selected under one account must not remain cloneable
+    // while the other account's list is still loading.
+    setGithubRepositories({});
     emit accountChanged(selectedAccountId());
     updateValidation();
   });

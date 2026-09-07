@@ -1,11 +1,27 @@
 #include "relay/main_window.hpp"
+#include "relay/dialogs.hpp"
 #include "relay/relay_application.hpp"
 #include "relay/relay_controller.hpp"
 #include "relay/theme.hpp"
+#include "relay/diff_view.hpp"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QSignalSpy>
+#include <QLabel>
+#include <QPlainTextEdit>
+#include <QPushButton>
+#include "relay/list_models.hpp"
+#include <QAction>
+#include <QClipboard>
+#include <QLineEdit>
+#include <QSpinBox>
+#include <QStatusBar>
+#include <QTimer>
 #include <QDir>
 #include <QFile>
+#include <QFontDatabase>
+#include <QFontMetrics>
 #include <QListView>
 #include <QProcess>
 #include <QTabWidget>
@@ -44,6 +60,288 @@ class MainWindowTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void largeDiffFontKeepsSixDigitLineNumbersVisible() {
+    relay::DiffView view;
+    view.setDiff(QStringLiteral("@@ -100000 +100000 @@\n-old\n+new\n"));
+    view.setCodeFontSize(24);
+    auto font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    font.setPixelSize(24);
+    const int required = QFontMetrics(font).horizontalAdvance(QStringLiteral("100000")) + 12;
+    QVERIFY(view.columnWidth(relay::DiffModel::oldLineColumn) >= required);
+    QVERIFY(view.columnWidth(relay::DiffModel::newLineColumn) >= required);
+  }
+
+  void imagePreviewCanReturnToTextWithoutStaleContent() {
+    relay::DiffView view;
+    view.resize(900, 450);
+    relay::FilePreview preview;
+    preview.before = QImage(100, 80, QImage::Format_RGB32);
+    preview.before.fill(Qt::red);
+    preview.after = QImage(160, 120, QImage::Format_RGB32);
+    preview.after.fill(Qt::blue);
+    view.setPreview(preview);
+    view.show();
+    QTest::qWait(30);
+    QCOMPARE(view.diffModel()->rowCount(), 0);
+    const auto directory = qEnvironmentVariable("RELAY_SCREENSHOT_DIR");
+    if (!directory.isEmpty()) {
+      QVERIFY(QDir().mkpath(directory));
+      QVERIFY(view.grab().save(directory + QStringLiteral("/image-preview.png")));
+    }
+    view.setPreview({QStringLiteral("@@ -1 +1 @@\n-before\n+after\n"), {}, {}});
+    QCOMPARE(view.diffModel()->rowCount(), 3);
+    QCOMPARE(view.diffModel()->lineAt(2).text, QStringLiteral("+after"));
+  }
+
+  void conflictDialogShowsWorkerErrorsAndAbortRestoresRepository() {
+    QTemporaryDir root;
+    QTemporaryDir store;
+    createRepository(root.path());
+    const auto change = [&root](const QByteArray& content) {
+      QFile file(root.path() + QStringLiteral("/README.md"));
+      QVERIFY(file.open(QIODevice::WriteOnly)); file.write(content); file.close();
+      runGit(root.path(), {QStringLiteral("commit"), QStringLiteral("-am"), QString::fromUtf8(content).trimmed()});
+    };
+    runGit(root.path(), {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("topic")});
+    change("topic\n");
+    runGit(root.path(), {QStringLiteral("switch"), QStringLiteral("main")});
+    change("main\n");
+    relay::RelayControllerConfig config;
+    config.storeFile = store.path() + QStringLiteral("/state.json");
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show(); controller.start(); controller.openRepository(root.path());
+    QTRY_VERIFY(controller.currentRepository());
+    controller.executeRepositoryAction(relay::RepositoryAction::mergeBranch, QStringLiteral("topic"));
+    QTRY_COMPARE(controller.currentRepository()->pendingOperation, QStringLiteral("merge"));
+    auto* banner = window.findChild<QPushButton*>(QStringLiteral("conflictButton"));
+    QVERIFY(banner->isVisible());
+    QTimer::singleShot(15000, &window, [&window] {
+      if (auto* dialog = window.findChild<QDialog*>(QStringLiteral("conflictsDialog"))) dialog->reject();
+    });
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>(QStringLiteral("conflictsDialog"));
+      QVERIFY(dialog);
+      auto* error = dialog->findChild<QLabel*>(QStringLiteral("conflictError"));
+      QVERIFY(error);
+      controller.executeRepositoryAction(relay::RepositoryAction::continueOperation);
+      QTRY_VERIFY(!error->text().isEmpty());
+      QVERIFY(error->text().contains(QStringLiteral("Resolve")));
+      if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+        QDir().mkpath(output);
+        dialog->grab().save(QDir(output).filePath(QStringLiteral("conflicts.png")));
+      }
+      dialog->reject();
+    });
+    banner->click();
+    controller.executeRepositoryAction(relay::RepositoryAction::abortOperation);
+    QTRY_VERIFY(controller.currentRepository()->pendingOperation.isEmpty());
+    QVERIFY(!banner->isVisible());
+  }
+
+  void graphHistoryRendersAndSettingsSwitchBackToList() {
+    QTemporaryDir temporary;
+    QTemporaryDir store;
+    createRepository(temporary.path());
+    runGit(temporary.path(), {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("feature")});
+    runGit(temporary.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Feature work")});
+    runGit(temporary.path(), {QStringLiteral("switch"), QStringLiteral("main")});
+    runGit(temporary.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Main work")});
+    runGit(temporary.path(), {QStringLiteral("merge"), QStringLiteral("--no-ff"), QStringLiteral("feature"), QStringLiteral("-m"), QStringLiteral("Merge feature")});
+    relay::RelayControllerConfig config;
+    config.storeFile = store.path() + QStringLiteral("/state.json");
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show();
+    controller.start();
+    auto preferences = controller.state().preferences;
+    preferences.graphHistory = true;
+    controller.setPreferences(preferences);
+    controller.openRepository(temporary.path());
+    QTRY_VERIFY(controller.currentRepository());
+    auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("contentTabs"));
+    tabs->setCurrentIndex(1);
+    auto* history = window.findChild<QListView*>(QStringLiteral("historyList"));
+    QTRY_COMPARE(history->model()->rowCount(), 4);
+    auto* model = dynamic_cast<relay::HistoryCommitListModel*>(history->model());
+    QVERIFY(model->graphRowAt(0));
+    history->setCurrentIndex(model->index(0));
+    QTest::qWait(100);
+    if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+      QDir().mkpath(output);
+      window.grab().save(QDir(output).filePath(QStringLiteral("graph.png")));
+    }
+    preferences.graphHistory = false;
+    controller.setPreferences(preferences);
+    QTRY_COMPARE(history->model()->rowCount(), 4);
+    QVERIFY(!model->graphRowAt(0));
+  }
+
+  void refreshPreservesFileSelectionAndSelectAllUsesOneClick() {
+    QTemporaryDir temporary;
+    createRepository(temporary.path());
+    QFile first(temporary.path() + QStringLiteral("/a.txt"));
+    QVERIFY(first.open(QIODevice::WriteOnly)); first.write("a"); first.close();
+    QFile second(temporary.path() + QStringLiteral("/b.txt"));
+    QVERIFY(second.open(QIODevice::WriteOnly)); second.write("b"); second.close();
+    relay::RelayControllerConfig config;
+    config.storeFile = temporary.path() + QStringLiteral("/state/relay.json");
+    config.applicationDirectory = QCoreApplication::applicationDirPath();
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    controller.start(); controller.openRepository(temporary.path());
+    auto* files = window.findChild<QListView*>(QStringLiteral("changedFileList"));
+    QTRY_COMPARE(files->model()->rowCount(), 2);
+    files->setCurrentIndex(files->model()->index(1, 0));
+    const auto path = files->currentIndex().data(relay::ChangedFileListModel::pathRole);
+    QSignalSpy refreshed(&controller, &relay::RelayController::currentRepositoryChanged);
+    controller.refreshRepository();
+    QTRY_COMPARE(refreshed.count(), 1);
+    QCOMPARE(files->currentIndex().data(relay::ChangedFileListModel::pathRole), path);
+    auto* check = window.findChild<QCheckBox*>();
+    QVERIFY(check);
+    check->setCheckState(Qt::Unchecked);
+    check->click();
+    QCOMPARE(check->checkState(), Qt::Checked);
+    QCOMPARE(files->model()->index(0, 0).data(Qt::CheckStateRole).toInt(), int(Qt::Checked));
+    QCOMPARE(files->model()->index(1, 0).data(Qt::CheckStateRole).toInt(), int(Qt::Checked));
+    auto* repos = window.findChild<QListView*>(QStringLiteral("repositoryList"));
+    QVERIFY(repos->currentIndex().isValid());
+    for (auto* label : window.findChildren<QLabel*>()) QCOMPARE(label->textFormat(), Qt::PlainText);
+  }
+
+  void settingsMenuPersistsAndEditMenuTargetsFocusedInput() {
+    QTemporaryDir root;
+    relay::RelayControllerConfig config;
+    config.storeFile = root.filePath(QStringLiteral("relay-data.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    controller.start();
+    window.show();
+    auto* settings = window.findChild<QAction*>(QStringLiteral("settingsAction"));
+    QVERIFY(settings);
+    bool visited = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<relay::SettingsDialog*>();
+      if (!dialog) return;
+      auto* size = dialog->findChild<QSpinBox*>(QStringLiteral("diffFontSize"));
+      if (size) { size->setValue(18); visited = true; }
+      if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+        QDir().mkpath(output);
+        dialog->grab().save(QDir(output).filePath(QStringLiteral("settings.png")));
+      }
+      dialog->accept();
+    });
+    settings->trigger();
+    QVERIFY(visited);
+    QCOMPARE(controller.state().preferences.diffFontSize, 18);
+    auto* input = window.findChild<QLineEdit*>(QStringLiteral("repositoryFilter"));
+    QVERIFY(input);
+    input->setText(QStringLiteral("editable"));
+    window.activateWindow();
+    QApplication::setActiveWindow(&window);
+    QApplication::processEvents();
+    input->setFocus();
+    input->selectAll();
+    QTRY_VERIFY(input->hasFocus());
+    auto* copy = window.findChild<QAction*>(QStringLiteral("copyAction"));
+    auto* cut = window.findChild<QAction*>(QStringLiteral("cutAction"));
+    auto* paste = window.findChild<QAction*>(QStringLiteral("pasteAction"));
+    QVERIFY(copy && cut && paste);
+    copy->trigger();
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("editable"));
+    cut->trigger();
+    QVERIFY(input->text().isEmpty());
+    paste->trigger();
+    QCOMPARE(input->text(), QStringLiteral("editable"));
+  }
+
+  void historyChangesWhenSwitchingBranchesInTheSameRepository() {
+    QTemporaryDir root;
+    createRepository(root.path());
+    relay::RelayControllerConfig config;
+    config.storeFile = root.filePath(QStringLiteral("profile/relay-data.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    controller.start();
+    controller.setPreferences({false, 12});
+    window.show();
+    controller.openRepository(root.path());
+    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository() != nullptr, 5000);
+    auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("contentTabs"));
+    auto* history = window.findChild<QListView*>(QStringLiteral("historyList"));
+    QVERIFY(tabs && history);
+    tabs->setCurrentIndex(1);
+    QTRY_COMPARE_WITH_TIMEOUT(history->model()->rowCount(), 1, 5000);
+    runGit(root.path(), {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("side")});
+    QFile file(root.filePath(QStringLiteral("side.txt")));
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("side\n"); file.close();
+    runGit(root.path(), {QStringLiteral("add"), QStringLiteral("side.txt")});
+    runGit(root.path(), {QStringLiteral("commit"), QStringLiteral("-m"), QStringLiteral("Side change")});
+    controller.refreshRepository();
+    QTRY_COMPARE_WITH_TIMEOUT(history->model()->rowCount(), 2, 5000);
+    controller.switchBranch(QStringLiteral("main"));
+    QTRY_COMPARE_WITH_TIMEOUT(history->model()->rowCount(), 1, 5000);
+    QCOMPARE(controller.currentRepository()->branch, QStringLiteral("main"));
+    history->setCurrentIndex(history->model()->index(0, 0));
+    auto* commitFiles = window.findChild<QListView*>(QStringLiteral("commitFileList"));
+    QTRY_VERIFY(commitFiles->currentIndex().isValid());
+    auto* search = [&]() -> QLineEdit* {
+      for (auto* edit : window.findChildren<QLineEdit*>())
+        if (edit->accessibleName() == QStringLiteral("Search loaded commits")) return edit;
+      return nullptr;
+    }();
+    QVERIFY(search);
+    QTest::qWait(100);
+    QVERIFY(history->isVisible());
+    QVERIFY(history->height() > 100);
+    QVERIFY(commitFiles->height() > 30);
+    QVERIFY(commitFiles->isVisible());
+    if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+      QDir().mkpath(output);
+      window.grab().save(QDir(output).filePath(QStringLiteral("history.png")));
+    }
+    search->setText(QStringLiteral("nonmatching-filter"));
+    QCOMPARE(commitFiles->model()->rowCount(), 0);
+    for (auto* button : window.findChildren<QPushButton*>()) {
+      if (button->text() == QStringLiteral("Copy hash") || button->text() == QStringLiteral("Open on GitHub"))
+        QVERIFY(!button->isEnabled());
+    }
+    controller.busyChanged(QStringLiteral("commit"), true);
+    for (auto* edit : window.findChildren<QLineEdit*>())
+      if (edit->accessibleName() == QStringLiteral("Commit summary")) QVERIFY(!edit->isEnabled());
+    QVERIFY(!window.findChild<QPlainTextEdit*>()->isEnabled());
+    controller.busyChanged(QStringLiteral("commit"), false);
+    QVERIFY(window.findChild<QPlainTextEdit*>()->isEnabled());
+    controller.closeRepository();
+    QVERIFY(!window.findChild<QAction*>(QStringLiteral("createBranchAction"))->isEnabled());
+    QVERIFY(!window.findChild<QAction*>(QStringLiteral("pullAction"))->isEnabled());
+  }
+
+  void operationFailureRemainsVisibleAfterBusyEnds() {
+    QTemporaryDir temporary;
+    relay::RelayControllerConfig config;
+    config.storeFile = temporary.path() + QStringLiteral("/state.json");
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    controller.busyChanged(QStringLiteral("fetch"), true);
+    controller.operationFailed(QStringLiteral("fetch"), QStringLiteral("Fetch failed: offline"));
+    controller.busyChanged(QStringLiteral("fetch"), false);
+    QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("Fetch failed: offline"));
+    controller.busyChanged(QStringLiteral("refresh"), true);
+    QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("Fetch failed: offline"));
+    controller.busyChanged(QStringLiteral("refresh"), false);
+    QTRY_COMPARE_WITH_TIMEOUT(window.statusBar()->currentMessage(), QStringLiteral("No repository open"), 6000);
+    QVERIFY(window.statusBar()->styleSheet().isEmpty());
+  }
+
   void shellOpensARepositoryThroughTheRealController() {
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());

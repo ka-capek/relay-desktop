@@ -1,5 +1,11 @@
 # Relay Desktop TODO
 
+Native continuation (2026-09-07): see
+[`docs/native-completion-2026-09-07.md`](docs/native-completion-2026-09-07.md)
+for the implemented workflows, optional graph, reviews and remaining gaps.
+The original packaged-platform gates below remain open until actual installers
+are verified. Local Linux tests do not satisfy those gates.
+
 This file tracks explicitly requested product work that is not finished. Do not
 describe an item as supported until its acceptance criteria have been verified
 in packaged builds on the relevant platforms, which is why implemented work with

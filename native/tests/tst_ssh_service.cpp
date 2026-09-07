@@ -6,6 +6,14 @@ class SshServiceTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void transportUsesTheUserChosenInTheProfile() {
+    relay::SshProfile profile;
+    profile.host = QStringLiteral("example.test");
+    profile.user = QStringLiteral("deploy");
+    relay::SshService service;
+    QVERIFY(service.commandFor(profile).contains(QStringLiteral("-l 'deploy'")));
+  }
+
   void parsesRemoteForms() {
     const auto explicitRemote = relay::SshService::parseRemote(QStringLiteral("ssh://git@example.com:2222/team/repo.git"));
     QVERIFY(explicitRemote);

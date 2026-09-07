@@ -29,6 +29,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollBar>
@@ -53,6 +54,15 @@ const Account* accountNamed(const AppState& state, const QString& id) {
                                      [&id](const Account& account) { return account.id == id; });
   return iterator == state.accounts.cend() ? nullptr : &*iterator;
 }
+
+class SelectAllCheckBox final : public QCheckBox {
+ public:
+  using QCheckBox::QCheckBox;
+ protected:
+  void nextCheckState() override {
+    setCheckState(checkState() == Qt::Checked ? Qt::Unchecked : Qt::Checked);
+  }
+};
 
 QString githubCommitUrl(QString remote, const QString& hash) {
   remote.replace(u'\\', u'/');
@@ -81,11 +91,15 @@ MainWindow::MainWindow(RelayController* controller, QWidget* parent)
   resize(1420, 880);
   buildMenus();
   buildShell();
+  for (auto* label : findChildren<QLabel*>()) label->setTextFormat(Qt::PlainText);
+  noticeTimer_ = new QTimer(this);
+  noticeTimer_->setSingleShot(true);
+  connect(noticeTimer_, &QTimer::timeout, this, &MainWindow::updateStatus);
   connectController();
 }
 
 bool MainWindow::event(QEvent* event) {
-  if (event->type() == QEvent::WindowActivate && repository_ && busyOperations_.isEmpty()) {
+  if (event->type() == QEvent::WindowActivate && appState_.preferences.refreshOnFocus && repository_ && busyOperations_.isEmpty()) {
     controller_->refreshRepository();
   }
   return QMainWindow::event(event);
@@ -111,19 +125,71 @@ void MainWindow::buildMenus() {
   file->addActions({openAction_, cloneAction_, scanAction_});
   file->addSeparator();
   file->addAction(removeAction_);
-#ifndef Q_OS_MACOS
   file->addSeparator();
-  file->addAction(tr("E&xit"), QKeySequence::Quit, qApp, &QApplication::quit);
-#endif
+  auto* quit = file->addAction(tr("Quit Relay"), QKeySequence::Quit, qApp, &QApplication::quit);
+  quit->setMenuRole(QAction::QuitRole);
 
   auto* edit = menuBar()->addMenu(tr("&Edit"));
-  edit->addAction(tr("Undo"), QKeySequence::Undo);
-  edit->addAction(tr("Redo"), QKeySequence::Redo);
+  const auto addEdit = [this, edit](const QString& text, QKeySequence::StandardKey key,
+                                    const char* method) {
+    auto* action = edit->addAction(text);
+    action->setObjectName(QString::fromLatin1(method) + QStringLiteral("Action"));
+    action->setShortcut(QKeySequence(key));
+    // Text widgets and the diff own their keyboard shortcuts. The menu routes
+    // mouse activation to the focused editor without competing for Ctrl/Cmd+C.
+    action->setShortcutContext(Qt::WidgetShortcut);
+    connect(action, &QAction::triggered, this, [method] {
+      auto* focus = QApplication::focusWidget();
+      if (!focus) return;
+      if (qobject_cast<QLineEdit*>(focus) || qobject_cast<QPlainTextEdit*>(focus) ||
+          qobject_cast<QTextEdit*>(focus)) {
+        QMetaObject::invokeMethod(focus, method, Qt::DirectConnection);
+        return;
+      }
+      for (auto* widget = focus; widget; widget = widget->parentWidget()) {
+        if (auto* diff = dynamic_cast<DiffView*>(widget)) {
+          if (QByteArray(method) == "copy") diff->copySelection();
+          else if (QByteArray(method) == "selectAll") diff->selectAll();
+          break;
+        }
+      }
+    });
+  };
+  addEdit(tr("Undo"), QKeySequence::Undo, "undo");
+  addEdit(tr("Redo"), QKeySequence::Redo, "redo");
   edit->addSeparator();
-  edit->addAction(tr("Cut"), QKeySequence::Cut);
-  edit->addAction(tr("Copy"), QKeySequence::Copy);
-  edit->addAction(tr("Paste"), QKeySequence::Paste);
-  edit->addAction(tr("Select All"), QKeySequence::SelectAll);
+  addEdit(tr("Cut"), QKeySequence::Cut, "cut");
+  addEdit(tr("Copy"), QKeySequence::Copy, "copy");
+  addEdit(tr("Paste"), QKeySequence::Paste, "paste");
+  addEdit(tr("Select All"), QKeySequence::SelectAll, "selectAll");
+  edit->addSeparator();
+  auto* settings = edit->addAction(tr("Settings…"), this, &MainWindow::showSettingsDialog);
+  settings->setObjectName(QStringLiteral("settingsAction"));
+  settings->setMenuRole(QAction::PreferencesRole);
+  settings->setShortcut(QKeySequence::Preferences);
+
+  auto* repositoryMenu = menuBar()->addMenu(tr("&Repository"));
+  createBranchAction_ = repositoryMenu->addAction(tr("New branch…"), this, [this] {
+    if (!repository_ || !busyOperations_.isEmpty()) return;
+    bool accepted = false;
+    const auto name = QInputDialog::getText(this, tr("New branch"), tr("Branch name"),
+                                           QLineEdit::Normal, {}, &accepted).trimmed();
+    if (accepted && !name.isEmpty()) controller_->createBranch(name);
+  });
+  createBranchAction_->setObjectName(QStringLiteral("createBranchAction"));
+  createBranchAction_->setShortcut(QKeySequence(tr("Ctrl+Shift+N")));
+  pullAction_ = repositoryMenu->addAction(tr("Pull origin"), this, [this] {
+    controller_->pullOrigin(currentAccountId());
+  });
+  pullAction_->setObjectName(QStringLiteral("pullAction"));
+  connect(repositoryMenu, &QMenu::aboutToShow, this, [this] {
+    createBranchAction_->setEnabled(repository_.has_value() && busyOperations_.isEmpty());
+    pullAction_->setEnabled(repository_ && repository_->hasUpstream && busyOperations_.isEmpty());
+  });
+  createBranchAction_->setEnabled(false);
+  pullAction_->setEnabled(false);
+
+  buildWorkflowMenus(file, repositoryMenu);
 
   auto* view = menuBar()->addMenu(tr("&View"));
   refreshAction_ = view->addAction(tr("Reload"), QKeySequence::Refresh, this, [this] {
@@ -172,7 +238,9 @@ void MainWindow::buildShell() {
   syncButton_->setEnabled(false);
   connect(syncButton_, &QPushButton::clicked, this, [this] {
     if (!repository_) return;
-    if (!repository_->hasUpstream || repository_->ahead > 0) controller_->pushOrigin(currentAccountId());
+    if (repository_->remote.isEmpty()) { showPublishDialog(); return; }
+    if (repository_->hasUpstream && repository_->behind > 0) controller_->pullOrigin(currentAccountId());
+    else if (!repository_->hasUpstream || repository_->ahead > 0) controller_->pushOrigin(currentAccountId());
     else controller_->fetchOrigin(currentAccountId());
   });
   accountButton_ = new QToolButton(actionRow);
@@ -187,6 +255,12 @@ void MainWindow::buildShell() {
   actions->addStretch();
   actions->addWidget(accountButton_);
   layout->addWidget(actionRow);
+
+  conflictButton_ = new QPushButton(root);
+  conflictButton_->setObjectName(QStringLiteral("conflictButton"));
+  conflictButton_->hide();
+  connect(conflictButton_, &QPushButton::clicked, this, &MainWindow::showConflicts);
+  layout->addWidget(conflictButton_);
 
   auto* workspace = new QSplitter(Qt::Horizontal, root);
   workspace->setChildrenCollapsible(false);
@@ -218,7 +292,10 @@ void MainWindow::buildShell() {
   connect(branchPicker_, &QComboBox::currentIndexChanged, this, [this](const int index) {
     if (!repository_ || index < 0) return;
     const auto branch = branchPicker_->itemText(index);
-    if (!branch.isEmpty() && branch != repository_->branch) controller_->switchBranch(branch);
+    if (!branch.isEmpty() && branch != repository_->branch) {
+      { const QSignalBlocker blocker(branchPicker_); branchPicker_->setCurrentText(repository_->branch); }
+      controller_->switchBranch(branch);
+    }
   });
   connect(contentTabs_, &QTabWidget::currentChanged, this, [this](const int index) {
     if (index == 1 && repository_ && historyModel_->rowCount() == 0) controller_->requestHistory();
@@ -250,6 +327,7 @@ QWidget* MainWindow::buildSidebar(QWidget* parent) {
   layout->addLayout(headingRow);
 
   repositoryFilter_ = new QLineEdit(sidebar);
+  repositoryFilter_->setObjectName(QStringLiteral("repositoryFilter"));
   repositoryFilter_->setPlaceholderText(tr("Filter repositories"));
   repositoryFilter_->setClearButtonEnabled(true);
   repositoryFilter_->setAccessibleName(tr("Filter repositories"));
@@ -365,7 +443,7 @@ QWidget* MainWindow::buildChangesPage(QWidget* parent) {
   auto* fileHeader = new QFrame(left);
   auto* fileHeaderLayout = new QHBoxLayout(fileHeader);
   fileHeaderLayout->setContentsMargins(10, 6, 10, 6);
-  selectAllFiles_ = new QCheckBox(tr("Select all changes"), fileHeader);
+  selectAllFiles_ = new SelectAllCheckBox(tr("Select all changes"), fileHeader);
   selectAllFiles_->setTristate(true);
   fileHeaderLayout->addWidget(selectAllFiles_);
   fileHeaderLayout->addStretch();
@@ -429,8 +507,12 @@ QWidget* MainWindow::buildChangesPage(QWidget* parent) {
     selectAllFiles_->setCheckState(changedFileModel_->aggregateCheckState());
     updateCommitAction();
   });
-  connect(changedFileList_, &QListView::clicked, this, [this](const QModelIndex& index) {
-    if (const auto* file = changedFileModel_->fileAt(index.row())) controller_->requestFileDiff(file->path);
+  connect(changedFileList_->selectionModel(), &QItemSelectionModel::currentChanged, this, [this](const QModelIndex& index) {
+    if (const auto* file = changedFileModel_->fileAt(index.row())) {
+      if (workingPreviewPath_ != file->path) workingDiff_->clearDiff();
+      workingPreviewPath_ = file->path;
+      controller_->requestFileDiff(file->path);
+    }
   });
   connect(commitSummary_, &QLineEdit::textChanged, this, &MainWindow::updateCommitAction);
   connect(commitButton_, &QPushButton::clicked, this, [this] {
@@ -467,6 +549,7 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   historyTitle_ = new QLabel(tr("Select a commit"), right);
   historyTitle_->setProperty("role", QStringLiteral("large"));
   historyTitle_->setWordWrap(true);
+  historyTitle_->setTextFormat(Qt::PlainText);
   copyHashButton_ = new QPushButton(tr("Copy hash"), right);
   copyHashButton_->setEnabled(false);
   openGitHubButton_ = new QPushButton(tr("Open on GitHub"), right);
@@ -477,9 +560,11 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   historyMetadata_ = new QLabel(right);
   historyMetadata_->setProperty("role", QStringLiteral("meta"));
   historyMetadata_->setWordWrap(true);
+  historyMetadata_->setTextFormat(Qt::PlainText);
   historyBody_ = new QLabel(right);
   historyBody_->setProperty("role", QStringLiteral("body"));
   historyBody_->setWordWrap(true);
+  historyBody_->setTextFormat(Qt::PlainText);
   commitFileModel_ = new CommitFileListModel(this);
   commitFileList_ = new QListView(right);
   commitFileList_->setObjectName(QStringLiteral("commitFileList"));
@@ -498,17 +583,23 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   splitter->setSizes({330, 820});
   splitter->setStretchFactor(1, 1);
 
+  connect(historyModel_, &QAbstractItemModel::modelAboutToBeReset, this, &MainWindow::clearCommitDetail);
   connect(historySearch_, &QLineEdit::textChanged, historyModel_, &HistoryCommitListModel::setSearch);
-  connect(historyList_, &QListView::clicked, this, [this](const QModelIndex& index) {
+  connect(historyList_->selectionModel(), &QItemSelectionModel::currentChanged, this, [this](const QModelIndex& index) {
+    clearCommitDetail();
     if (const auto* commit = historyModel_->commitAt(index.row())) controller_->requestCommitDetail(commit->fullHash);
   });
   connect(historyList_->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](const int value) {
     if (value >= historyList_->verticalScrollBar()->maximum() - 240) requestNextHistoryPage();
   });
-  connect(commitFileList_, &QListView::clicked, this, [this](const QModelIndex& index) {
+  connect(commitFileList_->selectionModel(), &QItemSelectionModel::currentChanged, this, [this](const QModelIndex& index) {
     const auto hash = currentCommitHash();
-    if (const auto* file = commitFileModel_->fileAt(index.row()); file && !hash.isEmpty())
+    if (const auto* file = commitFileModel_->fileAt(index.row()); file && !hash.isEmpty()) {
+      const auto key = hash + u':' + file->path;
+      if (commitPreviewKey_ != key) historyDiff_->clearDiff();
+      commitPreviewKey_ = key;
       controller_->requestCommitFileDiff(hash, file->path);
+    }
   });
   connect(copyHashButton_, &QPushButton::clicked, this, [this] {
     if (!commitDetail_) return;
@@ -524,11 +615,35 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
 }
 
 void MainWindow::connectController() {
+  connect(controller_, &RelayController::commitCreated, this, [this](const QString& path) {
+    commitDrafts_.remove(path);
+    if (repository_ && repository_->path == path) {
+      commitSummary_->clear();
+      commitDescription_->clear();
+    }
+  });
+  connect(controller_, &RelayController::commitUndone, this, [this](const QString& path, const QString& summary, const QString& description) {
+    if (repository_ && repository_->path == path) {
+      if (commitSummary_->text().isEmpty() && commitDescription_->toPlainText().isEmpty()) {
+        commitSummary_->setText(summary);
+        commitDescription_->setPlainText(description);
+      } else showNotice(tr("Commit undone. Your existing draft message was kept."));
+    } else if (!commitDrafts_.contains(path) || (commitDrafts_.value(path).first.isEmpty() && commitDrafts_.value(path).second.isEmpty())) {
+      commitDrafts_.insert(path, {summary, description});
+    }
+  });
   connect(controller_, &RelayController::stateChanged, this, &MainWindow::applyState);
   connect(controller_, &RelayController::currentRepositoryChanged, this, &MainWindow::applyRepository);
   connect(controller_, &RelayController::repositoryClosed, this, [this] {
+    if (repository_) commitDrafts_.insert(repository_->path, {commitSummary_->text(), commitDescription_->toPlainText()});
     repository_.reset();
-    commitDetail_.reset();
+    updateWorkflowActions();
+    commitSummary_->clear();
+    commitDescription_->clear();
+    clearCommitDetail();
+    createBranchAction_->setEnabled(false);
+    pullAction_->setEnabled(false);
+    branchPicker_->setEnabled(false);
     workspaceStack_->setCurrentIndex(0);
     repositoryButton_->setText(tr("Choose a repository"));
     branchPicker_->clear();
@@ -540,11 +655,12 @@ void MainWindow::connectController() {
     removeAction_->setEnabled(false);
     repositorySettingsButton_->setEnabled(false);
     syncButton_->setEnabled(false);
-    statusBar()->showMessage(tr("No repository open"));
+    updateStatus();
   });
-  connect(controller_, &RelayController::fileDiffReady, this,
-          [this](const QString& repositoryPath, const QString&, const QString& diff) {
-            if (repository_ && repository_->path == repositoryPath) workingDiff_->setDiff(diff);
+  connect(controller_, &RelayController::filePreviewReady, this,
+          [this](const QString& repositoryPath, const QString& path, const FilePreview& preview) {
+            const auto* selected = changedFileModel_->fileAt(changedFileList_->currentIndex().row());
+            if (repository_ && repository_->path == repositoryPath && selected && selected->path == path) workingDiff_->setPreview(preview);
           });
   connect(controller_, &RelayController::historyReady, this,
           [this](const QString& repositoryPath, const HistoryPage& page) {
@@ -556,6 +672,8 @@ void MainWindow::connectController() {
   connect(controller_, &RelayController::commitDetailReady, this,
           [this](const QString& repositoryPath, const CommitDetail& detail) {
             if (!repository_ || repository_->path != repositoryPath) return;
+            const auto* selectedCommit = historyModel_->commitAt(historyList_->currentIndex().row());
+            if (!selectedCommit || selectedCommit->fullHash != detail.fullHash) return;
             commitDetail_ = detail;
             historyTitle_->setText(detail.title);
             historyMetadata_->setText(tr("%1 <%2> · committed by %3 <%4> · %5")
@@ -563,15 +681,17 @@ void MainWindow::connectController() {
                      QLocale().toString(detail.committerDate.toLocalTime(), QLocale::ShortFormat)));
             historyBody_->setText(detail.body);
             commitFileModel_->setFiles(detail.files);
+            commitFileList_->setMaximumHeight(static_cast<int>(std::clamp<qsizetype>(detail.files.size() * 52 + 2, 52, 230)));
             copyHashButton_->setEnabled(true);
             openGitHubButton_->setEnabled(!githubCommitUrl(repository_->remote, detail.fullHash).isEmpty());
             historyDiff_->clearDiff();
-            if (!detail.files.isEmpty()) controller_->requestCommitFileDiff(detail.fullHash, detail.files.front().path);
+            if (!detail.files.isEmpty()) commitFileList_->setCurrentIndex(commitFileModel_->index(0));
           });
-  connect(controller_, &RelayController::commitFileDiffReady, this,
-          [this](const QString& repositoryPath, const QString& hash, const QString&, const QString& diff) {
-            if (repository_ && commitDetail_ && repository_->path == repositoryPath && commitDetail_->fullHash == hash)
-              historyDiff_->setDiff(diff);
+  connect(controller_, &RelayController::commitFilePreviewReady, this,
+          [this](const QString& repositoryPath, const QString& hash, const QString& path, const FilePreview& preview) {
+            const auto* selected = commitFileModel_->fileAt(commitFileList_->currentIndex().row());
+            if (repository_ && commitDetail_ && repository_->path == repositoryPath && commitDetail_->fullHash == hash && selected && selected->path == path)
+              historyDiff_->setPreview(preview);
           });
   connect(controller_, &RelayController::accountEmailsReady, this,
           [this](const QString& accountId, const QList<EmailChoice>& choices, const QString& current) {
@@ -588,6 +708,7 @@ void MainWindow::connectController() {
               controller_->setAccountEmail(accountId, dialog.email());
           });
   connect(controller_, &RelayController::loginProgress, this, [this](const GitHubLoginProgress& progress) {
+    if (loginCode_ && !progress.code.isEmpty()) loginCode_->setText(progress.code);
     if (!progress.code.isEmpty() && progress.code != lastOpenedDeviceCode_) {
       lastOpenedDeviceCode_ = progress.code;
       QApplication::clipboard()->setText(progress.code);
@@ -603,15 +724,54 @@ void MainWindow::connectController() {
     showNotice(result.message, !result.ok);
   });
   connect(controller_, &RelayController::busyChanged, this, [this](const QString& operation, const bool busy) {
-    if (busy) busyOperations_.insert(operation);
-    else busyOperations_.remove(operation);
+    if (operation == QStringLiteral("connect-account")) {
+      if (busy && !loginDialog_) {
+        lastOpenedDeviceCode_.clear();
+        loginDialog_ = new QDialog(this);
+        loginDialog_->setObjectName(QStringLiteral("loginDialog"));
+        loginDialog_->setWindowTitle(tr("Connect GitHub account"));
+        loginDialog_->setWindowModality(Qt::WindowModal);
+        auto* layout = new QVBoxLayout(loginDialog_);
+        auto* label = new QLabel(tr("Enter this code in your browser to connect your GitHub account."), loginDialog_);
+        label->setWordWrap(true);
+        layout->addWidget(label);
+        loginCode_ = new QLineEdit(loginDialog_);
+        loginCode_->setReadOnly(true);
+        loginCode_->setPlaceholderText(tr("Waiting for GitHub…"));
+        loginCode_->setAccessibleName(tr("GitHub device code"));
+        layout->addWidget(loginCode_);
+        auto* browser = new QPushButton(tr("Open GitHub in browser"), loginDialog_);
+        layout->addWidget(browser);
+        connect(browser, &QPushButton::clicked, loginDialog_, [] {
+          QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/login/device")));
+        });
+        auto* cancel = new QDialogButtonBox(QDialogButtonBox::Cancel, loginDialog_);
+        layout->addWidget(cancel);
+        connect(cancel, &QDialogButtonBox::rejected, loginDialog_, &QDialog::reject);
+        connect(loginDialog_, &QDialog::rejected, controller_, &RelayController::cancelAccountConnection);
+        loginDialog_->show();
+      } else if (!busy && loginDialog_) {
+        loginDialog_->accept();
+        loginDialog_->deleteLater();
+        loginDialog_ = nullptr;
+        loginCode_ = nullptr;
+      }
+    }
+    if (busy) ++busyOperations_[operation];
+    else if (busyOperations_.value(operation) <= 1) busyOperations_.remove(operation);
+    else --busyOperations_[operation];
+    branchPicker_->setEnabled(repository_.has_value() && busyOperations_.isEmpty());
+    createBranchAction_->setEnabled(repository_.has_value() && busyOperations_.isEmpty());
+    pullAction_->setEnabled(repository_ && repository_->hasUpstream && busyOperations_.isEmpty());
     syncButton_->setEnabled(repository_.has_value() && busyOperations_.isEmpty());
     commitButton_->setEnabled(commitButton_->isEnabled() && busyOperations_.isEmpty());
-    if (busy) statusBar()->showMessage(tr("Working: %1…").arg(operation));
-    else if (repository_) statusBar()->showMessage(tr("%1 — %2").arg(repository_->name, repository_->branch));
+    updateStatus();
     if (!busy && operation == QStringLiteral("accounts") && accountConnectionPending_)
       accountConnectionPending_ = false;
+    commitSummary_->setEnabled(!busyOperations_.contains(QStringLiteral("commit")) && !busyOperations_.contains(QStringLiteral("repository-action")));
+    commitDescription_->setEnabled(!busyOperations_.contains(QStringLiteral("commit")) && !busyOperations_.contains(QStringLiteral("repository-action")));
     updateCommitAction();
+    updateWorkflowActions();
   });
   connect(controller_, &RelayController::operationFailed, this,
           [this](const QString& operation, const QString& message) {
@@ -629,10 +789,29 @@ void MainWindow::applyState(const AppState& state) {
         });
     if (iterator != state.accounts.cend()) newlyConnected = iterator->id;
   }
+  const bool historyModeChanged = appState_.preferences.graphHistory != state.preferences.graphHistory;
   appState_ = state;
+  historyModel_->setGraphEnabled(state.preferences.graphHistory);
+  historySearch_->setPlaceholderText(state.preferences.graphHistory
+      ? tr("Filter loaded commits (graph hidden while filtering)") : tr("Search loaded history"));
+  if (historyModeChanged) {
+    historyModel_->clear();
+    clearCommitDetail();
+    if (repository_) controller_->requestHistory();
+  }
+  workingDiff_->setCodeFontSize(state.preferences.diffFontSize);
+  historyDiff_->setCodeFontSize(state.preferences.diffFontSize);
   repositoryModel_->setRepositories(state.repositories);
   repositoryModel_->setOrder(state.repositoryOrder, state.manualOrder);
   repositoryModel_->setPinnedAccountIds(state.repositoryAccounts);
+  if (repository_) {
+    for (int row = 0; row < repositoryModel_->rowCount(); ++row) {
+      if (repositoryModel_->repositoryAt(row)->path == repository_->path) {
+        repositoryList_->setCurrentIndex(repositoryModel_->index(row));
+        break;
+      }
+    }
+  }
   const QSignalBlocker orderBlocker(repositoryOrder_);
   for (int index = 0; index < repositoryOrder_->count(); ++index) {
     if (repositoryOrder_->itemData(index).toInt() == static_cast<int>(state.repositoryOrder.mode)) {
@@ -650,10 +829,10 @@ void MainWindow::applyState(const AppState& state) {
                                   : tr("No GitHub account connected"));
   rebuildAccountMenu();
   if (repository_) {
-    const auto* selected = accountNamed(state, currentAccountId());
-    commitIdentity_->setText(selected
-        ? tr("Committing as %1 <%2>").arg(selected->name, selected->email)
-        : tr("Connect an account before committing"));
+    const auto identity = controller_->commitIdentity();
+    commitIdentity_->setText(!identity.name.isEmpty() && !identity.email.isEmpty()
+        ? tr("Committing as %1 <%2>").arg(identity.name, identity.email)
+        : tr("Set your Git identity in Settings before committing"));
   }
   updateCommitAction();
   if (!newlyConnected.isEmpty()) {
@@ -667,6 +846,26 @@ void MainWindow::applyState(const AppState& state) {
 
 void MainWindow::applyRepository(const Repository& repository) {
   const auto sameRepository = repository_ && repository_->path == repository.path;
+  if (!sameRepository) {
+    if (repository_) commitDrafts_.insert(repository_->path, {commitSummary_->text(), commitDescription_->toPlainText()});
+    const auto draft = commitDrafts_.value(repository.path);
+    commitSummary_->setText(draft.first);
+    commitDescription_->setPlainText(draft.second);
+  }
+  const auto historyChanged = !sameRepository || repository_->branch != repository.branch ||
+      repository_->history.value(0).fullHash != repository.history.value(0).fullHash ||
+      repository_->historyRefState != repository.historyRefState;
+  if (historyChanged) {
+    historyModel_->clear();
+    historyDiff_->clearDiff();
+    commitFileModel_->setFiles({});
+    commitDetail_.reset();
+    historyTitle_->setText(tr("Select a commit"));
+    historyMetadata_->clear();
+    historyBody_->clear();
+    copyHashButton_->setEnabled(false);
+    openGitHubButton_->setEnabled(false);
+  }
   repository_ = repository;
   workspaceStack_->setCurrentIndex(1);
   repositoryButton_->setText(QStringLiteral("%1  ·  %2").arg(repository.name, repository.owner));
@@ -678,6 +877,8 @@ void MainWindow::applyRepository(const Repository& repository) {
     if (!repository.branches.contains(repository.branch)) branchPicker_->addItem(repository.branch);
     branchPicker_->setCurrentText(repository.branch);
   }
+  const auto* previousFile = changedFileModel_->fileAt(changedFileList_->currentIndex().row());
+  const QString selectedPath = sameRepository && previousFile ? previousFile->path : QString{};
   changedFileModel_->setFiles(repository.files,
                               sameRepository ? FileCheckPolicy::preserve : FileCheckPolicy::checkAll);
   {
@@ -691,13 +892,24 @@ void MainWindow::applyRepository(const Repository& repository) {
     commitFileModel_->setFiles({});
     commitDetail_.reset();
   }
-  if (!repository.files.isEmpty()) controller_->requestFileDiff(repository.files.front().path);
+  if (!repository.files.isEmpty()) {
+    int selectedRow = 0;
+    for (int row = 0; row < repository.files.size(); ++row) {
+      if (repository.files.at(row).path == selectedPath) { selectedRow = row; break; }
+    }
+    if (repository.files.at(selectedRow).path != selectedPath) workingDiff_->clearDiff();
+    changedFileList_->setCurrentIndex(changedFileModel_->index(selectedRow, 0));
+  } else workingDiff_->clearDiff();
   if (contentTabs_->currentIndex() == 1 && historyModel_->rowCount() == 0) controller_->requestHistory();
+  branchPicker_->setEnabled(busyOperations_.isEmpty());
+  createBranchAction_->setEnabled(busyOperations_.isEmpty());
+  pullAction_->setEnabled(repository.hasUpstream && busyOperations_.isEmpty());
   removeAction_->setEnabled(true);
   repositorySettingsButton_->setEnabled(true);
   syncButton_->setEnabled(busyOperations_.isEmpty());
-  statusBar()->showMessage(tr("%1 — %2").arg(repository.name, repository.branch));
+  updateStatus();
   updateSyncAction();
+  updateWorkflowActions();
   applyState(controller_->state());
 }
 
@@ -724,24 +936,45 @@ void MainWindow::rebuildAccountMenu() {
   accountMenu_->addAction(tr("Manage SSH identities…"), this, &MainWindow::showSshProfilesDialog);
 }
 
+void MainWindow::clearCommitDetail() {
+  commitDetail_.reset();
+  historyTitle_->setText(tr("Select a commit"));
+  historyMetadata_->clear();
+  historyBody_->clear();
+  commitFileModel_->setFiles({});
+  historyDiff_->clearDiff();
+  copyHashButton_->setEnabled(false);
+  openGitHubButton_->setEnabled(false);
+}
+
 void MainWindow::updateSyncAction() {
   if (!repository_) {
     syncButton_->setText(tr("Fetch origin"));
     syncButton_->setEnabled(false);
     return;
   }
-  if (!repository_->hasUpstream) syncButton_->setText(tr("Publish branch"));
+  if (repository_->remote.isEmpty()) syncButton_->setText(tr("Publish repository"));
+  else if (!repository_->hasUpstream) syncButton_->setText(tr("Publish branch"));
+  else if (repository_->behind > 0) syncButton_->setText(tr("Pull origin (%1)").arg(repository_->behind));
   else if (repository_->ahead > 0) syncButton_->setText(tr("Push origin (%1)").arg(repository_->ahead));
   else syncButton_->setText(repository_->behind > 0 ? tr("Fetch origin (%1)").arg(repository_->behind)
                                                    : tr("Fetch origin"));
 }
 
 void MainWindow::updateCommitAction() {
+  const auto identity = controller_->commitIdentity();
   const auto valid = repository_ && !commitSummary_->text().trimmed().isEmpty() &&
-                     changedFileModel_->checkedCount() > 0 && !currentAccountId().isEmpty() &&
-                     busyOperations_.isEmpty();
+                     changedFileModel_->checkedCount() > 0 && !identity.name.isEmpty() && !identity.email.isEmpty() &&
+                     busyOperations_.isEmpty() && repository_->pendingOperation.isEmpty() &&
+                     repository_->conflictedFiles.isEmpty();
   commitButton_->setEnabled(valid);
   commitButton_->setText(tr("Commit %1 selected file(s)").arg(changedFileModel_->checkedCount()));
+}
+
+void MainWindow::showSettingsDialog() {
+  SettingsDialog dialog(appState_.preferences, this);
+  connect(&dialog, &SettingsDialog::manageAccountsRequested, this, &MainWindow::showAccountsDialog);
+  if (dialog.exec() == QDialog::Accepted) controller_->setPreferences(dialog.preferences());
 }
 
 void MainWindow::openRepositoryDialog() {
@@ -795,6 +1028,7 @@ void MainWindow::showRepositoryAccountDialog() {
   dialog.setMinimumWidth(470);
   auto* layout = new QVBoxLayout(&dialog);
   auto* title = new QLabel(repository_->name, &dialog);
+  title->setTextFormat(Qt::PlainText);
   title->setProperty("role", QStringLiteral("title"));
   layout->addWidget(title);
   auto* explanation = new QLabel(
@@ -916,10 +1150,22 @@ void MainWindow::requestNextHistoryPage() {
                               historyModel_->anchor());
 }
 
+void MainWindow::updateStatus() {
+  if (noticeTimer_ && noticeTimer_->isActive()) return;
+  statusBar()->setStyleSheet({});
+  if (!busyOperations_.isEmpty())
+    statusBar()->showMessage(tr("Working: %1…").arg(busyOperations_.constBegin().key()));
+  else if (repository_)
+    statusBar()->showMessage(tr("%1 — %2").arg(repository_->name, repository_->branch));
+  else
+    statusBar()->showMessage(tr("No repository open"));
+}
+
 void MainWindow::showNotice(const QString& message, const bool error) {
   if (message.isEmpty()) return;
   statusBar()->setStyleSheet(error ? QStringLiteral("QStatusBar { color: #a54e43; }") : QString{});
-  statusBar()->showMessage(message, error ? 4400 : 2800);
+  noticeTimer_->start(error ? 4400 : 2800);
+  statusBar()->showMessage(message);
 }
 
 QString MainWindow::currentAccountId() const {

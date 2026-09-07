@@ -182,6 +182,12 @@ AppState appStateFromJson(const QJsonObject& object) {
   for (const auto& value : object.value(QStringLiteral("sshProfiles")).toArray())
     state.sshProfiles.append(sshProfileFromJson(value.toObject()));
   state.repositorySshProfiles = parseBindings(object.value(QStringLiteral("repositorySshProfiles")).toObject());
+  const auto preferences = object.value(QStringLiteral("preferences")).toObject();
+  state.preferences.refreshOnFocus = preferences.value(QStringLiteral("refreshOnFocus")).toBool(true);
+  state.preferences.diffFontSize = qBound(10, preferences.value(QStringLiteral("diffFontSize")).toInt(12), 24);
+  state.preferences.commitName = preferences.value(QStringLiteral("commitName")).toString();
+  state.preferences.commitEmail = preferences.value(QStringLiteral("commitEmail")).toString();
+  state.preferences.graphHistory = preferences.value(QStringLiteral("graphHistory")).toBool();
   return state;
 }
 
@@ -211,6 +217,13 @@ QJsonObject mergeAppStateIntoJson(const AppState& state, QJsonObject base) {
   base.insert(QStringLiteral("manualOrder"), manualOrder);
   base.insert(QStringLiteral("sshProfiles"), profiles);
   base.insert(QStringLiteral("repositorySshProfiles"), bindings(state.repositorySshProfiles));
+  auto preferences = base.value(QStringLiteral("preferences")).toObject();
+  preferences.insert(QStringLiteral("refreshOnFocus"), state.preferences.refreshOnFocus);
+  preferences.insert(QStringLiteral("diffFontSize"), state.preferences.diffFontSize);
+  preferences.insert(QStringLiteral("commitName"), state.preferences.commitName);
+  preferences.insert(QStringLiteral("commitEmail"), state.preferences.commitEmail);
+  preferences.insert(QStringLiteral("graphHistory"), state.preferences.graphHistory);
+  base.insert(QStringLiteral("preferences"), preferences);
   return base;
 }
 

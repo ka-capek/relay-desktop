@@ -88,7 +88,7 @@ QString styleSheet() {
       background: #f7f8f5;
       border-right: 1px solid #dfe3df;
     }
-    #contentTabs {
+    #contentTabs > QTabBar {
       min-height: 45px;
       max-height: 45px;
       background: #ffffff;

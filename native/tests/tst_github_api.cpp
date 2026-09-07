@@ -8,6 +8,15 @@ class GitHubApiTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void publicationPayloadIsExplicitAndValidated() {
+    const auto payload = relay::GitHubApi::newRepositoryPayload(QStringLiteral("example"), QStringLiteral("Description"), true);
+    QVERIFY(payload.value(QStringLiteral("private")).toBool());
+    QVERIFY(!payload.value(QStringLiteral("auto_init")).toBool());
+    QCOMPARE(payload.value(QStringLiteral("name")).toString(), QStringLiteral("example"));
+    QVERIFY_THROWS_EXCEPTION(std::runtime_error, relay::GitHubApi::newRepositoryPayload(QStringLiteral("../wrong"), {}, false));
+    QVERIFY_THROWS_EXCEPTION(std::runtime_error, relay::GitHubApi::newRepositoryPayload(QStringLiteral("valid"), QString(351, u'x'), false));
+  }
+
   void alwaysOffersNoreplyAndVerifiedEmails() {
     relay::Account account;
     account.githubId = 42;

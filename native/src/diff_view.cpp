@@ -31,6 +31,7 @@ class DiffDelegate final : public QStyledItemDelegate {
  public:
   explicit DiffDelegate(QFont font, QObject* parent)
       : QStyledItemDelegate(parent), font_(std::move(font)) {}
+  void setCodeFont(QFont font) { font_ = std::move(font); }
 
   void paint(QPainter* painter, const QStyleOptionViewItem& option,
              const QModelIndex& index) const override {
@@ -92,7 +93,7 @@ class DiffDelegate final : public QStyledItemDelegate {
   }
 
   QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override {
-    return {minimumTextWidth, lineHeight};
+    return {minimumTextWidth, std::max(lineHeight, QFontMetrics(font_).height() + 8)};
   }
 
  private:
@@ -147,11 +148,34 @@ DiffView::DiffView(QWidget* parent)
   rebuildSpansAndWidths();
 }
 
+void DiffView::setCodeFontSize(int pixels) {
+  pixels = qBound(10, pixels, 24);
+  if (codeFont_.pixelSize() == pixels) return;
+  codeFont_.setPixelSize(pixels);
+  static_cast<DiffDelegate*>(itemDelegate())->setCodeFont(codeFont_);
+  verticalHeader()->setDefaultSectionSize(std::max(lineHeight, QFontMetrics(codeFont_).height() + 8));
+  rebuildSpansAndWidths();
+}
+
 void DiffView::setDiff(QString diff) {
+  before_ = {};
+  after_ = {};
   clearSpans();
   model_->setDiff(std::move(diff));
   rebuildSpansAndWidths();
   scrollToTop();
+}
+
+void DiffView::setPreview(const FilePreview& preview) {
+  if (preview.before.isNull() && preview.after.isNull()) {
+    if (!before_.isNull() || !after_.isNull() || model_->diff() != preview.diff) setDiff(preview.diff);
+    return;
+  }
+  clearDiff();
+  before_ = preview.before;
+  after_ = preview.after;
+  horizontalScrollBar()->setRange(0, 0);
+  viewport()->update();
 }
 
 void DiffView::clearDiff() { setDiff({}); }
@@ -189,6 +213,26 @@ void DiffView::copySelection() {
 QSize DiffView::sizeHint() const { return {690, 360}; }
 
 void DiffView::paintEvent(QPaintEvent* event) {
+  if (!before_.isNull() || !after_.isNull()) {
+    QPainter painter(viewport());
+    painter.fillRect(viewport()->rect(), palette().base());
+    const int width = viewport()->width() / 2;
+    const auto draw = [&painter, this, width](const QImage& image, const QString& label, int column) {
+      const QRect area(column * width + 12, 42, width - 24, viewport()->height() - 60);
+      painter.setPen(palette().text().color());
+      painter.drawText(QRect(column * width + 12, 12, width - 24, 24), Qt::AlignCenter,
+          image.isNull() ? label + tr(" — absent") : tr("%1 — %2 × %3").arg(label).arg(image.width()).arg(image.height()));
+      if (image.isNull() || area.width() <= 0 || area.height() <= 0) return;
+      const auto size = image.size().scaled(area.size(), Qt::KeepAspectRatio);
+      const QRect target(area.center() - QPoint(size.width() / 2, size.height() / 2), size);
+      painter.fillRect(target, QColor(235, 235, 235));
+      painter.setRenderHint(QPainter::SmoothPixmapTransform);
+      painter.drawImage(target, image);
+    };
+    draw(before_, tr("Before"), 0);
+    draw(after_, tr("After"), 1);
+    return;
+  }
   QTableView::paintEvent(event);
   if (model_->rowCount() != 0) {
     return;
@@ -210,16 +254,21 @@ void DiffView::rebuildSpansAndWidths() {
   }
 
   int widest = 0;
+  int oldGutter = gutterWidth;
+  int newGutter = gutterWidth;
   const QFontMetrics metrics{codeFont_};
   for (int row = 0; row < model_->rowCount(); ++row) {
     widest = std::max(widest, metrics.horizontalAdvance(model_->textAt(row).toString()));
+    const auto line = model_->lineAt(row);
+    oldGutter = std::max(oldGutter, metrics.horizontalAdvance(line.oldLine) + 18);
+    newGutter = std::max(newGutter, metrics.horizontalAdvance(line.newLine) + 18);
   }
   const qint64 requestedWidth = static_cast<qint64>(widest) + 24;
   const int contentWidth = static_cast<int>(std::clamp<qint64>(
       requestedWidth, minimumTextWidth, static_cast<qint64>(QWIDGETSIZE_MAX)));
 
-  setColumnWidth(DiffModel::oldLineColumn, gutterWidth);
-  setColumnWidth(DiffModel::newLineColumn, gutterWidth);
+  setColumnWidth(DiffModel::oldLineColumn, oldGutter);
+  setColumnWidth(DiffModel::newLineColumn, newGutter);
   setColumnWidth(DiffModel::textColumn, contentWidth);
   copyAction_->setEnabled(selectionModel()->hasSelection());
   viewport()->update();

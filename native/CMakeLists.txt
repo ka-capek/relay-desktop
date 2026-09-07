@@ -27,6 +27,7 @@ set(RELAY_NATIVE_SOURCES
   src/dialogs.cpp
   src/github_api.cpp
   src/github_auth.cpp
+  src/git_workflows.cpp
   src/git_service.cpp
   src/item_delegates.cpp
   src/list_models.cpp
@@ -37,6 +38,7 @@ set(RELAY_NATIVE_SOURCES
   src/repository_order.cpp
   src/relay_application.cpp
   src/main_window.cpp
+  src/workflow_ui.cpp
   src/ssh_service.cpp
   src/theme.cpp
 )
@@ -45,7 +47,6 @@ qt_add_executable(relay_native
   MACOSX_BUNDLE
   WIN32
   src/main.cpp
-  ${RELAY_NATIVE_SOURCES}
   resources/resources.qrc
 )
 
@@ -60,6 +61,7 @@ elseif(WIN32)
 endif()
 
 add_library(relay_native_core STATIC ${RELAY_NATIVE_SOURCES})
+target_link_libraries(relay_native PRIVATE relay_native_core)
 
 foreach(target IN ITEMS relay_native relay_native_core)
   target_include_directories(${target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

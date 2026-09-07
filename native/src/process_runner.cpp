@@ -1,6 +1,7 @@
 #include "relay/process_runner.hpp"
 
 #include <algorithm>
+#include <QElapsedTimer>
 
 namespace relay {
 namespace {
@@ -17,9 +18,6 @@ void appendBounded(QByteArray& destination, const QByteArray& value, const qsize
   destination.append(value.first(std::min(remaining, value.size())));
 }
 
-QByteArray bounded(const QByteArray& value, const qsizetype maximum) {
-  return value.first(std::min(std::max<qsizetype>(0, maximum), value.size()));
-}
 
 }  // namespace
 
@@ -36,25 +34,44 @@ ProcessResult ProcessRunner::run(const ProcessRequest& request) {
   process.setProcessEnvironment(request.environment);
   if (!request.workingDirectory.isEmpty()) process.setWorkingDirectory(request.workingDirectory);
   process.setProcessChannelMode(QProcess::SeparateChannels);
-  process.start(QIODevice::ReadOnly);
+  process.start(QIODevice::ReadWrite);
 
   if (!process.waitForStarted()) {
     throw ProcessError(QStringLiteral("%1 could not start: %2").arg(request.program, process.errorString()));
   }
 
-  ProcessResult result;
-  if (!process.waitForFinished(request.timeoutMilliseconds)) {
-    process.kill();
-    process.waitForFinished();
-    result.standardOutput = bounded(process.readAllStandardOutput(), request.maximumOutputBytes);
-    result.standardError = bounded(process.readAllStandardError(), request.maximumOutputBytes);
-    throw ProcessError(QStringLiteral("%1 timed out.").arg(request.program), std::move(result));
-  }
+  if (!request.standardInput.isEmpty()) process.write(request.standardInput);
+  process.closeWriteChannel();
 
+  ProcessResult result;
+  QElapsedTimer elapsed;
+  elapsed.start();
+  const auto drain = [&] {
+    const auto output = process.readAllStandardOutput();
+    const auto error = process.readAllStandardError();
+    const auto used = result.standardOutput.size() + result.standardError.size();
+    const auto available = std::max<qsizetype>(0, request.maximumOutputBytes - used);
+    if (output.size() > available || error.size() > available - output.size()) {
+      process.kill();
+      process.waitForFinished(2000);
+      throw ProcessError(QStringLiteral("Process output exceeded the limit. Narrow the requested diff or history."));
+    }
+    result.standardOutput.append(output);
+    result.standardError.append(error);
+  };
+  while (process.state() != QProcess::NotRunning) {
+    process.waitForReadyRead(50);
+    drain();
+    if (request.timeoutMilliseconds >= 0 && elapsed.elapsed() >= request.timeoutMilliseconds &&
+        process.state() != QProcess::NotRunning) {
+      process.kill();
+      process.waitForFinished(2000);
+      throw ProcessError(QStringLiteral("%1 timed out.").arg(request.program), std::move(result));
+    }
+  }
+  drain();
   result.exitCode = process.exitCode();
   result.exitStatus = process.exitStatus();
-  result.standardOutput = bounded(process.readAllStandardOutput(), request.maximumOutputBytes);
-  result.standardError = bounded(process.readAllStandardError(), request.maximumOutputBytes);
   if (result.exitStatus != QProcess::NormalExit || result.exitCode != 0) {
     throw ProcessError(bestError(result, QStringLiteral("%1 exited with code %2.").arg(request.program).arg(result.exitCode)), result);
   }
@@ -112,7 +129,9 @@ void AsyncProcess::start(const ProcessRequest& request) {
   process_.setArguments(request.arguments);
   process_.setProcessEnvironment(request.environment);
   process_.setWorkingDirectory(request.workingDirectory);
-  process_.start(QIODevice::ReadOnly);
+  process_.start(QIODevice::ReadWrite);
+  if (!request.standardInput.isEmpty()) process_.write(request.standardInput);
+  process_.closeWriteChannel();
   if (request.timeoutMilliseconds > 0) timeout_.start(request.timeoutMilliseconds);
 }
 

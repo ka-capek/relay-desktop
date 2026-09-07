@@ -62,6 +62,35 @@ class ListModelsTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void graphPreservesEdgesAcrossPagesAndHidesOnFilter() {
+    const auto item = [](QString hash, QStringList parents) {
+      relay::HistoryCommit commit;
+      commit.fullHash = hash;
+      commit.title = hash;
+      commit.parents = parents;
+      return commit;
+    };
+    relay::HistoryCommitListModel model;
+    model.setGraphEnabled(true);
+    model.resetHistory({item(QStringLiteral("M"), {QStringLiteral("A"), QStringLiteral("B")}),
+                        item(QStringLiteral("A"), {QStringLiteral("R")})});
+    QCOMPARE(model.graphRowAt(0)->parents, QList<int>({0, 1}));
+    QCOMPARE(model.graphRowAt(1)->lane, 0);
+    QCOMPARE(model.graphRowAt(1)->passing.size(), 1);
+    static_cast<void>(model.appendCommits({item(QStringLiteral("B"), {QStringLiteral("R")}),
+                                         item(QStringLiteral("R"), {})}));
+    QCOMPARE(model.graphRowAt(0)->parents, QList<int>({0, 1}));
+    QCOMPARE(model.graphRowAt(2)->lane, 1);
+    QCOMPARE(model.graphRowAt(2)->parents, QList<int>{0});
+    QCOMPARE(model.graphRowAt(3)->lane, 0);
+    QVERIFY(model.graphRowAt(3)->parents.isEmpty());
+    model.setSearch(QStringLiteral("B"));
+    QCOMPARE(model.rowCount(), 1);
+    QVERIFY(!model.graphRowAt(0));
+    model.setSearch({});
+    QVERIFY(model.graphRowAt(0));
+  }
+
   void repositoryManualOrderAndNaturalTieBreak() {
     relay::RepositoryListModel model;
     model.setRepositories({

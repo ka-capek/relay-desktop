@@ -3,6 +3,7 @@
 #include "relay/process_runner.hpp"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -36,10 +37,10 @@ QString GitHubAuth::executable() const {
   const auto name = QStringLiteral("gh");
   const auto platform = QStringLiteral("mac-arm64");
 #endif
-  const auto bundled = context_.packaged
-      ? QDir(context_.resourcesRoot).filePath(QStringLiteral("gh/%1").arg(name))
-      : QDir(context_.sourceRoot).filePath(QStringLiteral("runtime/gh/%1/%2").arg(platform, name));
-  return QFileInfo::exists(bundled) ? bundled : name;
+  const auto bundled = QDir(context_.resourcesRoot).filePath(QStringLiteral("gh/%1").arg(name));
+  if (QFileInfo(bundled).isFile()) return bundled;
+  const auto development = QDir(context_.sourceRoot).filePath(QStringLiteral("runtime/gh/%1/%2").arg(platform, name));
+  return !context_.packaged && QFileInfo(development).isFile() ? development : name;
 }
 
 QProcessEnvironment GitHubAuth::environment(const bool interactive) const {
@@ -57,19 +58,26 @@ QProcessEnvironment GitHubAuth::environment(const bool interactive) const {
 QList<AuthenticatedAccount> GitHubAuth::accountsFromStatus(const QByteArray& json) {
   QJsonParseError error;
   const auto document = QJsonDocument::fromJson(json, &error);
-  if (error.error != QJsonParseError::NoError || !document.isObject()) return {};
+  if (error.error != QJsonParseError::NoError || !document.isObject() ||
+      !document.object().value(QStringLiteral("hosts")).isObject())
+    throw std::runtime_error("GitHub CLI returned an invalid account list. Existing accounts have been kept.");
   const auto hostValue = document.object().value(QStringLiteral("hosts"))
                              .toObject().value(QString::fromLatin1(kGitHubHost));
   QJsonArray accounts;
   if (hostValue.isArray()) accounts = hostValue.toArray();
   else if (hostValue.isObject()) accounts.append(hostValue.toObject());
+  else if (!hostValue.isUndefined() && !hostValue.isNull())
+    throw std::runtime_error("GitHub CLI returned an invalid account list. Existing accounts have been kept.");
 
   QList<AuthenticatedAccount> result;
   for (const auto& entry : accounts) {
     const auto object = entry.toObject();
     const auto handle = object.value(QStringLiteral("login")).toString().trimmed();
     const auto state = object.value(QStringLiteral("state")).toString(QStringLiteral("success"));
-    if (handle.isEmpty() || state == QStringLiteral("failure")) continue;
+    if (state == QStringLiteral("failure"))
+      throw std::runtime_error("A GitHub account needs authentication. Sign in again; existing account settings have been kept.");
+    if (handle.isEmpty())
+      throw std::runtime_error("GitHub CLI returned an incomplete account. Existing accounts have been kept.");
     result.append({handle,
                    object.value(QStringLiteral("active")).toBool(),
                    state,
@@ -84,11 +92,17 @@ QList<AuthenticatedAccount> GitHubAuth::authenticatedAccounts() const {
                           QStringLiteral("--hostname"), QString::fromLatin1(kGitHubHost),
                           QStringLiteral("--json"), QStringLiteral("hosts")}};
   request.environment = environment();
+  // A missing CLI, corrupt output, or expired account is not a logout.
+  // Preserve Relay's account metadata by failing synchronization explicitly.
+  QByteArray output;
   try {
-    return accountsFromStatus(ProcessRunner::run(request).standardOutput);
+    output = ProcessRunner::run(request).standardOutput;
   } catch (const ProcessError& error) {
-    return accountsFromStatus(error.result().standardOutput);
+    output = error.result().standardOutput;
+    if (output.isEmpty())
+      throw std::runtime_error("GitHub accounts could not be read. Check that GitHub CLI is installed and sign in again.");
   }
+  return accountsFromStatus(output);
 }
 
 QString GitHubAuth::accountToken(const QString& handle) const {
@@ -139,7 +153,8 @@ GitHubLoginProgress GitHubAuth::loginProgressFromOutput(const QString& combinedO
           false};
 }
 
-void GitHubAuth::login(const std::function<void(const GitHubLoginProgress&)>& onProgress) const {
+void GitHubAuth::login(const std::function<void(const GitHubLoginProgress&)>& onProgress,
+                       const std::shared_ptr<std::atomic_bool>& canceled) const {
   QProcess process;
   process.setProgram(executable());
   process.setArguments({QStringLiteral("auth"), QStringLiteral("login"), QStringLiteral("--hostname"),
@@ -157,7 +172,14 @@ void GitHubAuth::login(const std::function<void(const GitHubLoginProgress&)>& on
   process.closeWriteChannel();
 
   QString combined;
+  QElapsedTimer elapsed;
+  elapsed.start();
   while (process.state() != QProcess::NotRunning) {
+    if ((canceled && canceled->load()) || elapsed.elapsed() > 15 * 60 * 1000) {
+      process.kill();
+      process.waitForFinished(2000);
+      throw std::runtime_error(canceled && canceled->load() ? "GitHub sign-in canceled." : "GitHub sign-in timed out. Try again.");
+    }
     process.waitForReadyRead(100);
     const auto latest = cleanOutput(QString::fromUtf8(process.readAllStandardOutput()) +
                                     QString::fromUtf8(process.readAllStandardError()));
@@ -170,7 +192,7 @@ void GitHubAuth::login(const std::function<void(const GitHubLoginProgress&)>& on
   const auto finalOutput = cleanOutput(QString::fromUtf8(process.readAllStandardError()) +
                                        QString::fromUtf8(process.readAllStandardOutput()));
   if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-    const auto detail = lastNonEmptyLine(finalOutput);
+    const auto detail = lastNonEmptyLine(finalOutput.isEmpty() ? combined : finalOutput);
     throw std::runtime_error((detail.isEmpty()
                                   ? QStringLiteral("GitHub CLI exited with code %1.").arg(process.exitCode())
                                   : detail).toStdString());

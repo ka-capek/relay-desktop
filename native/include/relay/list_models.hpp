@@ -120,6 +120,14 @@ class ChangedFileListModel final : public QAbstractListModel {
   QSet<QString> checkedPaths_;
 };
 
+struct HistoryGraphRow {
+  int lane{};
+  int width{};
+  bool incoming{};
+  QList<QPair<int, int>> passing;
+  QList<int> parents;
+};
+
 class HistoryCommitListModel final : public QAbstractListModel {
  public:
   enum Role {
@@ -150,6 +158,8 @@ class HistoryCommitListModel final : public QAbstractListModel {
   [[nodiscard]] qsizetype appendPage(const HistoryPage& page);
   void clear();
   void setSearch(QString search);
+  void setGraphEnabled(bool enabled);
+  [[nodiscard]] const HistoryGraphRow* graphRowAt(int row) const;
   void setPagingState(QString anchor, bool endOfHistory);
 
   [[nodiscard]] const HistoryCommit* commitAt(int row) const noexcept;
@@ -162,7 +172,11 @@ class HistoryCommitListModel final : public QAbstractListModel {
   [[nodiscard]] bool matchesSearch(const HistoryCommit& commit) const;
   [[nodiscard]] QString dayLabel(const HistoryCommit& commit) const;
   void rebuildVisible();
+  void appendGraph(const HistoryCommit& commit);
 
+  bool graphEnabled_{};
+  QStringList graphLanes_;
+  QList<HistoryGraphRow> graphRows_;
   QList<HistoryCommit> commits_;
   QList<int> visibleIndices_;
   QSet<QString> hashes_;

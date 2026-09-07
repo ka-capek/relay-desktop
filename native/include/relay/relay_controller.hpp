@@ -4,12 +4,14 @@
 #include "relay/github_api.hpp"
 
 #include <QFutureWatcher>
+#include <QException>
 #include <QObject>
 #include <QString>
 #include <QStringList>
 #include <QtConcurrentRun>
 
 #include <functional>
+#include <atomic>
 #include <memory>
 
 namespace relay {
@@ -49,12 +51,15 @@ class RelayController final : public QObject {
 
   [[nodiscard]] const AppState& state() const noexcept;
   [[nodiscard]] const Repository* currentRepository() const noexcept;
+  [[nodiscard]] Account commitIdentity() const;
   [[nodiscard]] QString resolvedAccountId(const QString& repositoryPath) const;
 
  public slots:
   void start();
+  void setPreferences(relay::Preferences preferences);
   void synchronizeAccounts();
   void connectAccount();
+  void cancelAccountConnection();
   void setActiveAccount(const QString& accountId);
   void removeAccount(const QString& accountId);
   void requestGitHubRepositories(const QString& accountId = {});
@@ -72,6 +77,12 @@ class RelayController final : public QObject {
               const QString& accountId = {});
   void fetchOrigin(const QString& accountId = {});
   void pushOrigin(const QString& accountId = {});
+  void pullOrigin(const QString& accountId = {});
+  void executeRepositoryAction(relay::RepositoryAction action, const QString& target = {},
+                               const QStringList& paths = {});
+  void createLocalRepository(const QString& destinationPath);
+  void publishRepository(const QString& name, const QString& description, bool isPrivate, const QString& accountId = {});
+  void createBranch(const QString& branch);
   void switchBranch(const QString& branch);
   void cloneRepository(const QString& remoteUrl, const QString& parentPath,
                        const QString& repositoryName, const QString& accountId = {},
@@ -93,6 +104,10 @@ class RelayController final : public QObject {
   void stateChanged(relay::AppState state);
   void currentRepositoryChanged(relay::Repository repository);
   void repositoryClosed();
+  void commitCreated(QString repositoryPath);
+  void commitUndone(QString repositoryPath, QString summary, QString description);
+  void filePreviewReady(QString repositoryPath, QString filePath, relay::FilePreview preview);
+  void commitFilePreviewReady(QString repositoryPath, QString hash, QString filePath, relay::FilePreview preview);
   void fileDiffReady(QString repositoryPath, QString filePath, QString diff);
   void historyReady(QString repositoryPath, relay::HistoryPage page);
   void commitDetailReady(QString repositoryPath, relay::CommitDetail detail);
@@ -109,20 +124,47 @@ class RelayController final : public QObject {
 
  private:
   template <typename Result, typename Work, typename Completion>
-  void runAsync(QString operation, Work&& work, Completion&& completion) {
+  void runAsync(QString operation, Work&& work, Completion&& completion,
+                std::function<bool()> isCurrent = {}) {
+    const bool repositoryMutation = QStringList{QStringLiteral("commit"), QStringLiteral("fetch"),
+        QStringLiteral("push"), QStringLiteral("pull"), QStringLiteral("switch-branch"),
+        QStringLiteral("create-branch"), QStringLiteral("repository-action"), QStringLiteral("publish-repository"), QStringLiteral("clone")}.contains(operation);
+    const bool accountMutation = QStringList{QStringLiteral("connect-account"),
+        QStringLiteral("active-account"), QStringLiteral("remove-account")}.contains(operation);
+    if ((repositoryMutation && (repositoryMutationActive_ || accountMutationActive_)) ||
+        (accountMutation && (accountMutationActive_ || repositoryMutationActive_))) {
+      emit operationFailed(operation, QStringLiteral("Wait for the current operation to finish."));
+      return;
+    }
+    if (repositoryMutation) { repositoryMutationActive_ = true; repositoryMutationOperation_ = operation; }
+    if (accountMutation) { accountMutationActive_ = true; ++accountGeneration_; }
     emit busyChanged(operation, true);
     auto* watcher = new QFutureWatcher<Result>(this);
     connect(watcher, &QFutureWatcher<Result>::finished, this,
             [this, watcher, operation = std::move(operation),
-             completion = std::forward<Completion>(completion)]() mutable {
+             completion = std::forward<Completion>(completion),
+             isCurrent = std::move(isCurrent), repositoryMutation, accountMutation]() mutable {
               try {
-                completion(watcher->future().result());
+                // Check before retrieving the result: stale failures must not
+                // replace the state of a newer request either.
+                if (!isCurrent || isCurrent()) {
+                  try {
+                    completion(watcher->future().result());
+                  } catch (const QUnhandledException& error) {
+                    // QtConcurrent wraps standard exceptions. Preserve the
+                    // service's actionable message across the worker boundary.
+                    if (error.exception()) std::rethrow_exception(error.exception());
+                    throw;
+                  }
+                }
               } catch (const std::exception& error) {
                 emit operationFailed(operation, QString::fromUtf8(error.what()));
               } catch (...) {
                 emit operationFailed(operation, QStringLiteral("The operation failed."));
               }
               watcher->deleteLater();
+              if (repositoryMutation) { repositoryMutationActive_ = false; repositoryMutationOperation_.clear(); }
+              if (accountMutation) accountMutationActive_ = false;
               emit busyChanged(operation, false);
             });
     watcher->setFuture(QtConcurrent::run(std::forward<Work>(work)));
@@ -148,8 +190,15 @@ class RelayController final : public QObject {
   std::shared_ptr<AvatarCache> avatars_;
   std::shared_ptr<SshService> ssh_;
   AppState state_;
+  AppState persistedState_;
+  bool repositoryMutationActive_{};
+  QString repositoryMutationOperation_;
+  bool accountMutationActive_{};
+  std::shared_ptr<std::atomic_bool> loginCanceled_{std::make_shared<std::atomic_bool>(false)};
   std::unique_ptr<Repository> currentRepository_;
   quint64 accountGeneration_{};
+  quint64 accountEmailsGeneration_{};
+  quint64 githubRepositoriesGeneration_{};
   quint64 repositoryGeneration_{};
   quint64 diffGeneration_{};
   quint64 historyGeneration_{};

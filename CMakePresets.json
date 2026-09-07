@@ -1,5 +1,5 @@
 {
-  "version": 10,
+  "version": 8,
   "cmakeMinimumRequired": {
     "major": 3,
     "minor": 30,
@@ -28,6 +28,7 @@
       },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "/opt/homebrew/opt/llvm@20/bin/clang++",
         "CMAKE_OSX_ARCHITECTURES": "arm64",
         "CMAKE_PREFIX_PATH": "/opt/homebrew"
       }
@@ -55,7 +56,10 @@
         "strategy": "external"
       },
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "$penv{ProgramFiles}/LLVM/bin/clang++.exe",
+        "CMAKE_CXX_COMPILER_TARGET": "x86_64-pc-windows-msvc",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
       }
     },
     {

@@ -333,7 +333,33 @@ void HistoryCommitItemDelegate::paint(QPainter* painter,
     painter->fillRect(QRect{commitRect.left(), commitRect.top(), 3, commitRect.height()}, token.green);
   }
 
-  const int left = commitRect.left() + 13;
+  const auto* model = dynamic_cast<const HistoryCommitListModel*>(index.model());
+  const auto* graph = model ? model->graphRowAt(index.row()) : nullptr;
+  int graphWidth = 0;
+  if (graph) {
+    graphWidth = graph->width * 16 + 12;
+    const auto x = [&commitRect](int lane) { return commitRect.left() + 12 + lane * 16; };
+    const auto y = commitRect.center().y();
+    painter->setRenderHint(QPainter::Antialiasing);
+    const auto line = [painter](QPointF start, QPointF end, int lane) {
+      const QColor colors[]{QColor{0x36, 0x80, 0x60}, QColor{0x68, 0x70, 0xb0}, QColor{0xbf, 0x79, 0x4d}, QColor{0x45, 0x86, 0xa6}, QColor{0xa6, 0x61, 0x86}};
+      painter->setPen(QPen(colors[lane % 5], 2.0));
+      QPainterPath path(start);
+      const qreal middle = (start.y() + end.y()) / 2.0;
+      path.cubicTo(QPointF(start.x(), middle), QPointF(end.x(), middle), end);
+      painter->drawPath(path);
+    };
+    for (const auto& edge : graph->passing)
+      line(QPointF(x(edge.first), commitRect.top()), QPointF(x(edge.second), commitRect.bottom() + 1), edge.first);
+    if (graph->incoming) line(QPointF(x(graph->lane), commitRect.top()), QPointF(x(graph->lane), y), graph->lane);
+    for (const auto parent : graph->parents)
+      line(QPointF(x(graph->lane), y), QPointF(x(parent), commitRect.bottom() + 1), parent);
+    painter->setPen(QPen(token.green, 2.0));
+    painter->setBrush(background);
+    painter->drawEllipse(QPointF(x(graph->lane), y), 4, 4);
+    painter->setBrush(Qt::NoBrush);
+  }
+  const int left = commitRect.left() + 13 + graphWidth;
   const QRect authorRect{commitRect.right() - 39, commitRect.top() + 12, 26, 26};
   const int right = authorRect.left() - 10;
   const QFont titleFont = rowFont(option, theme::Metrics::textBody, QFont::DemiBold);
@@ -387,7 +413,9 @@ QSize HistoryCommitItemDelegate::sizeHint(const QStyleOptionViewItem& option,
                                           const QModelIndex& index) const {
   const int dayHeight = index.data(HistoryCommitListModel::startsDayGroupRole).toBool() ? 30 : 0;
   const int refsHeight = index.data(HistoryCommitListModel::refsRole).toStringList().isEmpty() ? 0 : 22;
-  return {option.rect.width(), dayHeight + 52 + refsHeight};
+  const auto* model = dynamic_cast<const HistoryCommitListModel*>(index.model());
+  const auto* graph = model ? model->graphRowAt(index.row()) : nullptr;
+  return {graph ? std::max(option.rect.width(), graph->width * 16 + 280) : option.rect.width(), dayHeight + 52 + refsHeight};
 }
 
 CommitFileItemDelegate::CommitFileItemDelegate(QObject* parent)
