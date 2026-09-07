@@ -368,7 +368,9 @@ with the same controller/service boundary as existing operations.
 
 Windows CI uses aqt's `--external` 7-Zip backend: py7zr rejected the Qt
 `modules/SvgWidgets.json` link during parallel SDK extraction in run
-34117355064. Keep download verification and fail if 7-Zip is unavailable.
+34117355064. Run extraction sequentially with `aqt-windows.ini` and precreate
+the SDK directory: parallel 7-Zip workers also raced creating that directory
+in run 34117737965. Keep download verification and fail if 7-Zip is unavailable.
 
 ### 5.5 Native themes and graph colors
 

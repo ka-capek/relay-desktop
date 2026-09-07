@@ -28,6 +28,9 @@ def main():
 
     QtArchives._arch_ext = extension
     destination = Path(os.environ["RUNNER_TEMP"]) / "relay-qt"
+    root = destination / "6.11.1" / "msvc2022_64"
+    root.mkdir(parents=True, exist_ok=True)
+    settings = Path(__file__).with_name("aqt-windows.ini")
     # py7zr intermittently rejects Qt's modules/SvgWidgets.json link while
     # packages are being extracted together. Use aqt's supported 7-Zip backend.
     sevenzip = shutil.which("7z")
@@ -39,10 +42,9 @@ def main():
         raise RuntimeError("Install 7-Zip before preparing the Windows Qt SDK.")
     result = Cli().run(["install-qt", "windows", "desktop", "6.11.1",
                         "win64_msvc2022_64", "--outputdir", str(destination),
-                        "--external", sevenzip])
+                        "--external", sevenzip, "--config", str(settings)])
     if result:
         raise SystemExit(result)
-    root = destination / "6.11.1" / "msvc2022_64"
     if not (root / "lib/cmake/Qt6/Qt6Config.cmake").is_file():
         raise RuntimeError(f"Qt installation is incomplete: {root}")
     with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
