@@ -86,7 +86,13 @@ jobs:
           if (!(Test-Path $ucrt)) { throw "Missing SDK debug runtime: $ucrt" }
           Copy-Item $ucrt $build
           Copy-Item "$env:QT_ROOT_DIR/plugins/platforms/qoffscreend.dll" "$build/platforms/"
-          & "$build/tst_domain.exe" -functions
+          & mt.exe "-inputresource:$build/tst_domain.exe;#1" "-out:$build/test.manifest"
+          Get-Content "$build/test.manifest"
+          try { & "$build/tst_domain.exe" -functions }
+          catch {
+            Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='SideBySide'} -MaxEvents 3 | Format-List Message
+            throw
+          }
           if ($LASTEXITCODE -ne 0) { throw "Windows test launch failed: $LASTEXITCODE" }
       - name: Test
         env:
