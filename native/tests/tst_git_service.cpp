@@ -385,9 +385,9 @@ class GitServiceTest final : public QObject {
   void preservesUnusualPathsInStatusHistoryAndSelection() {
     QTemporaryDir root;
     initRepository(root.path());
-    QStringList names{QStringLiteral("name -> suffix.txt"), QString::fromUtf8("žluťoučký.txt"), QStringLiteral(" space .txt")};
+    QStringList names{QStringLiteral("-dash [brackets].txt"), QString::fromUtf8("žluťoučký.txt"), QStringLiteral(" space .txt")};
 #ifndef Q_OS_WIN
-    names.append({QStringLiteral("tab\tfile.txt"), QStringLiteral("line\nfile.txt"),
+    names.append({QStringLiteral("name -> suffix.txt"), QStringLiteral("tab\tfile.txt"), QStringLiteral("line\nfile.txt"),
                   QStringLiteral("quote\"file.txt"), QStringLiteral(":(glob)*")});
 #endif
     for (const auto& name : names) writeFile(root.path() + u'/' + name, QByteArrayLiteral("initial\n"));

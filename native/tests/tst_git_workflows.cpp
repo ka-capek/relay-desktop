@@ -39,6 +39,7 @@ void init(const QString& root) {
   git(root, {QStringLiteral("init"), QStringLiteral("-b"), QStringLiteral("main")});
   git(root, {QStringLiteral("config"), QStringLiteral("user.name"), identity.name});
   git(root, {QStringLiteral("config"), QStringLiteral("user.email"), identity.email});
+  git(root, {QStringLiteral("config"), QStringLiteral("core.autocrlf"), QStringLiteral("false")});
   write(root, QStringLiteral("file.txt"), "base\n");
   commit(root, QStringLiteral("initial"));
 }
@@ -112,6 +113,18 @@ class GitWorkflowsTest final : public QObject {
     service.performAction(root, RepositoryAction::dropStash, hash);
     QVERIFY(service.readRepository(root).stashes.isEmpty());
     QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.performAction(root, RepositoryAction::dropStash, hash));
+  }
+
+  void stashRestoreRespectsConfiguredWindowsLineEndings() {
+    QTemporaryDir dir; const auto root = dir.path(); init(root);
+    git(root, {QStringLiteral("config"), QStringLiteral("core.autocrlf"), QStringLiteral("true")});
+    write(root, QStringLiteral("file.txt"), "modified\r\n");
+    relay::GitService service;
+    service.performAction(root, RepositoryAction::stash);
+    const auto state = service.readRepository(root);
+    QCOMPARE(state.stashes.size(), 1);
+    service.performAction(root, RepositoryAction::applyStash, state.stashes.first().hash);
+    QCOMPARE(read(root, QStringLiteral("file.txt")), QByteArray("modified\r\n"));
   }
 
   void discardIsSelectiveAndRecoverable() {
