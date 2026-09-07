@@ -103,6 +103,7 @@ class MainWindow final : public QMainWindow {
   QLabel* commitIdentity_{};
   QPushButton* commitButton_{};
   QLineEdit* historySearch_{};
+  QComboBox* historyMode_{};
   QLabel* historyTitle_{};
   QLabel* historyMetadata_{};
   QLabel* historyBody_{};

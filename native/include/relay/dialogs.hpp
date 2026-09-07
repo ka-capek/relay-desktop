@@ -16,6 +16,7 @@ class QPushButton;
 class QStackedWidget;
 class QTabWidget;
 class QSpinBox;
+class QPlainTextEdit;
 
 namespace relay {
 
@@ -32,6 +33,8 @@ class SettingsDialog final : public QDialog {
   QLineEdit* commitName_{};
   QLineEdit* commitEmail_{};
   QCheckBox* graphHistory_{};
+  QComboBox* themeId_{};
+  QPlainTextEdit* themeJson_{};
 };
 
 enum class CloneSource { github, url };

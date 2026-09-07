@@ -287,7 +287,7 @@ void MainWindow::showConflicts() {
   error->setObjectName(QStringLiteral("conflictError"));
   error->setTextFormat(Qt::PlainText);
   error->setWordWrap(true);
-  error->setStyleSheet(QStringLiteral("color: #a54e43"));
+  error->setProperty("role", QStringLiteral("error"));
   layout->addWidget(error);
   connect(controller_, &RelayController::operationFailed, &dialog, [error](const QString& operation, const QString& message) {
     if (operation == QStringLiteral("repository-action")) error->setText(message);

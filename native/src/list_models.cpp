@@ -563,6 +563,7 @@ void HistoryCommitListModel::resetHistory(QList<HistoryCommit> commits, QString 
   commits_.clear();
   graphRows_.clear();
   graphLanes_.clear();
+  graphColors_.clear();
   visibleIndices_.clear();
   hashes_.clear();
   anchor_ = std::move(anchor);
@@ -637,6 +638,7 @@ void HistoryCommitListModel::setGraphEnabled(bool enabled) {
   graphEnabled_ = enabled;
   graphRows_.clear();
   graphLanes_.clear();
+  graphColors_.clear();
   if (enabled) for (const auto& commit : commits_) appendGraph(commit);
   endResetModel();
 }
@@ -649,11 +651,23 @@ const HistoryGraphRow* HistoryCommitListModel::graphRowAt(int row) const {
 void HistoryCommitListModel::appendGraph(const HistoryCommit& commit) {
   if (!graphEnabled_) return;
   const auto before = graphLanes_;
+  const auto availableColor = [this] {
+    QSet<int> used;
+    for (const int color : graphColors_) used.insert(color);
+    int color = 0;
+    while (used.contains(color)) ++color;
+    return color;
+  };
+  if (!graphColors_.contains(commit.fullHash)) graphColors_.insert(commit.fullHash, availableColor());
+  const int color = graphColors_.value(commit.fullHash);
   auto lane = graphLanes_.indexOf(commit.fullHash);
   const bool incoming = lane >= 0;
   if (lane < 0) { lane = graphLanes_.size(); graphLanes_.append(commit.fullHash); }
   graphLanes_[lane].clear();
+  bool firstParent = true;
   for (const auto& parent : commit.parents) {
+    if (!graphColors_.contains(parent)) graphColors_.insert(parent, firstParent ? color : availableColor());
+    firstParent = false;
     if (graphLanes_.contains(parent)) continue;
     const auto empty = graphLanes_.indexOf(QString{});
     if (empty < 0) graphLanes_.append(parent);
@@ -666,11 +680,18 @@ void HistoryCommitListModel::appendGraph(const HistoryCommit& commit) {
   row.lane = static_cast<int>(lane);
   row.width = static_cast<int>(std::max({before.size(), graphLanes_.size(), lane + 1}));
   row.incoming = incoming;
+  row.color = color;
   for (qsizetype index = 0; index < before.size(); ++index) {
-    if (before.at(index) != commit.fullHash)
+    if (before.at(index) != commit.fullHash) {
       row.passing.append({static_cast<int>(index), destinations.value(before.at(index), -1)});
+      row.passingColors.append(graphColors_.value(before.at(index)));
+    }
   }
-  for (const auto& parent : commit.parents) row.parents.append(destinations.value(parent, -1));
+  for (const auto& parent : commit.parents) {
+    row.parents.append(destinations.value(parent, -1));
+    row.parentColors.append(row.parentColors.isEmpty() ? color : graphColors_.value(parent));
+  }
+  graphColors_.remove(commit.fullHash);
   graphRows_.append(std::move(row));
 }
 

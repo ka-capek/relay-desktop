@@ -62,10 +62,18 @@ QString elided(const QString& text, const QFont& font, int width) {
   return QFontMetrics{font}.elidedText(text, Qt::ElideRight, std::max(0, width));
 }
 
-void drawRepositoryGlyph(QPainter& painter, const QRect& rect) {
+QColor identityColor(const QString& value) {
+  quint32 hash = 2166136261U;
+  for (const auto character : value) hash = (hash ^ character.unicode()) * 16777619U;
+  const auto& token = theme::colors();
+  const QColor accents[]{token.avatarBlue, token.avatarViolet, token.avatarCoral};
+  return accents[hash % 3];
+}
+
+void drawRepositoryGlyph(QPainter& painter, const QRect& rect, const QColor& color) {
   painter.save();
   painter.setRenderHint(QPainter::Antialiasing);
-  QPen pen{QColor{0x5d, 0x6d, 0x65}};
+  QPen pen{color};
   pen.setWidthF(1.5);
   pen.setJoinStyle(Qt::RoundJoin);
   painter.setPen(pen);
@@ -81,7 +89,7 @@ void drawRepositoryGlyph(QPainter& painter, const QRect& rect) {
 
 void drawBottomLine(QPainter& painter, const QRect& rect) {
   painter.save();
-  painter.setPen(QColor{0xf0, 0xf2, 0xef});
+  painter.setPen(theme::colors().soft);
   painter.drawLine(rect.bottomLeft(), rect.bottomRight());
   painter.restore();
 }
@@ -93,12 +101,12 @@ struct BadgeColors {
 
 BadgeColors statusColors(const QString& tone) {
   if (tone == QStringLiteral("added")) {
-    return {QColor{0x26, 0x79, 0x4e}, QColor{0xdf, 0xf0, 0xe6}};
+    return {theme::colors().added, theme::tint(theme::colors().added)};
   }
   if (tone == QStringLiteral("deleted")) {
-    return {QColor{0xb6, 0x4d, 0x3d}, QColor{0xf4, 0xde, 0xd9}};
+    return {theme::colors().removed, theme::tint(theme::colors().removed)};
   }
-  return {QColor{0xa8, 0x67, 0x29}, QColor{0xf5, 0xe9, 0xd9}};
+  return {theme::colors().orange, theme::tint(theme::colors().orange)};
 }
 
 void drawStatusBadge(QPainter& painter, const QRect& rect, const QString& code,
@@ -152,8 +160,8 @@ void paintFileRow(QPainter& painter, const QStyleOptionViewItem& option,
   const theme::Colors& token = theme::colors();
   const QRect row = option.rect;
   QColor background = token.panel;
-  if (option.state.testFlag(QStyle::State_Selected)) background = QColor{0xee, 0xf3, 0xef};
-  else if (option.state.testFlag(QStyle::State_MouseOver)) background = QColor{0xf8, 0xf9, 0xf7};
+  if (option.state.testFlag(QStyle::State_Selected)) background = theme::colors().greenWash;
+  else if (option.state.testFlag(QStyle::State_MouseOver)) background = theme::colors().soft;
   painter.fillRect(row, background);
   drawBottomLine(painter, row);
 
@@ -192,7 +200,7 @@ void paintFileRow(QPainter& painter, const QStyleOptionViewItem& option,
   painter.drawText(QRect{left, row.top() + 7, textRight - left, 18},
                    textFlags(Qt::AlignLeft | Qt::AlignVCenter),
                    elided(name, nameFont, textRight - left));
-  painter.setPen(QColor{0x8a, 0x93, 0x8f});
+  painter.setPen(theme::colors().muted);
   painter.setFont(metaFont);
   painter.drawText(QRect{left, row.top() + 27, textRight - left, 16},
                    textFlags(Qt::AlignLeft | Qt::AlignVCenter),
@@ -232,12 +240,12 @@ void RepositoryItemDelegate::paint(QPainter* painter,
   painter->setClipRect(option.rect);
   const theme::Colors& token = theme::colors();
   QColor background = Qt::transparent;
-  if (option.state.testFlag(QStyle::State_Selected)) background = QColor{0xe1, 0xe9, 0xe3};
-  else if (option.state.testFlag(QStyle::State_MouseOver)) background = QColor{0xec, 0xef, 0xeb};
+  if (option.state.testFlag(QStyle::State_Selected)) background = token.greenWash;
+  else if (option.state.testFlag(QStyle::State_MouseOver)) background = theme::colors().soft;
   if (background != Qt::transparent) fillRounded(*painter, option.rect.adjusted(1, 1, -1, -1), background, 8.0);
 
   const QRect iconRect{option.rect.left() + 10, option.rect.center().y() - 9, 18, 18};
-  drawRepositoryGlyph(*painter, iconRect);
+  drawRepositoryGlyph(*painter, iconRect, identityColor(index.data(RepositoryListModel::nameRole).toString()));
   const int left = iconRect.right() + 10;
   int right = option.rect.right() - 10;
 
@@ -247,8 +255,8 @@ void RepositoryItemDelegate::paint(QPainter* painter,
     const QFont countFont = rowFont(option, theme::Metrics::textMeta, QFont::Bold);
     const int width = std::max(21, QFontMetrics{countFont}.horizontalAdvance(label) + 10);
     const QRect countRect{right - width + 1, option.rect.center().y() - 10, width, 21};
-    fillRounded(*painter, countRect, QColor{0xd8, 0xdf, 0xda}, 9.0);
-    painter->setPen(QColor{0x52, 0x60, 0x5a});
+    fillRounded(*painter, countRect, theme::colors().soft, 9.0);
+    painter->setPen(theme::colors().added);
     painter->setFont(countFont);
     painter->drawText(countRect, textFlags(Qt::AlignCenter), label);
     right = countRect.left() - 9;
@@ -263,7 +271,7 @@ void RepositoryItemDelegate::paint(QPainter* painter,
   painter->drawText(QRect{left, option.rect.top() + 8, right - left, 19},
                     textFlags(Qt::AlignLeft | Qt::AlignVCenter),
                     elided(name, nameFont, right - left));
-  painter->setPen(QColor{0x7d, 0x87, 0x82});
+  painter->setPen(theme::colors().muted);
   painter->setFont(ownerFont);
   painter->drawText(QRect{left, option.rect.top() + 29, right - left, 16},
                     textFlags(Qt::AlignLeft | Qt::AlignVCenter),
@@ -306,57 +314,58 @@ void HistoryCommitItemDelegate::paint(QPainter* painter,
   painter->save();
   painter->setClipRect(option.rect);
   const theme::Colors& token = theme::colors();
-  const bool startsDay = index.data(HistoryCommitListModel::startsDayGroupRole).toBool();
+  const auto* model = dynamic_cast<const HistoryCommitListModel*>(index.model());
+  const auto* graph = model ? model->graphRowAt(index.row()) : nullptr;
+  const bool startsDay = !graph && index.data(HistoryCommitListModel::startsDayGroupRole).toBool();
   const QStringList refs = index.data(HistoryCommitListModel::refsRole).toStringList();
   const int dayHeight = startsDay ? 30 : 0;
   QRect commitRect = option.rect.adjusted(0, dayHeight, 0, 0);
 
   if (startsDay) {
     const QRect dayRect{option.rect.left(), option.rect.top(), option.rect.width(), dayHeight};
-    painter->fillRect(dayRect, QColor{0xf4, 0xf6, 0xf3});
+    painter->fillRect(dayRect, theme::colors().soft);
     painter->setPen(token.lineSoft);
     painter->drawLine(dayRect.bottomLeft(), dayRect.bottomRight());
     const QFont dayFont = rowFont(option, theme::Metrics::textMeta, QFont::DemiBold);
     painter->setFont(dayFont);
-    painter->setPen(QColor{0x5f, 0x6a, 0x64});
+    painter->setPen(theme::colors().muted);
     painter->drawText(dayRect.adjusted(13, 0, -10, 0),
                       textFlags(Qt::AlignLeft | Qt::AlignVCenter),
                       index.data(HistoryCommitListModel::dayLabelRole).toString());
   }
 
   QColor background = token.panel;
-  if (option.state.testFlag(QStyle::State_Selected)) background = QColor{0xee, 0xf3, 0xef};
-  else if (option.state.testFlag(QStyle::State_MouseOver)) background = QColor{0xf7, 0xf9, 0xf7};
+  if (option.state.testFlag(QStyle::State_Selected)) background = token.greenWash;
+  else if (option.state.testFlag(QStyle::State_MouseOver)) background = theme::colors().soft;
   painter->fillRect(commitRect, background);
   drawBottomLine(*painter, commitRect);
   if (option.state.testFlag(QStyle::State_Selected)) {
     painter->fillRect(QRect{commitRect.left(), commitRect.top(), 3, commitRect.height()}, token.green);
   }
 
-  const auto* model = dynamic_cast<const HistoryCommitListModel*>(index.model());
-  const auto* graph = model ? model->graphRowAt(index.row()) : nullptr;
   int graphWidth = 0;
   if (graph) {
-    graphWidth = graph->width * 16 + 12;
-    const auto x = [&commitRect](int lane) { return commitRect.left() + 12 + lane * 16; };
+    graphWidth = graph->width * 22 + 16;
+    const auto x = [&commitRect](int lane) { return commitRect.left() + 16 + lane * 22; };
     const auto y = commitRect.center().y();
     painter->setRenderHint(QPainter::Antialiasing);
     const auto line = [painter](QPointF start, QPointF end, int lane) {
-      const QColor colors[]{QColor{0x36, 0x80, 0x60}, QColor{0x68, 0x70, 0xb0}, QColor{0xbf, 0x79, 0x4d}, QColor{0x45, 0x86, 0xa6}, QColor{0xa6, 0x61, 0x86}};
-      painter->setPen(QPen(colors[lane % 5], 2.0));
+      painter->setPen(QPen(theme::branchColor(lane), 2.2));
       QPainterPath path(start);
       const qreal middle = (start.y() + end.y()) / 2.0;
       path.cubicTo(QPointF(start.x(), middle), QPointF(end.x(), middle), end);
       painter->drawPath(path);
     };
-    for (const auto& edge : graph->passing)
-      line(QPointF(x(edge.first), commitRect.top()), QPointF(x(edge.second), commitRect.bottom() + 1), edge.first);
-    if (graph->incoming) line(QPointF(x(graph->lane), commitRect.top()), QPointF(x(graph->lane), y), graph->lane);
-    for (const auto parent : graph->parents)
-      line(QPointF(x(graph->lane), y), QPointF(x(parent), commitRect.bottom() + 1), parent);
-    painter->setPen(QPen(token.green, 2.0));
-    painter->setBrush(background);
-    painter->drawEllipse(QPointF(x(graph->lane), y), 4, 4);
+    for (qsizetype i = 0; i < graph->passing.size(); ++i) {
+      const auto edge = graph->passing.at(i);
+      line(QPointF(x(edge.first), commitRect.top()), QPointF(x(edge.second), commitRect.bottom() + 1), graph->passingColors.at(i));
+    }
+    if (graph->incoming) line(QPointF(x(graph->lane), commitRect.top()), QPointF(x(graph->lane), y), graph->color);
+    for (qsizetype i = 0; i < graph->parents.size(); ++i)
+      line(QPointF(x(graph->lane), y), QPointF(x(graph->parents.at(i)), commitRect.bottom() + 1), graph->parentColors.at(i));
+    painter->setPen(QPen(theme::branchColor(graph->color), 2.2));
+    painter->setBrush(graph->parents.size() > 1 ? background : theme::branchColor(graph->color));
+    painter->drawEllipse(QPointF(x(graph->lane), y), 4.5, 4.5);
     painter->setBrush(Qt::NoBrush);
   }
   const int left = commitRect.left() + 13 + graphWidth;
@@ -375,14 +384,15 @@ void HistoryCommitItemDelegate::paint(QPainter* painter,
                     textFlags(Qt::AlignLeft | Qt::AlignVCenter),
                     elided(title, titleFont, right - left));
   const QString metadata = QStringLiteral("%1 · %2 · %3").arg(hash, relativeTime(date), author);
-  painter->setPen(QColor{0x7d, 0x87, 0x82});
+  painter->setPen(theme::colors().muted);
   painter->setFont(metaFont);
   painter->drawText(QRect{left, commitRect.top() + 28, right - left, 16},
                     textFlags(Qt::AlignLeft | Qt::AlignVCenter),
                     elided(metadata, metaFont, right - left));
 
-  fillRounded(*painter, authorRect, QColor{0xda, 0xe4, 0xdd}, 13.0);
-  painter->setPen(QColor{0x43, 0x58, 0x4c});
+  const auto authorColor = identityColor(author);
+  fillRounded(*painter, authorRect, theme::tint(authorColor), 13.0);
+  painter->setPen(authorColor);
   painter->setFont(rowFont(option, theme::Metrics::textBadge, QFont::Bold));
   painter->drawText(authorRect, textFlags(Qt::AlignCenter), initials(author));
 
@@ -397,8 +407,9 @@ void HistoryCommitItemDelegate::paint(QPainter* painter,
       const int width = metrics.horizontalAdvance(ref) + 12;
       if (tagLeft + width > right) break;
       const QRect tagRect{tagLeft, tagTop, width, 18};
-      fillRounded(*painter, tagRect, QColor{0xee, 0xf5, 0xf0}, 5.0);
-      painter->setPen(QColor{0x3d, 0x65, 0x51});
+      const QColor refColor = graph ? theme::branchColor(graph->color) : token.green;
+      fillRounded(*painter, tagRect, theme::tint(refColor), 5.0);
+      painter->setPen(refColor);
       painter->setFont(tagFont);
       painter->drawText(tagRect, textFlags(Qt::AlignCenter), ref);
       tagLeft += width + 4;
@@ -411,11 +422,11 @@ void HistoryCommitItemDelegate::paint(QPainter* painter,
 
 QSize HistoryCommitItemDelegate::sizeHint(const QStyleOptionViewItem& option,
                                           const QModelIndex& index) const {
-  const int dayHeight = index.data(HistoryCommitListModel::startsDayGroupRole).toBool() ? 30 : 0;
+  const bool startsDay = index.data(HistoryCommitListModel::startsDayGroupRole).toBool();
   const int refsHeight = index.data(HistoryCommitListModel::refsRole).toStringList().isEmpty() ? 0 : 22;
   const auto* model = dynamic_cast<const HistoryCommitListModel*>(index.model());
   const auto* graph = model ? model->graphRowAt(index.row()) : nullptr;
-  return {graph ? std::max(option.rect.width(), graph->width * 16 + 280) : option.rect.width(), dayHeight + 52 + refsHeight};
+  return {graph ? std::max(option.rect.width(), graph->width * 22 + 300) : option.rect.width(), (!graph && startsDay ? 30 : 0) + 52 + refsHeight};
 }
 
 CommitFileItemDelegate::CommitFileItemDelegate(QObject* parent)

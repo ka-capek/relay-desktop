@@ -96,6 +96,7 @@ MainWindow::MainWindow(RelayController* controller, QWidget* parent)
   noticeTimer_->setSingleShot(true);
   connect(noticeTimer_, &QTimer::timeout, this, &MainWindow::updateStatus);
   connectController();
+  theme::apply(*qApp);
 }
 
 bool MainWindow::event(QEvent* event) {
@@ -533,7 +534,23 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   historySearch_->setPlaceholderText(tr("Search loaded history"));
   historySearch_->setClearButtonEnabled(true);
   historySearch_->setAccessibleName(tr("Search loaded commits"));
-  leftLayout->addWidget(historySearch_);
+  auto* historyTools = new QHBoxLayout;
+  historyTools->setContentsMargins(8, 6, 8, 6);
+  historyMode_ = new QComboBox(left);
+  historyMode_->setObjectName(QStringLiteral("historyMode"));
+  historyMode_->setAccessibleName(tr("History display"));
+  historyMode_->addItem(tr("List"));
+  historyMode_->addItem(tr("Graph"));
+  historyMode_->setToolTip(tr("Graph shows parallel work and merges across all branches."));
+  historyTools->addWidget(historyMode_);
+  historyTools->addWidget(historySearch_, 1);
+  leftLayout->addLayout(historyTools);
+  connect(historyMode_, &QComboBox::currentIndexChanged, this, [this](int index) {
+    auto preferences = appState_.preferences;
+    if (preferences.graphHistory == (index == 1)) return;
+    preferences.graphHistory = index == 1;
+    controller_->setPreferences(preferences);
+  });
   historyModel_ = new HistoryCommitListModel(this);
   historyList_ = new QListView(left);
   historyList_->setObjectName(QStringLiteral("historyList"));
@@ -581,7 +598,7 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   rightLayout->addWidget(historyDiff_, 1);
   splitter->addWidget(left);
   splitter->addWidget(right);
-  splitter->setSizes({330, 820});
+  splitter->setSizes({430, 720});
   splitter->setStretchFactor(1, 1);
 
   connect(historyModel_, &QAbstractItemModel::modelAboutToBeReset, this, &MainWindow::clearCommitDetail);
@@ -791,10 +808,17 @@ void MainWindow::applyState(const AppState& state) {
     if (iterator != state.accounts.cend()) newlyConnected = iterator->id;
   }
   const bool historyModeChanged = appState_.preferences.graphHistory != state.preferences.graphHistory;
+  const bool themeChanged = appState_.preferences.themeId != state.preferences.themeId ||
+      appState_.preferences.customTheme != state.preferences.customTheme;
   appState_ = state;
+  if (themeChanged) {
+    theme::configure(state.preferences.themeId, state.preferences.customTheme);
+    theme::apply(*qApp);
+  }
+  { const QSignalBlocker blocker(historyMode_); historyMode_->setCurrentIndex(state.preferences.graphHistory ? 1 : 0); }
   historyModel_->setGraphEnabled(state.preferences.graphHistory);
   historySearch_->setPlaceholderText(state.preferences.graphHistory
-      ? tr("Filter loaded commits (graph hidden while filtering)") : tr("Search loaded history"));
+      ? tr("Filter commits (hides graph)") : tr("Search loaded history"));
   if (historyModeChanged) {
     historyModel_->clear();
     clearCommitDetail();
@@ -1155,7 +1179,9 @@ void MainWindow::requestNextHistoryPage() {
 
 void MainWindow::updateStatus() {
   if (noticeTimer_ && noticeTimer_->isActive()) return;
-  statusBar()->setStyleSheet({});
+  statusBar()->setProperty("error", false);
+  statusBar()->style()->unpolish(statusBar());
+  statusBar()->style()->polish(statusBar());
   if (!busyOperations_.isEmpty())
     statusBar()->showMessage(tr("Working: %1…").arg(busyOperations_.constBegin().key()));
   else if (repository_)
@@ -1166,7 +1192,9 @@ void MainWindow::updateStatus() {
 
 void MainWindow::showNotice(const QString& message, const bool error) {
   if (message.isEmpty()) return;
-  statusBar()->setStyleSheet(error ? QStringLiteral("QStatusBar { color: #a54e43; }") : QString{});
+  statusBar()->setProperty("error", error);
+  statusBar()->style()->unpolish(statusBar());
+  statusBar()->style()->polish(statusBar());
   noticeTimer_->start(error ? 4400 : 2800);
   statusBar()->showMessage(message);
 }

@@ -47,7 +47,6 @@ qt_add_executable(relay_native
   MACOSX_BUNDLE
   WIN32
   src/main.cpp
-  resources/resources.qrc
 )
 
 if(APPLE)
@@ -60,7 +59,7 @@ elseif(WIN32)
   target_sources(relay_native PRIVATE resources/relay.rc)
 endif()
 
-add_library(relay_native_core STATIC ${RELAY_NATIVE_SOURCES})
+add_library(relay_native_core STATIC ${RELAY_NATIVE_SOURCES} resources/resources.qrc)
 target_link_libraries(relay_native PRIVATE relay_native_core)
 
 foreach(target IN ITEMS relay_native relay_native_core)

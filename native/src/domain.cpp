@@ -188,6 +188,8 @@ AppState appStateFromJson(const QJsonObject& object) {
   state.preferences.commitName = preferences.value(QStringLiteral("commitName")).toString();
   state.preferences.commitEmail = preferences.value(QStringLiteral("commitEmail")).toString();
   state.preferences.graphHistory = preferences.value(QStringLiteral("graphHistory")).toBool();
+  state.preferences.themeId = preferences.value(QStringLiteral("themeId")).toString(QStringLiteral("light"));
+  state.preferences.customTheme = preferences.value(QStringLiteral("customTheme")).toObject();
   return state;
 }
 
@@ -223,6 +225,8 @@ QJsonObject mergeAppStateIntoJson(const AppState& state, QJsonObject base) {
   preferences.insert(QStringLiteral("commitName"), state.preferences.commitName);
   preferences.insert(QStringLiteral("commitEmail"), state.preferences.commitEmail);
   preferences.insert(QStringLiteral("graphHistory"), state.preferences.graphHistory);
+  preferences.insert(QStringLiteral("themeId"), state.preferences.themeId);
+  preferences.insert(QStringLiteral("customTheme"), state.preferences.customTheme);
   base.insert(QStringLiteral("preferences"), preferences);
   return base;
 }

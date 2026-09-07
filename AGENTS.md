@@ -366,6 +366,32 @@ with the same controller/service boundary as existing operations.
 - Tolerates unreadable and disappearing directories.
 - Returns at most 5,000 sorted repository paths.
 
+### 5.5 Native themes and graph colors
+
+`theme.cpp` applies a semantic palette to QPalette, QSS and painted delegates.
+Four bundled JSON palettes under `native/resources/themes/` provide Light,
+Dark, Catppuccin Latte and Mocha. Native preferences persist `themeId` and a
+`customTheme` JSON object. Appearance settings support base selection, editable
+overrides and import/export. Validate unknown keys, color syntax and branch
+palette length before saving/importing. Export resolved colors using QSaveFile;
+never store a dependency on the imported path or execute arbitrary theme code.
+Invalid persisted overrides fall back to the selected base; legacy settings use
+Light. Palette changes repaint existing controls and diffs without a restart.
+Qt Fusion and explicitly positioned licensed SVG chevrons avoid platform/QSS
+arrow placement conflicts; native menu roles remain intact. The shared core
+owns resources so application and UI tests use the same icons and palettes.
+
+History has a visible List/Graph selector. Graph colors belong to active lines
+of ancestry, independently of lane position, and survive pagination/compaction.
+Allocate unused color identities until a line ends; do not recolor a passing
+line when a neighboring branch finishes. First-parent connectors retain the
+child's color until joining; merge arms use their parent line colors. Graph
+mode omits day-header gaps (dates remain in metadata) and filtered results hide
+edges. Dots and reference chips share graph colors, with hollow merge dots.
+Tests cover concurrent tips, compaction, paging, preference persistence,
+malformed themes and screenshots of every preset's graph, diff and settings.
+
+
 ## 6. Authoritative File Map
 
 ### Desktop product

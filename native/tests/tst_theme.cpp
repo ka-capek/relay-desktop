@@ -8,6 +8,26 @@ class ThemeTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void init() { relay::theme::configure(QStringLiteral("light")); }
+  void cleanup() { relay::theme::configure(QStringLiteral("light")); }
+  void presetsAndCustomOverridesStayConsistent() {
+    for (const auto& id : relay::theme::presetIds()) {
+      QVERIFY(relay::theme::validate(relay::theme::definition(id)).isEmpty());
+      relay::theme::configure(id);
+      const auto& token = relay::theme::colors();
+      QVERIFY(token.panel != token.ink);
+      QVERIFY(relay::theme::styleSheet().contains(token.panel.name()));
+      QVERIFY(!relay::theme::styleSheet().contains(QChar{u'@'}));
+      QCOMPARE(relay::theme::palette().color(QPalette::Text), token.ink);
+      QVERIFY(token.branches.size() >= 8);
+    }
+    relay::theme::configure(QStringLiteral("dark"), {{QStringLiteral("accent"), QStringLiteral("#ff88cc")}});
+    QCOMPARE(relay::theme::colors().green.name(), QStringLiteral("#ff88cc"));
+    QVERIFY(relay::theme::colors().panel.lightness() < 80);
+    QVERIFY(!relay::theme::validate({{QStringLiteral("accent"), QStringLiteral("red; background: url(x)")}}).isEmpty());
+    QVERIFY(!relay::theme::validate({{QStringLiteral("typo"), QStringLiteral("#ff88cc")}}).isEmpty());
+  }
+
   void paletteUsesRelaySemanticColors() {
     const QPalette palette = relay::theme::palette();
     QCOMPARE(palette.color(QPalette::WindowText), QColor(0x19, 0x20, 0x1e));
@@ -78,7 +98,7 @@ class ThemeTest final : public QObject {
     const qsizetype end = sheet.indexOf(QChar{u'}'}, start);
     QVERIFY(end > start);
     const QString rule = sheet.mid(start, end - start);
-    QVERIFY(rule.contains(QStringLiteral("background: #e1e9e3")));
+    QVERIFY(rule.contains(QStringLiteral("background: %1").arg(relay::theme::colors().greenWash.name())));
     QVERIFY(!rule.contains(QStringLiteral("border-left")));
   }
 

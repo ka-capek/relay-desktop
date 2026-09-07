@@ -1,4 +1,5 @@
 #include "relay/relay_controller.hpp"
+#include "relay/theme.hpp"
 
 #include "relay/app_paths.hpp"
 #include "relay/process_runner.hpp"
@@ -163,6 +164,9 @@ void RelayController::gate(const QString& operation, const QString& key) const {
 void RelayController::publishState() { emit stateChanged(state_); }
 
 void RelayController::setPreferences(Preferences preferences) {
+  const auto themeError = theme::validate(preferences.customTheme);
+  if (!themeError.isEmpty()) { emit operationFailed(QStringLiteral("settings"), themeError); return; }
+  if (!theme::presetIds().contains(preferences.themeId)) preferences.themeId = QStringLiteral("light");
   preferences.diffFontSize = qBound(10, preferences.diffFontSize, 24);
   const auto previous = state_.preferences;
   state_.preferences = preferences;

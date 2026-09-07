@@ -161,6 +161,8 @@ struct Preferences {
   QString commitName;
   QString commitEmail;
   bool graphHistory{};
+  QString themeId{QStringLiteral("light")};
+  QJsonObject customTheme;
 };
 
 struct AppState {

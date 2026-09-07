@@ -124,6 +124,9 @@ struct HistoryGraphRow {
   int lane{};
   int width{};
   bool incoming{};
+  int color{};
+  QList<int> passingColors;
+  QList<int> parentColors;
   QList<QPair<int, int>> passing;
   QList<int> parents;
 };
@@ -177,6 +180,7 @@ class HistoryCommitListModel final : public QAbstractListModel {
   bool graphEnabled_{};
   QStringList graphLanes_;
   QList<HistoryGraphRow> graphRows_;
+  QHash<QString, int> graphColors_;
   QList<HistoryCommit> commits_;
   QList<int> visibleIndices_;
   QSet<QString> hashes_;

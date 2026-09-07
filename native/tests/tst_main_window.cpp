@@ -4,6 +4,7 @@
 #include "relay/relay_controller.hpp"
 #include "relay/relay_store.hpp"
 #include <QComboBox>
+#include <QDialogButtonBox>
 #include "relay/theme.hpp"
 #include "relay/diff_view.hpp"
 
@@ -62,6 +63,34 @@ class MainWindowTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void themedDiffAndSettingsScreenshots() {
+    for (const auto& id : relay::theme::presetIds()) {
+      relay::theme::configure(id);
+      relay::theme::apply(*qApp);
+      QVERIFY(!QPixmap(QStringLiteral(":/relay/chevron-light.svg")).isNull());
+      QVERIFY(!QPixmap(QStringLiteral(":/relay/chevron-dark.svg")).isNull());
+      relay::DiffView view;
+      view.resize(850, 320);
+      view.setDiff(QStringLiteral("@@ -1,3 +1,3 @@\n context\n-old value\n+new value\n context\n"));
+      view.show();
+      QTest::qWait(20);
+      relay::Preferences preferences;
+      preferences.themeId = id;
+      relay::SettingsDialog dialog(preferences);
+      auto* tabs = dialog.findChild<QTabWidget*>();
+      tabs->setCurrentIndex(1);
+      dialog.show();
+      QTest::qWait(20);
+      if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+        QDir().mkpath(output);
+        QVERIFY(view.grab().save(QDir(output).filePath(QStringLiteral("diff-%1.png").arg(id))));
+        QVERIFY(dialog.grab().save(QDir(output).filePath(QStringLiteral("appearance-%1.png").arg(id))));
+      }
+    }
+    relay::theme::configure(QStringLiteral("light"));
+    relay::theme::apply(*qApp);
+  }
+
   void largeDiffFontKeepsSixDigitLineNumbersVisible() {
     relay::DiffView view;
     view.setDiff(QStringLiteral("@@ -100000 +100000 @@\n-old\n+new\n"));
@@ -144,6 +173,29 @@ class MainWindowTest final : public QObject {
     QVERIFY(!banner->isVisible());
   }
 
+  void themeSettingsRejectInvalidOverridesBeforeAccepting() {
+    relay::Preferences preferences;
+    preferences.themeId = QStringLiteral("catppuccin-mocha");
+    relay::SettingsDialog dialog(preferences);
+    auto* preset = dialog.findChild<QComboBox*>(QStringLiteral("themePreset"));
+    auto* json = dialog.findChild<QPlainTextEdit*>(QStringLiteral("themeOverrides"));
+    QVERIFY(preset && json);
+    QCOMPARE(preset->currentData().toString(), preferences.themeId);
+    preset->setCurrentIndex(1);
+    json->setPlainText(QStringLiteral("{\"accent\":\"#f288bb\"}"));
+    QCOMPARE(dialog.preferences().themeId, QStringLiteral("dark"));
+    QCOMPARE(dialog.preferences().customTheme.value(QStringLiteral("accent")).toString(), QStringLiteral("#f288bb"));
+    auto* buttons = dialog.findChild<QDialogButtonBox*>();
+    QVERIFY(buttons);
+    json->setPlainText(QStringLiteral("{\"accent\":\"invalid\"}"));
+    buttons->button(QDialogButtonBox::Save)->click();
+    QCOMPARE(dialog.result(), 0);
+    QVERIFY(!dialog.findChild<QLabel*>(QStringLiteral("themeError"))->text().isEmpty());
+    json->setPlainText(QStringLiteral("{}"));
+    buttons->button(QDialogButtonBox::Save)->click();
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+  }
+
   void graphHistoryRendersAndSettingsSwitchBackToList() {
     QTemporaryDir temporary;
     QTemporaryDir store;
@@ -153,6 +205,11 @@ class MainWindowTest final : public QObject {
     runGit(temporary.path(), {QStringLiteral("switch"), QStringLiteral("main")});
     runGit(temporary.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Main work")});
     runGit(temporary.path(), {QStringLiteral("merge"), QStringLiteral("--no-ff"), QStringLiteral("feature"), QStringLiteral("-m"), QStringLiteral("Merge feature")});
+    runGit(temporary.path(), {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("design"), QStringLiteral("main~2")});
+    runGit(temporary.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Design color palettes")});
+    runGit(temporary.path(), {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("docs"), QStringLiteral("main~2")});
+    runGit(temporary.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Document installation")});
+    runGit(temporary.path(), {QStringLiteral("switch"), QStringLiteral("main")});
     relay::RelayControllerConfig config;
     config.storeFile = store.path() + QStringLiteral("/state.json");
     config.synchronizeAccountsOnStart = false;
@@ -168,7 +225,7 @@ class MainWindowTest final : public QObject {
     auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("contentTabs"));
     tabs->setCurrentIndex(1);
     auto* history = window.findChild<QListView*>(QStringLiteral("historyList"));
-    QTRY_COMPARE(history->model()->rowCount(), 4);
+    QTRY_COMPARE(history->model()->rowCount(), 6);
     auto* model = dynamic_cast<relay::HistoryCommitListModel*>(history->model());
     QVERIFY(model->graphRowAt(0));
     history->setCurrentIndex(model->index(0));
@@ -177,10 +234,25 @@ class MainWindowTest final : public QObject {
       QDir().mkpath(output);
       window.grab().save(QDir(output).filePath(QStringLiteral("graph.png")));
     }
-    preferences.graphHistory = false;
-    controller.setPreferences(preferences);
+    for (const auto& id : relay::theme::presetIds()) {
+      preferences.themeId = id;
+      controller.setPreferences(preferences);
+      QCOMPARE(qApp->palette().color(QPalette::Text), relay::theme::colors().ink);
+      QCOMPARE(controller.state().preferences.themeId, id);
+      QTest::qWait(30);
+      if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty())
+        QVERIFY(window.grab().save(QDir(output).filePath(QStringLiteral("graph-%1.png").arg(id))));
+    }
+    auto* mode = window.findChild<QComboBox*>(QStringLiteral("historyMode"));
+    QVERIFY(mode);
+    QCOMPARE(mode->currentIndex(), 1);
+    mode->setCurrentIndex(0);
+    QVERIFY(!controller.state().preferences.graphHistory);
     QTRY_COMPARE(history->model()->rowCount(), 4);
     QVERIFY(!model->graphRowAt(0));
+    preferences.themeId = QStringLiteral("light");
+    preferences.graphHistory = false;
+    controller.setPreferences(preferences);
   }
 
   void refreshPreservesFileSelectionAndSelectAllUsesOneClick() {

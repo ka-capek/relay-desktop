@@ -1,4 +1,9 @@
 #include "relay/dialogs.hpp"
+#include "relay/theme.hpp"
+#include <QPlainTextEdit>
+#include <QJsonDocument>
+#include <QJsonParseError>
+#include <QSaveFile>
 #include <QSpinBox>
 
 #include <QCheckBox>
@@ -25,7 +30,8 @@ namespace relay {
 SettingsDialog::SettingsDialog(Preferences preferences, QWidget* parent) : QDialog(parent) {
   setWindowTitle(tr("Settings"));
   setObjectName(QStringLiteral("settingsDialog"));
-  resize(500, 300);
+  resize(640, 520);
+  setMinimumSize(600, 480);
   auto* layout = new QVBoxLayout(this);
   auto* tabs = new QTabWidget(this);
   auto* general = new QWidget(tabs);
@@ -45,6 +51,77 @@ SettingsDialog::SettingsDialog(Preferences preferences, QWidget* parent) : QDial
   graphHistory_->setChecked(preferences.graphHistory);
   form->addRow(graphHistory_);
   tabs->addTab(general, tr("General"));
+  auto* appearance = new QWidget(tabs);
+  auto* appearanceLayout = new QVBoxLayout(appearance);
+  themeId_ = new QComboBox(appearance);
+  themeId_->setObjectName(QStringLiteral("themePreset"));
+  themeId_->addItem(tr("Light"), QStringLiteral("light"));
+  themeId_->addItem(tr("Dark"), QStringLiteral("dark"));
+  themeId_->addItem(tr("Catppuccin Latte"), QStringLiteral("catppuccin-latte"));
+  themeId_->addItem(tr("Catppuccin Mocha"), QStringLiteral("catppuccin-mocha"));
+  themeId_->setCurrentIndex(qMax(0, themeId_->findData(preferences.themeId)));
+  appearanceLayout->addWidget(new QLabel(tr("Base theme"), appearance));
+  appearanceLayout->addWidget(themeId_);
+  auto* themeHelp = new QLabel(tr("Optional color overrides (#RRGGBB). Import or export a JSON palette to share a theme. Save applies it without restarting."), appearance);
+  themeHelp->setWordWrap(true);
+  appearanceLayout->addWidget(themeHelp);
+  themeJson_ = new QPlainTextEdit(appearance);
+  themeJson_->setObjectName(QStringLiteral("themeOverrides"));
+  themeJson_->setFont(theme::codeFont());
+  themeJson_->setPlainText(QString::fromUtf8(QJsonDocument(preferences.customTheme).toJson()));
+  themeJson_->setMinimumHeight(160);
+  appearanceLayout->addWidget(themeJson_);
+  auto* themeActions = new QHBoxLayout;
+  auto* importTheme = new QPushButton(tr("Import…"), appearance);
+  auto* exportTheme = new QPushButton(tr("Export…"), appearance);
+  auto* resetTheme = new QPushButton(tr("Reset overrides"), appearance);
+  themeActions->addWidget(importTheme);
+  themeActions->addWidget(exportTheme);
+  themeActions->addWidget(resetTheme);
+  appearanceLayout->addLayout(themeActions);
+  auto* themeError = new QLabel(appearance);
+  themeError->setWordWrap(true);
+  themeError->setTextFormat(Qt::PlainText);
+  themeError->setProperty("role", QStringLiteral("error"));
+  themeError->setObjectName(QStringLiteral("themeError"));
+  appearanceLayout->addWidget(themeError);
+  const auto parseTheme = [this, themeError](QJsonObject* output) {
+    QJsonParseError error;
+    const auto doc = QJsonDocument::fromJson(themeJson_->toPlainText().toUtf8(), &error);
+    QString message;
+    if (error.error != QJsonParseError::NoError || !doc.isObject()) message = tr("Enter a JSON object containing color overrides.");
+    else message = theme::validate(doc.object());
+    themeError->setText(message);
+    if (!message.isEmpty()) return false;
+    *output = doc.object();
+    return true;
+  };
+  connect(resetTheme, &QPushButton::clicked, this, [this] { themeJson_->setPlainText(QStringLiteral("{}")); });
+  connect(importTheme, &QPushButton::clicked, this, [this, themeError] {
+    const auto path = QFileDialog::getOpenFileName(this, tr("Import theme"), {}, tr("JSON palettes (*.json)"));
+    if (path.isEmpty()) return;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() > 65536) { themeError->setText(tr("Choose a readable theme file smaller than 64 KB.")); return; }
+    QJsonParseError error;
+    const auto doc = QJsonDocument::fromJson(file.readAll(), &error);
+    if (error.error != QJsonParseError::NoError || !doc.isObject()) { themeError->setText(tr("The theme must be a JSON object.")); return; }
+    const auto message = theme::validate(doc.object());
+    if (!message.isEmpty()) { themeError->setText(message); return; }
+    themeJson_->setPlainText(QString::fromUtf8(doc.toJson()));
+    themeError->clear();
+  });
+  connect(exportTheme, &QPushButton::clicked, this, [this, parseTheme, themeError] {
+    QJsonObject overrides;
+    if (!parseTheme(&overrides)) return;
+    auto palette = theme::definition(themeId_->currentData().toString());
+    for (auto it = overrides.begin(); it != overrides.end(); ++it) palette.insert(it.key(), it.value());
+    const auto path = QFileDialog::getSaveFileName(this, tr("Export theme"), QStringLiteral("relay-theme.json"), tr("JSON palettes (*.json)"));
+    if (path.isEmpty()) return;
+    QSaveFile file(path);
+    const auto data = QJsonDocument(palette).toJson();
+    if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit()) themeError->setText(tr("Could not save the theme file."));
+  });
+  tabs->addTab(appearance, tr("Appearance"));
   auto* git = new QWidget(tabs);
   auto* gitForm = new QFormLayout(git);
   auto* identityHelp = new QLabel(tr("Used when no GitHub account is selected. Leave blank to use this repository’s Git configuration."), git);
@@ -70,14 +147,19 @@ SettingsDialog::SettingsDialog(Preferences preferences, QWidget* parent) : QDial
   tabs->addTab(accounts, tr("Accounts"));
   layout->addWidget(tabs);
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
-  connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::accepted, this, [this, parseTheme, tabs, appearance] {
+    QJsonObject object;
+    if (parseTheme(&object)) accept();
+    else tabs->setCurrentWidget(appearance);
+  });
   connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
   layout->addWidget(buttons);
 }
 
 Preferences SettingsDialog::preferences() const {
   return {refreshOnFocus_->isChecked(), diffFontSize_->value(), commitName_->text().trimmed(),
-          commitEmail_->text().trimmed(), graphHistory_->isChecked()};
+          commitEmail_->text().trimmed(), graphHistory_->isChecked(),
+          themeId_->currentData().toString(), QJsonDocument::fromJson(themeJson_->toPlainText().toUtf8()).object()};
 }
 
 namespace {

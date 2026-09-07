@@ -56,6 +56,46 @@ This is a local source build, not a notarized distribution.
 To install an existing checkout, run `bash native/tools/install-macos.sh --source "$PWD"`; `--qt-dir /path/to/Qt/6.11.1/macos` reuses an existing SDK.
 `--skip-deps` is available when the required Homebrew tools are already present.
 
+## Native themes and branch graph
+
+Open Settings (`⌘,` on macOS) → **Appearance** to choose **Light**, **Dark**,
+**Catppuccin Latte**, or **Catppuccin Mocha**. Save applies the theme immediately
+and remembers it across restarts. Menus, controls, lists, diffs and the graph
+share the same palette.
+
+Use **Export…** for an editable JSON palette, then **Import…** to load your own
+or a shared theme. You can also enter only the colors you want to override:
+
+```json
+{
+  "accent": "#cba6f7",
+  "accentHover": "#b4befe",
+  "selection": "#45405c",
+  "onAccent": "#1e1e2e",
+  "branches": ["#cba6f7", "#89b4fa", "#a6e3a1", "#fab387"]
+}
+```
+
+Overrides stay active when changing the base theme; **Reset overrides** restores
+its defaults. Importing copies colors into Relay's settings; it does not retain
+a dependency on the source file or execute theme code. Colors use `#RRGGBB`;
+`branches` accepts 2–32 colors. Export includes every supported color role.
+The [bundled palettes](native/resources/themes) are additional examples.
+Choose contrasting text/background and accent/onAccent pairs for custom themes.
+
+In History, select **Graph** beside the search field to show all branches.
+Parallel lines retain their colors when lanes move or another branch ends,
+including across loaded pages. Commit dots and ref labels use the same colors;
+merge dots are hollow. Colors are reused after a line ends and repeat if more
+lines are active than the palette has colors. Search temporarily hides graph
+connections so filtered-out commits cannot imply a false connection. Return to
+**List** for the ordinary current-branch history.
+
+Catppuccin presets adapt the [Catppuccin palette](https://github.com/catppuccin/catppuccin),
+with darker Latte status/graph colors for readability. Chevron icons come from
+[Lucide](https://github.com/lucide-icons/lucide). Their licenses are included in
+the application resources.
+
 ## Native C++26 development
 
 The native client requires CMake 3.30+, Ninja, and the pinned Qt 6.11.1 with
