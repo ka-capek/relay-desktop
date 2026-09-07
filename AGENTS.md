@@ -249,6 +249,17 @@ macOS arm64/Windows x64 Qt 6.11.1 builds and packaged authentication checks.
 
 ### 5.4 Current native workflows, 2026-09-07
 
+`native/tools/install-macos.sh` is the local Apple Silicon installer (macOS
+14+). It uses isolated cached tools/Qt, a fresh temporary release build, Qt
+framework deployment, ad-hoc signature validation and a disposable-profile
+startup test before replacing `~/Applications/Relay Native.app`. Existing apps
+are retained as dated backups; the user's checkout and repositories are never
+reset or cleaned. Git/gh remain external Homebrew dependencies, exposed to
+Finder launches through the app's `LSEnvironment` PATH. It never changes shell
+profiles or signs in to accounts. CI exercises the installer from its checkout
+and the installed app through Launch Services. The script is not a substitute
+for the strict redistribution/release packaging pipeline.
+
 The latest inventory and release limits are in
 `docs/native-completion-2026-09-07.md`; it supersedes the feature inventory in
 section 5.3. Native additions live in `git_workflows.cpp` and `workflow_ui.cpp`

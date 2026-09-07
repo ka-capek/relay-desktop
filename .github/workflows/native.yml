@@ -100,6 +100,14 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           RELAY_SCREENSHOT_DIR: ${{ github.workspace }}/build-native/screenshots
         run: ctest --preset ${{ matrix.target }} --timeout 60
+      - name: Validate Apple Silicon installer
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        shell: bash
+        run: |
+          bash native/tools/install-macos.sh --source "$GITHUB_WORKSPACE" --qt-dir "$QT_ROOT_DIR" --no-open
+          /usr/bin/open -W "$HOME/Applications/Relay Native.app" --args --smoke-test
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4

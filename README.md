@@ -31,6 +31,31 @@ npm install
 npm run desktop:open
 ```
 
+## Install the native client on Apple Silicon
+
+On macOS 14 or newer, download and run the installer:
+
+```bash
+curl -fL https://raw.githubusercontent.com/ka-capek/relay-desktop/codex/native-completion/native/tools/install-macos.sh -o /tmp/relay-install-macos.sh
+bash /tmp/relay-install-macos.sh
+```
+
+It prepares Homebrew dependencies, downloads the current native branch, builds
+with LLVM 20 and Qt 6.11.1, deploys Qt, verifies a local signature and startup,
+and installs `~/Applications/Relay Native.app`. It opens the app on completion;
+use `--no-open` to skip that. Homebrew may request your macOS password. If Xcode
+Command Line Tools are missing, finish their installation and rerun the script.
+
+An existing native app is saved beside the new one as a dated backup. Your
+repositories, checkout and account settings are not changed by the installer.
+Build tools and Qt are cached under `~/Library/Caches/RelayNativeInstaller`.
+Git and GitHub CLI remain Homebrew dependencies; keep them installed. The app's
+Launch Services environment includes Homebrew, so it also works from Finder.
+This is a local source build, not a notarized distribution.
+
+To install an existing checkout, run `bash native/tools/install-macos.sh --source "$PWD"`; `--qt-dir /path/to/Qt/6.11.1/macos` reuses an existing SDK.
+`--skip-deps` is available when the required Homebrew tools are already present.
+
 ## Native C++26 development
 
 The native client requires CMake 3.30+, Ninja, and the pinned Qt 6.11.1 with
