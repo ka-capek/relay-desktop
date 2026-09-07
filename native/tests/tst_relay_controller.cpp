@@ -156,7 +156,7 @@ class RelayControllerTest final : public QObject {
     release.release();
     QTRY_COMPARE_WITH_TIMEOUT(busy.size(), 4, 5000);
     QVERIFY(failures.isEmpty());
-    QCOMPARE(controller.currentRepository()->path, root.path());
+    QCOMPARE(controller.currentRepository()->path, QFileInfo(root.path()).canonicalFilePath());
   }
 
   void completedCloneKeepsAccountWhenSelectionChanges() {
@@ -207,10 +207,56 @@ class RelayControllerTest final : public QObject {
     release.release();
     QTRY_COMPARE_WITH_TIMEOUT(busy.size(), 4, 5000);
     QVERIFY2(failures.isEmpty(), failures.isEmpty() ? "" : qPrintable(failures.first().at(1).toString()));
-    QCOMPARE(controller.currentRepository()->path, source);
+    QCOMPARE(controller.currentRepository()->path, QFileInfo(source).canonicalFilePath());
     const auto clone = root.filePath(QStringLiteral("clone"));
     QCOMPARE(controller.resolvedAccountId(clone), work.id);
-    QCOMPARE(relay::appStateFromJson(relay::RelayStore(config.storeFile).read()).repositoryAccounts.value(clone), work.id);
+    QCOMPARE(relay::appStateFromJson(relay::RelayStore(config.storeFile).read()).repositoryAccounts.value(QFileInfo(clone).canonicalFilePath()), work.id);
+  }
+
+  void repositoryAccountAliasesResolveAndResetWithoutChangingUnknownPaths() {
+#ifndef Q_OS_UNIX
+    QSKIP("Directory symlink fixture requires Unix; Windows QFile::link creates shortcuts.");
+#else
+    QTemporaryDir root;
+    const auto repository = root.filePath(QStringLiteral("repository"));
+    const auto alias = root.filePath(QStringLiteral("alias"));
+    QVERIFY(QDir().mkpath(repository));
+    QVERIFY(QFile::link(repository, alias));
+    const auto canonical = QFileInfo(repository).canonicalFilePath();
+    const auto missing = root.filePath(QStringLiteral("unavailable/repository"));
+    relay::Account personal;
+    personal.id = QStringLiteral("github-1"); personal.githubId = 1;
+    personal.handle = QStringLiteral("personal"); personal.authSource = QStringLiteral("github-cli");
+    auto work = personal;
+    work.id = QStringLiteral("github-2"); work.githubId = 2; work.handle = QStringLiteral("work");
+    relay::AppState state;
+    state.accounts = {personal, work}; state.activeAccountId = personal.id;
+    state.repositoryAccounts.insert(alias, work.id);
+    state.repositoryAccounts.insert(missing, work.id);
+    const auto config = controllerConfig(root);
+    seedState(config, state);
+    relay::RelayController controller(config);
+    controller.start();
+    QCOMPARE(controller.resolvedAccountId(canonical), work.id);
+    QCOMPARE(controller.resolvedAccountId(alias), work.id);
+    // Reading legacy state does not rewrite it.
+    QCOMPARE(controller.state().repositoryAccounts.value(alias), work.id);
+    controller.setRepositoryAccount(canonical, {});
+    QCOMPARE(controller.resolvedAccountId(alias), personal.id);
+    QVERIFY(!controller.state().repositoryAccounts.contains(alias));
+    QCOMPARE(controller.state().repositoryAccounts.value(missing), work.id);
+    controller.setRepositoryAccount(alias, work.id);
+    QCOMPARE(controller.state().repositoryAccounts.value(canonical), work.id);
+    QVERIFY(!controller.state().repositoryAccounts.contains(alias));
+    relay::RelayController restarted(config);
+    restarted.start();
+    QCOMPARE(restarted.resolvedAccountId(alias), work.id);
+    restarted.setRepositoryAccount(alias, {});
+    QCOMPARE(restarted.resolvedAccountId(canonical), personal.id);
+    const auto stored = relay::appStateFromJson(relay::RelayStore(config.storeFile).read());
+    QCOMPARE(stored.repositoryAccounts.size(), 1);
+    QCOMPARE(stored.repositoryAccounts.value(missing), work.id);
+#endif
   }
 
   void preferencesSurviveRestartAndValidateFontSize() {

@@ -317,6 +317,18 @@ const Account* RelayController::account(const QString& requestedId,
 }
 
 QString RelayController::resolvedAccountId(const QString& repositoryPath) const {
+  const auto canonical = QFileInfo(repositoryPath).canonicalFilePath();
+  if (!canonical.isEmpty()) {
+    // Git reports canonical roots, while older metadata may use an alias such
+    // as macOS /var instead of /private/var. Prefer an explicit canonical entry.
+    const auto binding = state_.repositoryAccounts.constFind(canonical);
+    if (binding != state_.repositoryAccounts.cend()) return binding.value();
+    auto aliases = state_.repositoryAccounts.keys();
+    aliases.sort();
+    for (const auto& path : aliases)
+      if (QFileInfo(path).canonicalFilePath() == canonical)
+        return state_.repositoryAccounts.value(path);
+  }
   return state_.repositoryAccounts.value(repositoryPath, state_.activeAccountId);
 }
 
@@ -1184,8 +1196,19 @@ void RelayController::setRepositoryAccount(const QString& repositoryPath,
     return;
   }
   try {
-    if (accountId.isEmpty()) state_.repositoryAccounts.remove(repositoryPath);
-    else state_.repositoryAccounts.insert(repositoryPath, accountId);
+    const auto canonical = QFileInfo(repositoryPath).canonicalFilePath();
+    const auto key = canonical.isEmpty() ? repositoryPath : canonical;
+    // Remove only aliases of this existing repository. Unavailable paths and
+    // metadata belonging to other repositories must survive unchanged.
+    if (!canonical.isEmpty()) {
+      for (auto iterator = state_.repositoryAccounts.begin(); iterator != state_.repositoryAccounts.end();) {
+        if (iterator.key() == canonical || QFileInfo(iterator.key()).canonicalFilePath() == canonical)
+          iterator = state_.repositoryAccounts.erase(iterator);
+        else ++iterator;
+      }
+    }
+    if (accountId.isEmpty()) state_.repositoryAccounts.remove(key);
+    else state_.repositoryAccounts.insert(key, accountId);
     persistState();
     publishState();
   } catch (const std::exception& error) {
