@@ -75,6 +75,13 @@ jobs:
         run: cmake --preset "${{ matrix.target }}" -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
       - name: Build
         run: cmake --build --preset ${{ matrix.target }} --parallel 3
+      - name: Deploy Windows test runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $build = Join-Path $PWD 'build-native/windows-debug'
+          & "$env:QT_ROOT_DIR/bin/windeployqt.exe" --debug --compiler-runtime --no-translations --dir $build "$build/Relay.exe" "$build/tst_main_window.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
