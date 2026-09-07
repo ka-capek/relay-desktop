@@ -123,7 +123,9 @@ The native successor uses:
 - CMake 3.30+ with Ninja and checked-in platform presets
 - Upstream LLVM 20 `clang++` for the presets: Homebrew `llvm@20` on macOS,
   `%ProgramFiles%/LLVM` on Windows with an x64 Visual Studio developer environment.
-  Windows uses the MSVC target and dynamic CRT matching Qt's MSVC binaries;
+  Windows uses the MSVC target, Microsoft `link.exe`, and dynamic CRT matching
+  Qt's MSVC binaries. LLVM 20's implicit linker produced invalid namespace-qualified
+  UAC attributes in the merged Qt manifest, preventing process startup;
   CMake 3.31 does not map C++26 for AppleClang, cl.exe or clang-cl.
 - Dynamically linked Qt under LGPLv3; Relay's own code remains MIT
 - The same bundled/system Git and official GitHub CLI child-process model

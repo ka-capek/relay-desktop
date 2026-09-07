@@ -51,7 +51,8 @@ open build-native/macos-debug/native/Relay.app
 The Windows x64 presets are `windows-debug` and `windows-release`; configure
 them from an x64 Visual Studio developer environment with C++ Build Tools/SDK,
 LLVM 20 installed under `%ProgramFiles%/LLVM`, and the Qt MSVC 2022 x64 build.
-`clang++` targets the MSVC ABI and dynamic runtime. Override
+`clang++` targets the MSVC ABI and dynamic runtime; the preset uses Microsoft's
+`link.exe` to preserve valid Qt application manifests. Override
 `-DCMAKE_CXX_COMPILER=...` for a different LLVM location. Use a fresh build
 directory when changing compilers. Build artifacts stay under ignored
 `build-native/` directories.
