@@ -108,6 +108,12 @@ QFont codeFont() {
 QPalette palette() {
   const Colors& token = colors();
   QPalette result;
+  result.setColor(QPalette::Light, token.soft);
+  result.setColor(QPalette::Midlight, token.soft);
+  result.setColor(QPalette::Mid, token.line);
+  result.setColor(QPalette::Dark, token.line);
+  result.setColor(QPalette::Shadow, token.outerBackground);
+  result.setColor(QPalette::Accent, token.green);
   result.setColor(QPalette::Window, token.panel);
   result.setColor(QPalette::WindowText, token.ink);
   result.setColor(QPalette::Base, token.panel);
@@ -226,6 +232,11 @@ QString styleSheet() {
       border: 1px solid @green@;
       background: @panel@;
     }
+    QSpinBox { padding-right: 30px; }
+    QSpinBox::up-button { subcontrol-origin: padding; subcontrol-position: top right; width: 26px; height: 18px; border: 0; }
+    QSpinBox::down-button { subcontrol-origin: padding; subcontrol-position: bottom right; width: 26px; height: 18px; border: 0; }
+    QSpinBox::up-arrow { image: url(@upArrow@); width: 14px; height: 14px; }
+    QSpinBox::down-arrow { image: url(@arrow@); width: 14px; height: 14px; }
     QComboBox { padding-right: 32px; }
     QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: 28px; border: 0; }
     QComboBox::down-arrow { image: url(@arrow@); width: 14px; height: 14px; }
@@ -321,6 +332,7 @@ QString styleSheet() {
       font-size: 11px;
     }
   )QSS");
+  sheet.replace(QStringLiteral("@upArrow@"), colors().panel.lightness() < 128 ? QStringLiteral(":/relay/chevron-up-dark.svg") : QStringLiteral(":/relay/chevron-up-light.svg"));
   sheet.replace(QStringLiteral("@arrow@"), colors().panel.lightness() < 128 ? QStringLiteral(":/relay/chevron-dark.svg") : QStringLiteral(":/relay/chevron-light.svg"));
   sheet.replace(QStringLiteral("@canvas@"), colors().canvas.name());
   sheet.replace(QStringLiteral("@green@"), colors().green.name());

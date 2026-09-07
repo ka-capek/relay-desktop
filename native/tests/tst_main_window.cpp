@@ -78,8 +78,13 @@ class MainWindowTest final : public QObject {
       preferences.themeId = id;
       relay::SettingsDialog dialog(preferences);
       auto* tabs = dialog.findChild<QTabWidget*>();
-      tabs->setCurrentIndex(1);
       dialog.show();
+      QTest::qWait(20);
+      if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+        QDir().mkpath(output);
+        QVERIFY(dialog.grab().save(QDir(output).filePath(QStringLiteral("general-%1.png").arg(id))));
+      }
+      tabs->setCurrentIndex(1);
       QTest::qWait(20);
       if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
         QDir().mkpath(output);

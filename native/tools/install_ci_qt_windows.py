@@ -8,6 +8,7 @@ Remove the wrapper when upgrading to an aqt release that fixes the issue.
 from importlib.metadata import version
 from pathlib import Path
 import os
+import shutil
 
 
 def main():
@@ -27,8 +28,18 @@ def main():
 
     QtArchives._arch_ext = extension
     destination = Path(os.environ["RUNNER_TEMP"]) / "relay-qt"
+    # py7zr intermittently rejects Qt's modules/SvgWidgets.json link while
+    # packages are being extracted together. Use aqt's supported 7-Zip backend.
+    sevenzip = shutil.which("7z")
+    if not sevenzip:
+        candidate = Path(os.environ["ProgramFiles"]) / "7-Zip" / "7z.exe"
+        if candidate.is_file():
+            sevenzip = str(candidate)
+    if not sevenzip:
+        raise RuntimeError("Install 7-Zip before preparing the Windows Qt SDK.")
     result = Cli().run(["install-qt", "windows", "desktop", "6.11.1",
-                        "win64_msvc2022_64", "--outputdir", str(destination)])
+                        "win64_msvc2022_64", "--outputdir", str(destination),
+                        "--external", sevenzip])
     if result:
         raise SystemExit(result)
     root = destination / "6.11.1" / "msvc2022_64"

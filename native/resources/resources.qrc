@@ -10,5 +10,7 @@
     <file>themes/catppuccin-latte.json</file>
     <file>themes/catppuccin-mocha.json</file>
     <file>Catppuccin-LICENSE.txt</file>
+    <file>chevron-up-light.svg</file>
+    <file>chevron-up-dark.svg</file>
   </qresource>
 </RCC>

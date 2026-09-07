@@ -366,6 +366,10 @@ with the same controller/service boundary as existing operations.
 - Tolerates unreadable and disappearing directories.
 - Returns at most 5,000 sorted repository paths.
 
+Windows CI uses aqt's `--external` 7-Zip backend: py7zr rejected the Qt
+`modules/SvgWidgets.json` link during parallel SDK extraction in run
+34117355064. Keep download verification and fail if 7-Zip is unavailable.
+
 ### 5.5 Native themes and graph colors
 
 `theme.cpp` applies a semantic palette to QPalette, QSS and painted delegates.
