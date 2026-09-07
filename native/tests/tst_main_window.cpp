@@ -117,6 +117,7 @@ class MainWindowTest final : public QObject {
     QTRY_COMPARE(controller.currentRepository()->pendingOperation, QStringLiteral("merge"));
     auto* banner = window.findChild<QPushButton*>(QStringLiteral("conflictButton"));
     QVERIFY(banner->isVisible());
+    QTRY_VERIFY(banner->isEnabled());
     QTimer::singleShot(15000, &window, [&window] {
       if (auto* dialog = window.findChild<QDialog*>(QStringLiteral("conflictsDialog"))) dialog->reject();
     });
@@ -135,6 +136,7 @@ class MainWindowTest final : public QObject {
       dialog->reject();
     });
     banner->click();
+    QTRY_VERIFY(banner->isEnabled());
     controller.executeRepositoryAction(relay::RepositoryAction::abortOperation);
     QTRY_VERIFY(controller.currentRepository()->pendingOperation.isEmpty());
     QVERIFY(!banner->isVisible());

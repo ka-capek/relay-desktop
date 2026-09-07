@@ -46,6 +46,23 @@ struct ClonePayload {
   QString accountId;
 };
 
+QString repositoryBinding(const QHash<QString, QString>& bindings, const QString& repositoryPath,
+                          const QString& fallback = {}) {
+  const auto canonical = QFileInfo(repositoryPath).canonicalFilePath();
+  if (!canonical.isEmpty()) {
+    // Git reports canonical roots, while older metadata may use an alias such
+    // as macOS /var instead of /private/var. Prefer an explicit canonical entry.
+    const auto binding = bindings.constFind(canonical);
+    if (binding != bindings.cend()) return binding.value();
+    auto aliases = bindings.keys();
+    aliases.sort();
+    for (const auto& path : aliases)
+      if (QFileInfo(path).canonicalFilePath() == canonical)
+        return bindings.value(path);
+  }
+  return bindings.value(repositoryPath, fallback);
+}
+
 QString defaultSourceRoot() {
 #ifdef RELAY_SOURCE_DIR
   return QStringLiteral(RELAY_SOURCE_DIR);
@@ -317,19 +334,11 @@ const Account* RelayController::account(const QString& requestedId,
 }
 
 QString RelayController::resolvedAccountId(const QString& repositoryPath) const {
-  const auto canonical = QFileInfo(repositoryPath).canonicalFilePath();
-  if (!canonical.isEmpty()) {
-    // Git reports canonical roots, while older metadata may use an alias such
-    // as macOS /var instead of /private/var. Prefer an explicit canonical entry.
-    const auto binding = state_.repositoryAccounts.constFind(canonical);
-    if (binding != state_.repositoryAccounts.cend()) return binding.value();
-    auto aliases = state_.repositoryAccounts.keys();
-    aliases.sort();
-    for (const auto& path : aliases)
-      if (QFileInfo(path).canonicalFilePath() == canonical)
-        return state_.repositoryAccounts.value(path);
-  }
-  return state_.repositoryAccounts.value(repositoryPath, state_.activeAccountId);
+  return repositoryBinding(state_.repositoryAccounts, repositoryPath, state_.activeAccountId);
+}
+
+QString RelayController::resolvedSshProfileId(const QString& repositoryPath) const {
+  return repositoryBinding(state_.repositorySshProfiles, repositoryPath);
 }
 
 void RelayController::setActiveAccount(const QString& accountId) {
@@ -623,7 +632,7 @@ void RelayController::commit(const QStringList& files, const QString& summary,
 
 QString RelayController::sshCommand(const QString& repositoryPath, const QString& remote) const {
   if (SshService::isGitHubRemote(remote)) return {};
-  const auto profileId = state_.repositorySshProfiles.value(repositoryPath);
+  const auto profileId = resolvedSshProfileId(repositoryPath);
   const auto profile = valueNamed(state_.sshProfiles, profileId);
   return profile ? ssh_->commandFor(*profile) : QString{};
 }
@@ -638,7 +647,7 @@ void RelayController::fetchOrigin(const QString& accountId) {
   const auto selected = account(accountId, repositoryPath);
   const auto selectedAccount = selected ? std::optional<Account>(*selected) : std::nullopt;
   const auto profile = valueNamed(state_.sshProfiles,
-                                  state_.repositorySshProfiles.value(repositoryPath));
+                                  resolvedSshProfileId(repositoryPath));
   const auto generation = ++repositoryGeneration_;
   invalidateRepositoryRequests();
   const auto git = git_;
@@ -680,7 +689,7 @@ void RelayController::pullOrigin(const QString& accountId) {
   const auto selected = account(accountId, repositoryPath);
   const auto selectedAccount = selected ? std::optional<Account>(*selected) : std::nullopt;
   const auto profile = valueNamed(state_.sshProfiles,
-                                  state_.repositorySshProfiles.value(repositoryPath));
+                                  resolvedSshProfileId(repositoryPath));
   const auto generation = ++repositoryGeneration_;
   invalidateRepositoryRequests();
   const auto git = git_;
@@ -722,7 +731,7 @@ void RelayController::pushOrigin(const QString& accountId) {
   const auto selected = account(accountId, repositoryPath);
   const auto selectedAccount = selected ? std::optional<Account>(*selected) : std::nullopt;
   const auto profile = valueNamed(state_.sshProfiles,
-                                  state_.repositorySshProfiles.value(repositoryPath));
+                                  resolvedSshProfileId(repositoryPath));
   const auto generation = ++repositoryGeneration_;
   invalidateRepositoryRequests();
   const auto git = git_;
@@ -1262,8 +1271,17 @@ void RelayController::setRepositorySshProfile(const QString& repositoryPath,
     return;
   }
   try {
-    if (profileId.isEmpty()) state_.repositorySshProfiles.remove(repositoryPath);
-    else state_.repositorySshProfiles.insert(repositoryPath, profileId);
+    const auto canonical = QFileInfo(repositoryPath).canonicalFilePath();
+    const auto key = canonical.isEmpty() ? repositoryPath : canonical;
+    if (!canonical.isEmpty()) {
+      for (auto iterator = state_.repositorySshProfiles.begin(); iterator != state_.repositorySshProfiles.end();) {
+        if (iterator.key() == canonical || QFileInfo(iterator.key()).canonicalFilePath() == canonical)
+          iterator = state_.repositorySshProfiles.erase(iterator);
+        else ++iterator;
+      }
+    }
+    if (profileId.isEmpty()) state_.repositorySshProfiles.remove(key);
+    else state_.repositorySshProfiles.insert(key, profileId);
     persistState();
     publishState();
   } catch (const std::exception& error) {

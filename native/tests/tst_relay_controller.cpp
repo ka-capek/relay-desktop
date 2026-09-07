@@ -259,6 +259,49 @@ class RelayControllerTest final : public QObject {
 #endif
   }
 
+  void repositorySshAliasesResolveAndResetWithoutChangingUnknownPaths() {
+#ifndef Q_OS_UNIX
+    QSKIP("Directory symlink fixture requires Unix; Windows QFile::link creates shortcuts.");
+#else
+    QTemporaryDir root;
+    const auto repository = root.filePath(QStringLiteral("repository"));
+    const auto alias = root.filePath(QStringLiteral("alias"));
+    QVERIFY(QDir().mkpath(repository));
+    QVERIFY(QFile::link(repository, alias));
+    const auto canonical = QFileInfo(repository).canonicalFilePath();
+    const auto missing = root.filePath(QStringLiteral("unavailable/repository"));
+    relay::SshProfile profile{QStringLiteral("ssh-work"), QStringLiteral("Work"),
+        QStringLiteral("git.example.com"), {}, std::nullopt, {}, true};
+    relay::AppState state;
+    state.sshProfiles = {profile};
+    state.repositorySshProfiles.insert(alias, profile.id);
+    state.repositorySshProfiles.insert(missing, profile.id);
+    const auto config = controllerConfig(root);
+    seedState(config, state);
+    relay::RelayController controller(config);
+    controller.start();
+    QCOMPARE(controller.resolvedSshProfileId(canonical), profile.id);
+    QCOMPARE(controller.resolvedSshProfileId(alias), profile.id);
+    // Reading legacy state does not rewrite it.
+    QCOMPARE(controller.state().repositorySshProfiles.value(alias), profile.id);
+    controller.setRepositorySshProfile(canonical, {});
+    QCOMPARE(controller.resolvedSshProfileId(alias), QString{});
+    QVERIFY(!controller.state().repositorySshProfiles.contains(alias));
+    QCOMPARE(controller.state().repositorySshProfiles.value(missing), profile.id);
+    controller.setRepositorySshProfile(alias, profile.id);
+    QCOMPARE(controller.state().repositorySshProfiles.value(canonical), profile.id);
+    QVERIFY(!controller.state().repositorySshProfiles.contains(alias));
+    relay::RelayController restarted(config);
+    restarted.start();
+    QCOMPARE(restarted.resolvedSshProfileId(alias), profile.id);
+    restarted.setRepositorySshProfile(alias, {});
+    QCOMPARE(restarted.resolvedSshProfileId(canonical), QString{});
+    const auto stored = relay::appStateFromJson(relay::RelayStore(config.storeFile).read());
+    QCOMPARE(stored.repositorySshProfiles.size(), 1);
+    QCOMPARE(stored.repositorySshProfiles.value(missing), profile.id);
+#endif
+  }
+
   void preferencesSurviveRestartAndValidateFontSize() {
     QTemporaryDir root;
     const auto config = controllerConfig(root);

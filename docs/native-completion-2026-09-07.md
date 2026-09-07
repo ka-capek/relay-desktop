@@ -84,8 +84,12 @@ push was executed during development.
 `.github/workflows/native.yml` prepares build/CTest jobs for macOS arm64 and
 Windows x64 with pinned Qt and upstream LLVM `clang++`. Windows uses the MSVC
 target and dynamic runtime to match Qt. CMake's AppleClang/MSVC/clang-cl mappings
-do not provide the required C++26 mode. The workflow has not been uploaded or
-run. Runner choices and
+do not provide the required C++26 mode. The workflow is running in
+[PR #1](https://github.com/ka-capek/relay-desktop/pull/1). Initial platform runs
+identified fixes for installer metadata and canonical repository path aliases.
+Windows Qt installation uses a pinned aqt 3.3.0 wrapper for the Qt 6.11 layout
+change tracked in [aqt issue 1007](https://github.com/miurahr/aqtinstall/issues/1007).
+Runner choices and
 Qt setup follow [GitHub's runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 and the [Qt setup action](https://github.com/jurplel/install-qt-action).
 Publication uses the documented [repository creation endpoint](https://docs.github.com/en/rest/repos/repos#create-a-repository-for-the-authenticated-user).

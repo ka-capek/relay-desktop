@@ -252,6 +252,10 @@ The latest inventory and release limits are in
 section 5.3. Native additions live in `git_workflows.cpp` and `workflow_ui.cpp`
 with the same controller/service boundary as existing operations.
 
+- GitHub account and SSH profile bindings resolve canonical repository paths
+  and existing legacy aliases (including macOS `/var` versus `/private/var`).
+  Updating a binding removes aliases of that repository only; unavailable paths
+  remain preserved in metadata.
 - `Preferences` now includes `commitName`, `commitEmail` and `graphHistory`.
   Normal history is default. Graph history snapshots local/remote branch tips,
   sends revision lists over stdin and batch-validates them. Filtering does not

@@ -1050,7 +1050,7 @@ void MainWindow::showRepositoryAccountDialog() {
   for (const auto& profile : appState_.sshProfiles)
     ssh->addItem(QStringLiteral("%1 — %2").arg(profile.label, profile.host), profile.id);
   ssh->setCurrentIndex(std::max(0, ssh->findData(
-      appState_.repositorySshProfiles.value(repository_->path))));
+      controller_->resolvedSshProfileId(repository_->path))));
   form->addRow(tr("GitHub account:"), accountCombo);
   form->addRow(tr("SSH identity:"), ssh);
   layout->addLayout(form);
