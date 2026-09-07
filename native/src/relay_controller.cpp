@@ -333,6 +333,10 @@ const Account* RelayController::account(const QString& requestedId,
   return iterator == state_.accounts.cend() ? nullptr : &*iterator;
 }
 
+QString RelayController::boundAccountId(const QString& repositoryPath) const {
+  return repositoryBinding(state_.repositoryAccounts, repositoryPath);
+}
+
 QString RelayController::resolvedAccountId(const QString& repositoryPath) const {
   return repositoryBinding(state_.repositoryAccounts, repositoryPath, state_.activeAccountId);
 }

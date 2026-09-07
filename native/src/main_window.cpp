@@ -283,6 +283,7 @@ void MainWindow::buildShell() {
   statusIdentity_ = new QLabel(tr("No GitHub account connected"), this);
   statusIdentity_->setProperty("role", QStringLiteral("meta"));
   repositorySettingsButton_ = new QPushButton(tr("Repository settings"), this);
+  repositorySettingsButton_->setObjectName(QStringLiteral("repositorySettingsButton"));
   repositorySettingsButton_->setProperty("kind", QStringLiteral("flat"));
   repositorySettingsButton_->setEnabled(false);
   connect(repositorySettingsButton_, &QPushButton::clicked, this, &MainWindow::showRepositoryAccountDialog);
@@ -1024,6 +1025,7 @@ void MainWindow::removeCurrentRepository() {
 void MainWindow::showRepositoryAccountDialog() {
   if (!repository_) return;
   QDialog dialog(this);
+  dialog.setObjectName(QStringLiteral("repositorySettingsDialog"));
   dialog.setWindowTitle(tr("Repository settings"));
   dialog.setMinimumWidth(470);
   auto* layout = new QVBoxLayout(&dialog);
@@ -1038,13 +1040,14 @@ void MainWindow::showRepositoryAccountDialog() {
   layout->addWidget(explanation);
   auto* form = new QFormLayout;
   auto* accountCombo = new QComboBox(&dialog);
+  accountCombo->setObjectName(QStringLiteral("repositoryAccountCombo"));
   accountCombo->addItem(tr("Follow the active account"), QString{});
   for (const auto& accountEntry : appState_.accounts) {
     accountCombo->addItem(QStringLiteral("%1  @%2").arg(accountEntry.name, accountEntry.handle),
                           accountEntry.id);
   }
   accountCombo->setCurrentIndex(std::max(0, accountCombo->findData(
-      appState_.repositoryAccounts.value(repository_->path))));
+      controller_->boundAccountId(repository_->path))));
   auto* ssh = new QComboBox(&dialog);
   ssh->addItem(tr("Use my SSH agent and ~/.ssh/config"), QString{});
   for (const auto& profile : appState_.sshProfiles)

@@ -2,6 +2,8 @@
 #include "relay/dialogs.hpp"
 #include "relay/relay_application.hpp"
 #include "relay/relay_controller.hpp"
+#include "relay/relay_store.hpp"
+#include <QComboBox>
 #include "relay/theme.hpp"
 #include "relay/diff_view.hpp"
 
@@ -213,6 +215,57 @@ class MainWindowTest final : public QObject {
     auto* repos = window.findChild<QListView*>(QStringLiteral("repositoryList"));
     QVERIFY(repos->currentIndex().isValid());
     for (auto* label : window.findChildren<QLabel*>()) QCOMPARE(label->textFormat(), Qt::PlainText);
+  }
+
+  void repositorySettingsKeepsLegacyAliasBindingAndDistinguishesFollowActive() {
+#ifndef Q_OS_UNIX
+    QSKIP("Directory symlink fixture requires Unix.");
+#else
+    QTemporaryDir root;
+    const auto path = root.filePath(QStringLiteral("repository"));
+    const auto alias = root.filePath(QStringLiteral("alias"));
+    QVERIFY(QDir().mkpath(path));
+    createRepository(path);
+    QVERIFY(QFile::link(path, alias));
+    relay::Account personal;
+    personal.id = QStringLiteral("github-1"); personal.githubId = 1;
+    personal.handle = QStringLiteral("personal"); personal.authSource = QStringLiteral("github-cli");
+    auto work = personal;
+    work.id = QStringLiteral("github-2"); work.githubId = 2; work.handle = QStringLiteral("work");
+    relay::AppState state;
+    state.accounts = {personal, work}; state.activeAccountId = personal.id;
+    state.repositoryAccounts.insert(alias, work.id);
+    relay::RelayControllerConfig config;
+    config.storeFile = root.filePath(QStringLiteral("profile/relay-data.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayStore(config.storeFile).write(relay::mergeAppStateIntoJson(state));
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    controller.start();
+    window.show();
+    controller.openRepository(path);
+    auto* settings = window.findChild<QPushButton*>(QStringLiteral("repositorySettingsButton"));
+    QVERIFY(settings);
+    QTRY_VERIFY(settings->isEnabled());
+    const auto selectedAccountOnSave = [&] {
+      QString selected = QStringLiteral("dialog not visited");
+      QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("repositorySettingsDialog"));
+        if (!dialog) return;
+        auto* combo = dialog->findChild<QComboBox*>(QStringLiteral("repositoryAccountCombo"));
+        if (combo) selected = combo->currentData().toString();
+        dialog->accept();
+      });
+      settings->click();
+      return selected;
+    };
+    QCOMPARE(selectedAccountOnSave(), work.id);
+    QCOMPARE(controller.boundAccountId(path), work.id);
+    controller.setRepositoryAccount(alias, {});
+    QCOMPARE(selectedAccountOnSave(), QString{});
+    QCOMPARE(controller.boundAccountId(path), QString{});
+    QCOMPARE(controller.resolvedAccountId(path), personal.id);
+#endif
   }
 
   void settingsMenuPersistsAndEditMenuTargetsFocusedInput() {

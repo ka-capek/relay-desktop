@@ -237,11 +237,15 @@ class RelayControllerTest final : public QObject {
     seedState(config, state);
     relay::RelayController controller(config);
     controller.start();
+    QCOMPARE(controller.boundAccountId(canonical), work.id);
+    QCOMPARE(controller.boundAccountId(alias), work.id);
     QCOMPARE(controller.resolvedAccountId(canonical), work.id);
     QCOMPARE(controller.resolvedAccountId(alias), work.id);
     // Reading legacy state does not rewrite it.
     QCOMPARE(controller.state().repositoryAccounts.value(alias), work.id);
     controller.setRepositoryAccount(canonical, {});
+    QCOMPARE(controller.boundAccountId(alias), QString{});
+    QCOMPARE(controller.boundAccountId(canonical), QString{});
     QCOMPARE(controller.resolvedAccountId(alias), personal.id);
     QVERIFY(!controller.state().repositoryAccounts.contains(alias));
     QCOMPARE(controller.state().repositoryAccounts.value(missing), work.id);

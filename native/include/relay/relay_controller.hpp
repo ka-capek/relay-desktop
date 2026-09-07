@@ -52,6 +52,7 @@ class RelayController final : public QObject {
   [[nodiscard]] const AppState& state() const noexcept;
   [[nodiscard]] const Repository* currentRepository() const noexcept;
   [[nodiscard]] Account commitIdentity() const;
+  [[nodiscard]] QString boundAccountId(const QString& repositoryPath) const;
   [[nodiscard]] QString resolvedAccountId(const QString& repositoryPath) const;
   [[nodiscard]] QString resolvedSshProfileId(const QString& repositoryPath) const;
 
