@@ -35,7 +35,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install build tools
-        run: python -m pip install cmake==3.31.6 ninja==1.12.1
+        run: python -m pip install cmake==3.31.6 ninja==1.13.2
       # CMake 3.31 supports C++26 with upstream clang++'s GNU frontend,
       # but not with AppleClang, cl.exe, or clang-cl. Keep the real C++26
       # requirement; the presets select clang++ explicitly on both targets.
