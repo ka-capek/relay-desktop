@@ -106,5 +106,6 @@ jobs:
           name: native-${{ matrix.target }}-diagnostics
           path: |
             build-native/${{ matrix.target }}/Testing/Temporary/
+            build-native/${{ matrix.target }}/native/tests/*.txt
             build-native/screenshots/
           if-no-files-found: ignore
