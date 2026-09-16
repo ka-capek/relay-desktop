@@ -108,6 +108,28 @@ jobs:
         run: |
           bash native/tools/install-macos.sh --source "$GITHUB_WORKSPACE" --qt-dir "$QT_ROOT_DIR" --no-open
           /usr/bin/open -W "$HOME/Applications/Relay Native.app" --args --smoke-test
+          ditto -c -k --sequesterRsrc --keepParent "$HOME/Applications/Relay Native.app" build-native/Relay-Native-macos-arm64.zip
+      - name: Validate Windows source installer
+        id: windows-install
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./native/tools/install-windows.ps1 -Source $PWD -QtDir $env:QT_ROOT_DIR -NoOpen
+          "app_dir=$env:LOCALAPPDATA/Programs/Relay Native" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - name: Upload macOS source build
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Relay-Native-macos-arm64-source-build
+          path: build-native/Relay-Native-macos-arm64.zip
+          if-no-files-found: error
+      - name: Upload Windows source build
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Relay-Native-windows-x64-source-build
+          path: ${{ steps.windows-install.outputs.app_dir }}
+          if-no-files-found: error
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4

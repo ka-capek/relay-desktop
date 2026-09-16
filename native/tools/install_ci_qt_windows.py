@@ -7,11 +7,16 @@ Remove the wrapper when upgrading to an aqt release that fixes the issue.
 """
 from importlib.metadata import version
 from pathlib import Path
+import argparse
 import os
 import shutil
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", type=Path,
+                        help="SDK cache directory (outside CI, no GitHub environment files are needed)")
+    args = parser.parse_args()
     if version("aqtinstall") != "3.3.0":
         raise RuntimeError("Re-evaluate the Qt layout workaround before changing aqt.")
     from aqt.archives import QtArchives
@@ -27,7 +32,7 @@ def main():
         return original_extension(archives)
 
     QtArchives._arch_ext = extension
-    destination = Path(os.environ["RUNNER_TEMP"]) / "relay-qt"
+    destination = args.output_dir or Path(os.environ["RUNNER_TEMP"]) / "relay-qt"
     root = destination / "6.11.1" / "msvc2022_64"
     root.mkdir(parents=True, exist_ok=True)
     settings = Path(__file__).with_name("aqt-windows.ini")
@@ -47,10 +52,13 @@ def main():
         raise SystemExit(result)
     if not (root / "lib/cmake/Qt6/Qt6Config.cmake").is_file():
         raise RuntimeError(f"Qt installation is incomplete: {root}")
-    with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
-        env.write(f"QT_ROOT_DIR={root.as_posix()}\n")
-    with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as paths:
-        paths.write(f"{root / 'bin'}\n")
+    if os.environ.get("GITHUB_ENV"):
+        with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+            env.write(f"QT_ROOT_DIR={root.as_posix()}\n")
+    if os.environ.get("GITHUB_PATH"):
+        with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as paths:
+            paths.write(f"{root / 'bin'}\n")
+    print(root)
 
 
 if __name__ == "__main__":

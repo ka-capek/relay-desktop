@@ -19,6 +19,7 @@ set(RELAY_NATIVE_SOURCES
   include/relay/main_window.hpp
   include/relay/ssh_service.hpp
   include/relay/theme.hpp
+  include/relay/runtime_check.hpp
   src/domain.cpp
   src/avatar_cache.cpp
   src/app_paths.cpp
@@ -41,6 +42,7 @@ set(RELAY_NATIVE_SOURCES
   src/workflow_ui.cpp
   src/ssh_service.cpp
   src/theme.cpp
+  src/runtime_check.cpp
 )
 
 qt_add_executable(relay_native

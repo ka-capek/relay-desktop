@@ -11,6 +11,11 @@ this document in the same change.
 
 ## 1. Product Definition
 
+Current native continuation: read `docs/native-completion-2026-09-14.md` for the
+latest verification record. Commit `ca05c2b` passed the pinned Qt macOS and
+Windows CI jobs, including the macOS source installer, in run 34118316989.
+This supersedes earlier statements that no native platform jobs have run.
+
 Relay is a small GitHub Desktop-style Electron client whose distinguishing
 feature is first-class support for multiple GitHub accounts.
 
@@ -402,6 +407,29 @@ malformed themes and screenshots of every preset's graph, diff and settings.
 
 
 ## 6. Authoritative File Map
+
+Native source installation now also has `native/tools/install-windows.ps1`
+and `install_windows.py`. The PowerShell entry selects the x64 Visual Studio
+environment; Python builds with pinned tools, deploys dynamic Qt and the MSVC
+CRT, smoke-tests with a clean runtime PATH, and publishes through same-volume
+renames. Keep the previous installation and restore it if publication fails.
+Reject unrelated existing destinations and running Relay processes. Only the
+new stage/cache may be cleaned. Git and gh are external; this workflow is not
+the strict redistribution pipeline or a signed release. Changes require the
+Windows installer safety tests and the native CI installation smoke test.
+The shared aqt helper accepts `--output-dir` without GitHub environment files.
+
+`runtime_check.cpp` supplies startup dependency checks (Git >=2.35.0 and
+gh >=2.98.0, a conservative baseline matching the previously bundled CLI).
+Checks use the actual service executable/environment and bounded `--version`
+processes in a controller worker; do not authenticate, install tools, or persist
+their output. Widgets get only sanitized issue strings, shown in a persistent
+selectable banner with retry and a Help-menu entry. Missing CLI startup must
+preserve existing account metadata. Windows rechecks standard external tool
+locations when PATH has not yet changed in the current process. An external
+absolute Git path must not activate the bundled-Git environment overrides.
+Both repository sorting implementations use an English collator only when the
+default locale is C, where Qt otherwise ignores numeric mode.
 
 ### Desktop product
 

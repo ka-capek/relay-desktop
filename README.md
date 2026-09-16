@@ -56,6 +56,45 @@ This is a local source build, not a notarized distribution.
 To install an existing checkout, run `bash native/tools/install-macos.sh --source "$PWD"`; `--qt-dir /path/to/Qt/6.11.1/macos` reuses an existing SDK.
 `--skip-deps` is available when the required Homebrew tools are already present.
 
+## Install the native client on Windows x64
+
+From an existing checkout, run in x64 PowerShell:
+
+```powershell
+./native/tools/install-windows.ps1 -NoOpen
+```
+
+Prerequisites: Visual Studio C++ Build Tools with the Desktop development with
+C++ workload and x64 Windows SDK, LLVM 20, Python 3.12 on PATH, Git, GitHub CLI,
+and 7-Zip. The script selects the Visual Studio developer environment itself.
+Use `-QtDir C:/Qt/6.11.1/msvc2022_64` to reuse an SDK, or it downloads the pinned
+Qt version into a user cache. Build tools are isolated in that cache.
+
+The installer builds Release, deploys Qt and the MSVC runtime, and launches a
+temporary-profile smoke test with the Qt SDK removed from PATH. Only after that
+passes does it install `%LOCALAPPDATA%/Programs/Relay Native/Relay.exe` and add a
+**Relay Native** Start menu shortcut. Quit Relay before updating. A previous
+installation is retained beside the new one; a failed replacement restores it.
+Repository files and account settings are not modified by installation.
+
+Omit `-NoOpen` to launch after installation. `-Source` selects another checkout;
+`-InstallDirectory` selects a separate application directory. Keep Git and gh
+installed: they are external dependencies. This is an unsigned local source
+build, not the published Electron installer. The new Windows installer still
+needs its own native CI run; see the [completion record](docs/native-completion-2026-09-14.md).
+
+## Native first-run setup
+
+Relay checks Git and GitHub CLI on startup without signing in. Missing or old
+tools produce a persistent banner with installation guidance. Choose **Check
+again** after installing, or **Help → Check Git and GitHub CLI** at any time.
+The supported baselines are Git 2.35.0 and GitHub CLI 2.98.0 (the previous bundled
+CLI version). Local repositories remain usable without a GitHub account.
+
+Windows also checks the standard Git and GitHub CLI installation directories
+when an already-running app has an old PATH. A custom installation directory
+must already be on the app's PATH; otherwise restart after updating PATH.
+
 ## Native themes and branch graph
 
 Open Settings (`⌘,` on macOS) → **Appearance** to choose **Light**, **Dark**,
@@ -130,7 +169,7 @@ credential store, and the C++ presentation layer never receives a token.
 Measurements and the exact commands used to collect them are recorded in
 `docs/native-measurements.md`.
 
-The [current native implementation and verification status](docs/native-completion-2026-09-07.md)
+The [current native implementation and verification status](docs/native-completion-2026-09-14.md)
 records the source changes, independent reviews and remaining release gates.
 The native successor is not yet a verified replacement release.
 
@@ -146,9 +185,12 @@ A conflict dialog handles resolution, continue, abort and skip. New repositories
 can be initialized locally or published through an explicit GitHub dialog.
 Production login/publication and installers still require native-platform checks.
 
-A native [CI workflow](.github/workflows/native.yml) is prepared for pinned Qt
-builds and tests on macOS arm64 and Windows x64. Its presence is not evidence
-that those jobs have passed.
+A native [CI workflow](.github/workflows/native.yml) builds and tests pinned Qt
+on macOS arm64 and Windows x64. Both platforms and the Apple Silicon source
+installer passed for commit `ca05c2b` in [run 34118316989](https://github.com/ka-capek/relay-desktop/actions/runs/34118316989).
+The latest local changes extend that workflow to validate the Windows source
+installer and retain downloadable source-build artifacts for both platforms.
+Those additions require a new CI run; earlier results do not validate them.
 
 ## Desktop builds
 

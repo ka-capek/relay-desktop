@@ -121,7 +121,10 @@ class ListModelsTest final : public QObject {
   }
 
   void repositoryManualOrderAndNaturalTieBreak() {
+    const QLocale previous;
+    QLocale::setDefault(QLocale::c());
     relay::RepositoryListModel model;
+    QLocale::setDefault(previous);
     model.setRepositories({
         repository(QStringLiteral("/repo10"), QStringLiteral("repo10"), QStringLiteral("owner")),
         repository(QStringLiteral("/repo2"), QStringLiteral("repo2"), QStringLiteral("owner")),

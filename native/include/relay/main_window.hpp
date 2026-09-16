@@ -135,6 +135,9 @@ class MainWindow final : public QMainWindow {
   QPushButton* conflictButton_{};
   QTimer* noticeTimer_{};
   QDialog* loginDialog_{};
+  QWidget* runtimeBanner_{};
+  QLabel* runtimeMessage_{};
+  QPushButton* runtimeRetry_{};
   QLineEdit* loginCode_{};
 };
 

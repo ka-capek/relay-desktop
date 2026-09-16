@@ -58,6 +58,7 @@ class RelayController final : public QObject {
 
  public slots:
   void start();
+  void checkRuntimes();
   void setPreferences(relay::Preferences preferences);
   void synchronizeAccounts();
   void connectAccount();
@@ -103,6 +104,7 @@ class RelayController final : public QObject {
   void testSshProfile(const SshProfile& profile);
 
  signals:
+  void runtimeIssuesChanged(const QStringList& issues);
   void stateChanged(relay::AppState state);
   void currentRepositoryChanged(relay::Repository repository);
   void repositoryClosed();

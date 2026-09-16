@@ -106,6 +106,7 @@ QVariant fileCustomData(const ChangedFile& file, int role, int pathRole, int nam
 }  // namespace
 
 RepositoryListModel::RepositoryListModel(QObject* parent) : QAbstractListModel(parent) {
+  if (collator_.locale().language() == QLocale::C) collator_.setLocale(QLocale(QLocale::English));
   collator_.setCaseSensitivity(Qt::CaseInsensitive);
   collator_.setNumericMode(true);
 }

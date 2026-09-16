@@ -212,6 +212,8 @@ void MainWindow::buildMenus() {
   auto* window = menuBar()->addMenu(tr("&Window"));
   window->addAction(tr("Minimize"), QKeySequence(tr("Ctrl+M")), this, &QWidget::showMinimized);
   window->addAction(tr("Close"), QKeySequence::Close, this, &QWidget::close);
+  auto* help = menuBar()->addMenu(tr("&Help"));
+  help->addAction(tr("Check Git and GitHub CLI"), controller_, &RelayController::checkRuntimes);
 }
 
 void MainWindow::buildShell() {
@@ -256,6 +258,22 @@ void MainWindow::buildShell() {
   actions->addStretch();
   actions->addWidget(accountButton_);
   layout->addWidget(actionRow);
+
+  runtimeBanner_ = new QWidget(root);
+  runtimeBanner_->setObjectName(QStringLiteral("runtimeBanner"));
+  auto* runtimeLayout = new QHBoxLayout(runtimeBanner_);
+  runtimeMessage_ = new QLabel(runtimeBanner_);
+  runtimeMessage_->setObjectName(QStringLiteral("runtimeMessage"));
+  runtimeMessage_->setTextFormat(Qt::PlainText);
+  runtimeMessage_->setWordWrap(true);
+  runtimeMessage_->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+  runtimeRetry_ = new QPushButton(tr("Check again"), runtimeBanner_);
+  runtimeRetry_->setObjectName(QStringLiteral("runtimeRetry"));
+  connect(runtimeRetry_, &QPushButton::clicked, controller_, &RelayController::checkRuntimes);
+  runtimeLayout->addWidget(runtimeMessage_, 1);
+  runtimeLayout->addWidget(runtimeRetry_);
+  runtimeBanner_->hide();
+  layout->addWidget(runtimeBanner_);
 
   conflictButton_ = new QPushButton(root);
   conflictButton_->setObjectName(QStringLiteral("conflictButton"));
@@ -633,6 +651,13 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
 }
 
 void MainWindow::connectController() {
+  connect(controller_, &RelayController::runtimeIssuesChanged, this, [this](const QStringList& issues) {
+    runtimeMessage_->setText(issues.join(u'\n'));
+    runtimeBanner_->setVisible(!issues.isEmpty());
+  });
+  connect(controller_, &RelayController::busyChanged, this, [this](const QString& operation, bool busy) {
+    if (operation == QStringLiteral("runtime-check")) runtimeRetry_->setEnabled(!busy);
+  });
   connect(controller_, &RelayController::commitCreated, this, [this](const QString& path) {
     commitDrafts_.remove(path);
     if (repository_ && repository_->path == path) {

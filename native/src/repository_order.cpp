@@ -23,6 +23,9 @@ bool hasTimestamp(const QJsonValue& value) {
 
 QCollator repositoryCollator() {
   QCollator collator;
+  // Qt's C locale ignores numeric mode. Preserve natural ordering for users
+  // launching with LANG=C/C.UTF-8 as well as ordinary desktop locales.
+  if (collator.locale().language() == QLocale::C) collator.setLocale(QLocale(QLocale::English));
   collator.setCaseSensitivity(Qt::CaseInsensitive);
   collator.setNumericMode(true);
   return collator;

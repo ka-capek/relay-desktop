@@ -1,4 +1,5 @@
 #include "relay/git_service.hpp"
+#include "relay/runtime_check.hpp"
 
 #include "relay/process_runner.hpp"
 
@@ -217,7 +218,7 @@ QString GitService::gitExecutable() const {
 #endif
   if (QFileInfo::exists(packaged)) return packaged;
   if (QFileInfo::exists(development)) return development;
-  return QStringLiteral("git");
+  return systemRuntimeExecutable(RuntimeTool::git);
 }
 
 QProcessEnvironment GitService::gitProcessEnvironment(
@@ -232,7 +233,8 @@ QProcessEnvironment GitService::gitProcessEnvironment(
   environment.remove(QStringLiteral("GH_TOKEN"));
   environment.remove(QStringLiteral("GITHUB_TOKEN"));
   const auto executable = gitExecutable();
-  if (executable != QStringLiteral("git")) {
+  if (executable.startsWith(QDir(resourcesPath_).absoluteFilePath(QStringLiteral("git/"))) ||
+      executable.startsWith(QDir(sourceRoot_).absoluteFilePath(QStringLiteral("runtime/git/")))) {
     const auto root = QDir::cleanPath(QDir(QFileInfo(executable).absolutePath())
                                           .absoluteFilePath(QStringLiteral("..")));
     QStringList bundledPaths;

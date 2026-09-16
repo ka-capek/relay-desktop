@@ -63,6 +63,40 @@ class MainWindowTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void missingToolsBannerCanBeSelectedAndClearsOnRecovery() {
+    QTemporaryDir profile;
+    relay::RelayControllerConfig config;
+    config.storeFile = profile.filePath(QStringLiteral("relay-data.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.resize(820, 650);
+    window.show();
+    controller.start();
+    const auto banner = window.findChild<QWidget*>(QStringLiteral("runtimeBanner"));
+    const auto message = window.findChild<QLabel*>(QStringLiteral("runtimeMessage"));
+    const auto retry = window.findChild<QPushButton*>(QStringLiteral("runtimeRetry"));
+    QVERIFY(banner && message && retry);
+    QVERIFY(!banner->isVisible());
+    controller.runtimeIssuesChanged({QStringLiteral("GitHub CLI is unavailable. Install GitHub CLI with: winget install --id GitHub.cli -e")});
+    QVERIFY(banner->isVisible());
+    QVERIFY(message->textInteractionFlags().testFlag(Qt::TextSelectableByKeyboard));
+    controller.busyChanged(QStringLiteral("runtime-check"), true);
+    QVERIFY(!retry->isEnabled());
+    controller.busyChanged(QStringLiteral("runtime-check"), false);
+    QVERIFY(retry->isEnabled());
+    QCoreApplication::processEvents();
+    QVERIFY(message->geometry().right() < retry->geometry().left());
+    const auto screenshots = qEnvironmentVariable("RELAY_SCREENSHOT_DIR");
+    if (!screenshots.isEmpty()) {
+      QDir().mkpath(screenshots);
+      QVERIFY(window.grab().save(screenshots + QStringLiteral("/runtime-setup.png")));
+    }
+    controller.runtimeIssuesChanged({});
+    QVERIFY(!banner->isVisible());
+    QVERIFY(!controller.currentRepository());
+  }
+
   void themedDiffAndSettingsScreenshots() {
     for (const auto& id : relay::theme::presetIds()) {
       relay::theme::configure(id);

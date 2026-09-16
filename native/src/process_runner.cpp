@@ -1,7 +1,9 @@
 #include "relay/process_runner.hpp"
+#include "relay/runtime_check.hpp"
 
 #include <algorithm>
 #include <QElapsedTimer>
+#include <QFileInfo>
 
 namespace relay {
 namespace {
@@ -37,6 +39,13 @@ ProcessResult ProcessRunner::run(const ProcessRequest& request) {
   process.start(QIODevice::ReadWrite);
 
   if (!process.waitForStarted()) {
+    const auto name = QFileInfo(request.program).baseName().toLower();
+    if (name == QStringLiteral("git") || name == QStringLiteral("gh")) {
+      const auto tool = name == QStringLiteral("git") ? RuntimeTool::git : RuntimeTool::githubCli;
+      throw ProcessError(QStringLiteral("%1 could not start. %2")
+          .arg(name == QStringLiteral("git") ? QStringLiteral("Git") : QStringLiteral("GitHub CLI"),
+               runtimeInstallHelp(tool)));
+    }
     throw ProcessError(QStringLiteral("%1 could not start: %2").arg(request.program, process.errorString()));
   }
 

@@ -1,4 +1,5 @@
 #include "relay/github_auth.hpp"
+#include "relay/runtime_check.hpp"
 
 #include "relay/process_runner.hpp"
 
@@ -40,7 +41,8 @@ QString GitHubAuth::executable() const {
   const auto bundled = QDir(context_.resourcesRoot).filePath(QStringLiteral("gh/%1").arg(name));
   if (QFileInfo(bundled).isFile()) return bundled;
   const auto development = QDir(context_.sourceRoot).filePath(QStringLiteral("runtime/gh/%1/%2").arg(platform, name));
-  return !context_.packaged && QFileInfo(development).isFile() ? development : name;
+  return !context_.packaged && QFileInfo(development).isFile() ? development
+      : systemRuntimeExecutable(RuntimeTool::githubCli);
 }
 
 QProcessEnvironment GitHubAuth::environment(const bool interactive) const {

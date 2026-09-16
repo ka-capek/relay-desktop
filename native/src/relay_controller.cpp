@@ -1,5 +1,6 @@
 #include "relay/relay_controller.hpp"
 #include "relay/theme.hpp"
+#include "relay/runtime_check.hpp"
 
 #include "relay/app_paths.hpp"
 #include "relay/process_runner.hpp"
@@ -200,10 +201,26 @@ void RelayController::start() {
     ++repositoryGeneration_;
     publishState();
     emit repositoryClosed();
-    if (config_.synchronizeAccountsOnStart) synchronizeAccounts();
+    if (config_.synchronizeAccountsOnStart) checkRuntimes();
   } catch (const std::exception& error) {
     emit operationFailed(QStringLiteral("startup"), QString::fromUtf8(error.what()));
   }
+}
+
+void RelayController::checkRuntimes() {
+  const auto git = git_;
+  const auto auth = auth_;
+  runAsync<QPair<QStringList, bool>>(QStringLiteral("runtime-check"), [git, auth] {
+    QStringList issues;
+    const auto gitIssue = checkRuntime(RuntimeTool::git, git->gitExecutable(), git->gitProcessEnvironment());
+    const auto ghIssue = checkRuntime(RuntimeTool::githubCli, auth->executable(), auth->environment());
+    if (!gitIssue.isEmpty()) issues.append(gitIssue);
+    if (!ghIssue.isEmpty()) issues.append(ghIssue);
+    return qMakePair(issues, ghIssue.isEmpty());
+  }, [this](const QPair<QStringList, bool>& result) {
+    emit runtimeIssuesChanged(result.first);
+    if (result.second && !accountMutationActive_ && !repositoryMutationActive_) synchronizeAccounts();
+  });
 }
 
 void RelayController::synchronizeAccounts() {
