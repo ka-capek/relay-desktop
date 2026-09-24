@@ -422,6 +422,9 @@ new stage/cache may be cleaned. Git and gh are external; this workflow is not
 the strict redistribution pipeline or a signed release. Changes require the
 Windows installer safety tests and the native CI installation smoke test.
 The shared aqt helper accepts `--output-dir` without GitHub environment files.
+The Windows installer discovers the single complete `Microsoft.VC*.CRT` payload
+under the active `VCToolsRedistDir/x64`, rather than assuming VC143; missing or
+ambiguous runtimes fail before installation.
 
 `runtime_check.cpp` supplies startup dependency checks (Git >=2.35.0 and
 gh >=2.98.0, a conservative baseline matching the previously bundled CLI).

@@ -25,6 +25,29 @@ class WindowsInstallerTest(unittest.TestCase):
         self.destination.mkdir()
         (self.destination / "Relay.exe").write_bytes(b"old app")
 
+    def test_crt_supports_active_visual_studio_toolsets(self):
+        for name in ("Microsoft.VC143.CRT", "Microsoft.VC145.CRT"):
+            with self.subTest(name=name):
+                root = self.root / name
+                crt = root / "x64" / name
+                crt.mkdir(parents=True)
+                (crt / "msvcp140.dll").touch()
+                (crt / "vcruntime140.dll").touch()
+                self.assertEqual(installer.release_crt_directory(root), crt)
+
+    def test_crt_refuses_incomplete_or_ambiguous_payload(self):
+        root = self.root / "redist"
+        for name in ("Microsoft.VC143.CRT", "Microsoft.VC145.CRT"):
+            crt = root / "x64" / name
+            crt.mkdir(parents=True)
+            (crt / "msvcp140.dll").touch()
+        with self.assertRaises(RuntimeError):
+            installer.release_crt_directory(root)
+        for crt in (root / "x64").iterdir():
+            (crt / "vcruntime140.dll").touch()
+        with self.assertRaises(RuntimeError):
+            installer.release_crt_directory(root)
+
     def test_first_install(self):
         self.assertIsNone(installer.install_staged(self.stage, self.destination))
         self.assertEqual((self.destination / "Relay.exe").read_bytes(), b"new app")

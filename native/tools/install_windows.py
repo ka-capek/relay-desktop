@@ -20,6 +20,16 @@ def run(*args: object, **kwargs) -> None:
     subprocess.run([str(arg) for arg in args], check=True, **kwargs)
 
 
+def release_crt_directory(redist: Path) -> Path:
+    """Use the active VS redist root, allowing newer VC toolset folder names."""
+    candidates = [path for path in (redist / "x64").glob("Microsoft.VC*.CRT")
+                  if path.is_dir() and (path / "msvcp140.dll").is_file()
+                  and (path / "vcruntime140.dll").is_file()]
+    if len(candidates) != 1:
+        raise RuntimeError(f"Expected one complete x64 Visual Studio release CRT under {redist}.")
+    return candidates[0]
+
+
 def require_app_closed() -> None:
     output = subprocess.check_output(["tasklist.exe", "/FI", "IMAGENAME eq Relay.exe", "/FO", "CSV", "/NH"],
                                      text=True, errors="replace", timeout=15)
@@ -147,9 +157,7 @@ def main() -> None:
                 run(cmake, "--install", build, "--prefix", stage, env=environment)
                 run(qt / "bin/windeployqt.exe", "--release", "--no-translations",
                     "--no-compiler-runtime", "--dir", stage, stage / "Relay.exe", env=environment)
-                crt = Path(os.environ["VCToolsRedistDir"]) / "x64/Microsoft.VC143.CRT"
-                if not (crt / "msvcp140.dll").is_file():
-                    raise RuntimeError(f"The Visual Studio release CRT is missing: {crt}")
+                crt = release_crt_directory(Path(os.environ["VCToolsRedistDir"]))
                 for dll in crt.glob("*.dll"):
                     shutil.copy2(dll, stage / dll.name)
                 licenses = stage / "resources/licenses"
