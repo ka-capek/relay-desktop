@@ -79,7 +79,7 @@ specified state:
 python3 native/tools/measure_release.py \
   --scenario idle \
   --stage build-native/stage/Relay.app \
-  --artifact outputs/native-installers/Relay-0.6.0-arm64.dmg \
+  --artifact outputs/native-installers/Relay-0.5.1-arm64.dmg \
   --pid 12345 \
   --output outputs/native-measurements/macos-idle.json
 ```

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.30)
 
 project(RelayNative
-  VERSION 0.6.0
+  VERSION 0.5.1
   DESCRIPTION "A native multi-account Git desktop client"
   HOMEPAGE_URL "https://github.com/ka-capek/relay-desktop"
   LANGUAGES CXX
