@@ -6,6 +6,7 @@
 #include "relay/list_models.hpp"
 #include "relay/relay_controller.hpp"
 #include "relay/theme.hpp"
+#include "relay/ssh_service.hpp"
 
 #include <QAction>
 #include <QApplication>
@@ -237,9 +238,28 @@ void MainWindow::buildShell() {
   branchPicker_->setAccessibleName(tr("Current branch"));
   branchPicker_->setMinimumWidth(150);
   branchPicker_->addItem(tr("No branch"));
-  syncButton_ = new QPushButton(tr("Fetch origin"), actionRow);
+  syncButton_ = new QToolButton(actionRow);
+  syncButton_->setObjectName(QStringLiteral("syncButton"));
+  syncButton_->setText(tr("Fetch origin"));
+  syncButton_->setPopupMode(QToolButton::MenuButtonPopup);
+  syncButton_->setAccessibleName(tr("Synchronize with origin"));
+  auto* syncMenu = new QMenu(syncButton_);
+  auto* fetch = syncMenu->addAction(tr("Fetch origin"), this, [this] {
+    if (repository_) controller_->fetchOrigin(currentAccountId());
+  });
+  syncMenu->addAction(pullAction_);
+  auto* push = syncMenu->addAction(tr("Push origin"), this, [this] {
+    if (repository_) controller_->pushOrigin(currentAccountId());
+  });
+  connect(syncMenu, &QMenu::aboutToShow, this, [this, fetch, push] {
+    const bool remoteReady = repository_ && !repository_->remote.isEmpty() && busyOperations_.isEmpty();
+    fetch->setEnabled(remoteReady);
+    push->setEnabled(remoteReady);
+    pullAction_->setEnabled(remoteReady && repository_->hasUpstream);
+  });
+  syncButton_->setMenu(syncMenu);
   syncButton_->setEnabled(false);
-  connect(syncButton_, &QPushButton::clicked, this, [this] {
+  connect(syncButton_, &QToolButton::clicked, this, [this] {
     if (!repository_) return;
     if (repository_->remote.isEmpty()) { showPublishDialog(); return; }
     if (repository_->hasUpstream && repository_->behind > 0) controller_->pullOrigin(currentAccountId());
@@ -248,10 +268,12 @@ void MainWindow::buildShell() {
   });
   accountButton_ = new QToolButton(actionRow);
   accountButton_->setPopupMode(QToolButton::InstantPopup);
+  accountButton_->setObjectName(QStringLiteral("accountButton"));
   accountButton_->setText(tr("Connect GitHub account"));
-  accountButton_->setAccessibleName(tr("Active GitHub account"));
+  accountButton_->setAccessibleName(tr("GitHub account and repository SSH identity"));
   accountMenu_ = new QMenu(accountButton_);
   accountButton_->setMenu(accountMenu_);
+  connect(accountMenu_, &QMenu::aboutToShow, this, &MainWindow::rebuildAccountMenu);
   actions->addWidget(repositoryButton_);
   actions->addWidget(branchPicker_);
   actions->addWidget(syncButton_);
@@ -283,6 +305,7 @@ void MainWindow::buildShell() {
 
   auto* workspace = new QSplitter(Qt::Horizontal, root);
   workspace->setChildrenCollapsible(false);
+  workspace->setHandleWidth(7);
   workspace->addWidget(buildSidebar(workspace));
   workspaceStack_ = new QStackedWidget(workspace);
   workspaceStack_->addWidget(buildEmptyState(workspaceStack_));
@@ -455,7 +478,9 @@ QWidget* MainWindow::buildEmptyState(QWidget* parent) {
 
 QWidget* MainWindow::buildChangesPage(QWidget* parent) {
   auto* splitter = new QSplitter(Qt::Horizontal, parent);
+  splitter->setObjectName(QStringLiteral("changesSplitter"));
   splitter->setChildrenCollapsible(false);
+  splitter->setHandleWidth(7);
   auto* left = new QWidget(splitter);
   auto* leftLayout = new QVBoxLayout(left);
   leftLayout->setContentsMargins(0, 0, 0, 0);
@@ -489,6 +514,7 @@ QWidget* MainWindow::buildChangesPage(QWidget* parent) {
   commitLayout->setContentsMargins(10, 10, 10, 10);
   commitIdentity_ = new QLabel(tr("Connect an account before committing"), commitBox);
   commitIdentity_->setProperty("role", QStringLiteral("meta"));
+  commitIdentity_->setWordWrap(true);
   commitSummary_ = new QLineEdit(commitBox);
   commitSummary_->setPlaceholderText(tr("Summary (required)"));
   commitSummary_->setAccessibleName(tr("Commit summary"));
@@ -544,7 +570,9 @@ QWidget* MainWindow::buildChangesPage(QWidget* parent) {
 
 QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   auto* splitter = new QSplitter(Qt::Horizontal, parent);
+  splitter->setObjectName(QStringLiteral("historySplitter"));
   splitter->setChildrenCollapsible(false);
+  splitter->setHandleWidth(7);
   auto* left = new QWidget(splitter);
   auto* leftLayout = new QVBoxLayout(left);
   leftLayout->setContentsMargins(0, 0, 0, 0);
@@ -578,8 +606,13 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   historyList_->setAccessibleName(tr("Commit history"));
   leftLayout->addWidget(historyList_, 1);
 
-  auto* right = new QWidget(splitter);
-  auto* rightLayout = new QVBoxLayout(right);
+  auto* right = new QSplitter(Qt::Vertical, splitter);
+  right->setObjectName(QStringLiteral("historyDetailSplitter"));
+  right->setHandleWidth(7);
+  right->setChildrenCollapsible(false);
+  auto* details = new QWidget(right);
+  details->setMinimumHeight(100);
+  auto* rightLayout = new QVBoxLayout(details);
   rightLayout->setContentsMargins(16, 12, 12, 8);
   auto* headingRow = new QHBoxLayout;
   historyTitle_ = new QLabel(tr("Select a commit"), right);
@@ -606,14 +639,18 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   commitFileList_->setObjectName(QStringLiteral("commitFileList"));
   commitFileList_->setModel(commitFileModel_);
   commitFileList_->setItemDelegate(new CommitFileItemDelegate(commitFileList_));
-  commitFileList_->setMaximumHeight(230);
+  commitFileList_->setMinimumHeight(40);
   historyDiff_ = new DiffView(right);
   rightLayout->addLayout(headingRow);
   rightLayout->addWidget(historyMetadata_);
   rightLayout->addWidget(historyBody_);
   rightLayout->addWidget(sectionLabel(tr("Changed files"), right));
   rightLayout->addWidget(commitFileList_);
-  rightLayout->addWidget(historyDiff_, 1);
+  right->addWidget(details);
+  right->addWidget(historyDiff_);
+  historyDiff_->setMinimumHeight(100);
+  right->setSizes({280, 400});
+  right->setStretchFactor(1, 1);
   splitter->addWidget(left);
   splitter->addWidget(right);
   splitter->setSizes({430, 720});
@@ -680,6 +717,7 @@ void MainWindow::connectController() {
   connect(controller_, &RelayController::repositoryClosed, this, [this] {
     if (repository_) commitDrafts_.insert(repository_->path, {commitSummary_->text(), commitDescription_->toPlainText()});
     repository_.reset();
+    applyState(controller_->state());
     updateWorkflowActions();
     commitSummary_->clear();
     commitDescription_->clear();
@@ -724,7 +762,6 @@ void MainWindow::connectController() {
                      QLocale().toString(detail.committerDate.toLocalTime(), QLocale::ShortFormat)));
             historyBody_->setText(detail.body);
             commitFileModel_->setFiles(detail.files);
-            commitFileList_->setMaximumHeight(static_cast<int>(std::clamp<qsizetype>(detail.files.size() * 52 + 2, 52, 230)));
             copyHashButton_->setEnabled(true);
             openGitHubButton_->setEnabled(!githubCommitUrl(repository_->remote, detail.fullHash).isEmpty());
             historyDiff_->clearDiff();
@@ -877,6 +914,15 @@ void MainWindow::applyState(const AppState& state) {
                                  : tr("Connect GitHub account"));
   statusIdentity_->setText(active ? tr("Signed in as @%1").arg(active->handle)
                                   : tr("No GitHub account connected"));
+  if (repository_ && SshService::parseRemote(repository_->remote) &&
+      !SshService::isGitHubRemote(repository_->remote)) {
+    const auto profileId = controller_->resolvedSshProfileId(repository_->path);
+    const auto profile = std::find_if(state.sshProfiles.cbegin(), state.sshProfiles.cend(),
+        [&profileId](const SshProfile& value) { return value.id == profileId; });
+    const auto label = profile == state.sshProfiles.cend() ? tr("SSH agent") : profile->label;
+    accountButton_->setText(tr("SSH · %1").arg(label));
+    statusIdentity_->setText(tr("Using SSH · %1").arg(label));
+  }
   rebuildAccountMenu();
   if (repository_) {
     const auto identity = controller_->commitIdentity();
@@ -983,6 +1029,31 @@ void MainWindow::rebuildAccountMenu() {
                       [this, id = account.id] { showAccountEmailDialog(id); });
   }
   accountMenu_->addAction(tr("Manage accounts…"), this, &MainWindow::showAccountsDialog);
+  accountMenu_->addSeparator();
+  accountMenu_->addSection(tr("SSH identity for this repository"));
+  const auto remote = repository_ ? SshService::parseRemote(repository_->remote) : std::nullopt;
+  const bool supportsSsh = remote && !SshService::isGitHubRemote(repository_->remote);
+  const auto selected = repository_ ? controller_->resolvedSshProfileId(repository_->path) : QString{};
+  auto* useAgent = accountMenu_->addAction(tr("Use SSH agent and configuration"));
+  useAgent->setObjectName(QStringLiteral("useSshAgentAction"));
+  useAgent->setCheckable(true);
+  useAgent->setChecked(selected.isEmpty());
+  useAgent->setEnabled(supportsSsh && busyOperations_.isEmpty());
+  connect(useAgent, &QAction::triggered, this, [this] {
+    if (repository_) controller_->setRepositorySshProfile(repository_->path, {});
+  });
+  for (const auto& profile : appState_.sshProfiles) {
+    auto* action = accountMenu_->addAction(QStringLiteral("%1 (%2)").arg(profile.label, profile.host));
+    action->setObjectName(QStringLiteral("sshProfileAction"));
+    action->setData(profile.id);
+    action->setCheckable(true);
+    action->setChecked(profile.id == selected);
+    action->setEnabled(supportsSsh && busyOperations_.isEmpty() &&
+                       remote->host.compare(profile.host, Qt::CaseInsensitive) == 0);
+    connect(action, &QAction::triggered, this, [this, id = profile.id] {
+      if (repository_) controller_->setRepositorySshProfile(repository_->path, id);
+    });
+  }
   accountMenu_->addAction(tr("Manage SSH identities…"), this, &MainWindow::showSshProfilesDialog);
 }
 

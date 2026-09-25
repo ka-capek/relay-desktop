@@ -123,6 +123,23 @@ Windows also checks the standard Git and GitHub CLI installation directories
 when an already-running app has an old PATH. A custom installation directory
 must already be on the app's PATH; otherwise restart after updating PATH.
 
+## Native sync, diff sizing and SSH selection
+
+Use the arrow beside the toolbar sync button to choose **Fetch origin**,
+**Pull origin** or **Push origin** directly. Pull fetches first and then
+fast-forwards the tracked origin branch; divergent branches still require an
+explicit merge/rebase. The main button continues to suggest an action from the
+last known repository state.
+
+Drag the dividers to resize changes/history panels. In History, the horizontal
+divider above the diff also changes the space shared by commit details/files
+and the diff.
+
+For a non-GitHub SSH repository, open the top-right account/identity menu and
+select a saved SSH identity for that host. No GitHub sign-in is needed. Choose
+**Use SSH agent and configuration** to clear the override. Commit author details
+remain independent of the SSH key and can be set through Settings/local Git.
+
 ## Native themes and branch graph
 
 Open Settings (`⌘,` on macOS) → **Appearance** to choose **Light**, **Dark**,

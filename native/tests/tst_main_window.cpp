@@ -21,6 +21,9 @@
 #include <QSpinBox>
 #include <QStatusBar>
 #include <QTimer>
+#include <QToolButton>
+#include <QMenu>
+#include <QSplitter>
 #include <QDir>
 #include <QFile>
 #include <QFontDatabase>
@@ -63,6 +66,133 @@ class MainWindowTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void toolbarPullFetchesUnknownRemoteChanges() {
+    QTemporaryDir temporary;
+    const auto seed = temporary.filePath(QStringLiteral("seed"));
+    const auto remote = temporary.filePath(QStringLiteral("remote.git"));
+    const auto local = temporary.filePath(QStringLiteral("local"));
+    QVERIFY(QDir{}.mkpath(seed));
+    createRepository(seed);
+    runGit(temporary.path(), {QStringLiteral("clone"), QStringLiteral("--bare"), seed, remote});
+    runGit(temporary.path(), {QStringLiteral("clone"), remote, local});
+    runGit(seed, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"), remote});
+    runGit(seed, {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Remote update")});
+    runGit(seed, {QStringLiteral("push"), QStringLiteral("origin"), QStringLiteral("main")});
+    relay::RelayControllerConfig config;
+    config.storeFile = temporary.filePath(QStringLiteral("state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show();
+    controller.start();
+    controller.openRepository(local);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository(), 10000);
+    QCOMPARE(controller.currentRepository()->behind, 0);
+    const auto sync = window.findChild<QToolButton*>(QStringLiteral("syncButton"));
+    const auto pull = window.findChild<QAction*>(QStringLiteral("pullAction"));
+    QVERIFY(sync && sync->menu() && pull);
+    QVERIFY(sync->menu()->actions().contains(pull));
+    QVERIFY(pull->isEnabled());
+    pull->trigger();
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->history.value(0).title,
+                              QStringLiteral("Remote update"), 10000);
+    controller.closeRepository();
+    QVERIFY(!pull->isEnabled());
+    QVERIFY(!sync->isEnabled());
+  }
+
+  void historyDiffCanBeResizedVerticallyAndHorizontally() {
+    QTemporaryDir temporary;
+    const auto local = temporary.filePath(QStringLiteral("local"));
+    QVERIFY(QDir{}.mkpath(local));
+    createRepository(local);
+    relay::RelayControllerConfig config;
+    config.storeFile = temporary.filePath(QStringLiteral("state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.resize(1400, 950);
+    window.show();
+    controller.start();
+    controller.openRepository(local);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository(), 10000);
+    window.findChild<QTabWidget*>(QStringLiteral("contentTabs"))->setCurrentIndex(1);
+    const auto vertical = window.findChild<QSplitter*>(QStringLiteral("historyDetailSplitter"));
+    const auto horizontal = window.findChild<QSplitter*>(QStringLiteral("historySplitter"));
+    QVERIFY(vertical && horizontal);
+    QTRY_VERIFY(vertical->isVisible());
+    const auto history = window.findChild<QListView*>(QStringLiteral("historyList"));
+    QTRY_VERIFY_WITH_TIMEOUT(history->model()->rowCount() > 0, 10000);
+    history->setCurrentIndex(history->model()->index(0, 0));
+    const auto files = window.findChild<QListView*>(QStringLiteral("commitFileList"));
+    QTRY_VERIFY_WITH_TIMEOUT(files->model()->rowCount() > 0, 10000);
+    const auto diff = dynamic_cast<relay::DiffView*>(vertical->widget(1));
+    QVERIFY(diff);
+    QTRY_VERIFY_WITH_TIMEOUT(diff->model()->rowCount() > 0, 10000);
+    QCoreApplication::processEvents();
+    const int before = vertical->widget(1)->height();
+    auto* handle = vertical->handle(1);
+    const auto center = handle->rect().center();
+    QTest::mousePress(handle, Qt::LeftButton, Qt::NoModifier, center);
+    QTest::mouseMove(handle, center + QPoint(0, -100));
+    QTest::mouseRelease(handle, Qt::LeftButton, Qt::NoModifier, center + QPoint(0, -100));
+    QTRY_VERIFY(vertical->widget(1)->height() > before + 40);
+    const int width = horizontal->widget(1)->width();
+    horizontal->setSizes({horizontal->sizes().at(0) + 80, width - 80});
+    QTRY_VERIFY(horizontal->widget(1)->width() < width - 30);
+    const auto screenshots = qEnvironmentVariable("RELAY_SCREENSHOT_DIR");
+    if (!screenshots.isEmpty()) {
+      QDir().mkpath(screenshots);
+      QVERIFY(window.grab().save(screenshots + QStringLiteral("/resized-history-diff.png")));
+    }
+  }
+
+  void sshIdentityCanBeChosenWithoutAGitHubAccount() {
+    QTemporaryDir temporary;
+    const auto local = temporary.filePath(QStringLiteral("local"));
+    QVERIFY(QDir{}.mkpath(local));
+    createRepository(local);
+    runGit(local, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"),
+                   QStringLiteral("git@git.example.com:team/project.git")});
+    relay::RelayControllerConfig config;
+    config.storeFile = temporary.filePath(QStringLiteral("state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show();
+    controller.start();
+    controller.saveSshProfile({QStringLiteral("work"), QStringLiteral("Work key"),
+        QStringLiteral("git.example.com"), QStringLiteral("git"), std::nullopt, {}, true});
+    controller.saveSshProfile({QStringLiteral("other"), QStringLiteral("Other host"),
+        QStringLiteral("other.example.com"), QStringLiteral("git"), std::nullopt, {}, true});
+    controller.openRepository(local);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository(), 10000);
+    const auto button = window.findChild<QToolButton*>(QStringLiteral("accountButton"));
+    QTRY_VERIFY(window.findChild<QToolButton*>(QStringLiteral("syncButton"))->isEnabled());
+    button->menu()->popup(button->mapToGlobal(QPoint(0, button->height())));
+    auto actions = window.findChildren<QAction*>(QStringLiteral("sshProfileAction"));
+    QCOMPARE(actions.size(), 2);
+    for (auto* action : actions) {
+      if (action->data().toString() == QStringLiteral("other")) QVERIFY(!action->isEnabled());
+    }
+    for (auto* action : actions) {
+      if (action->data().toString() == QStringLiteral("work")) {
+        QVERIFY(action->isEnabled());
+        action->trigger();
+        break;
+      }
+    }
+    QCOMPARE(controller.resolvedSshProfileId(local), QStringLiteral("work"));
+    QCOMPARE(relay::RelayStore(config.storeFile).read().value(QStringLiteral("repositorySshProfiles")).toObject().value(local).toString(), QStringLiteral("work"));
+    button->menu()->hide();
+    QVERIFY(button->text().contains(QStringLiteral("Work key")));
+    QVERIFY(controller.state().accounts.isEmpty());
+    window.findChild<QAction*>(QStringLiteral("useSshAgentAction"))->trigger();
+    QVERIFY(controller.resolvedSshProfileId(local).isEmpty());
+    controller.closeRepository();
+    QVERIFY(!window.findChild<QAction*>(QStringLiteral("useSshAgentAction"))->isEnabled());
+  }
+
   void missingToolsBannerCanBeSelectedAndClearsOnRecovery() {
     QTemporaryDir profile;
     relay::RelayControllerConfig config;

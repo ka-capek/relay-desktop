@@ -146,6 +146,7 @@ QString styleSheet() {
       selection-color: @ink@;
     }
     QSplitter::handle { background: @outerBackground@; }
+    QSplitter::handle:hover { background: @line@; }
     QMainWindow, #relayRoot { background: @panel@; }
     #titleRow, #actionRow {
       background: @canvas@;
@@ -242,6 +243,8 @@ QString styleSheet() {
     QComboBox::down-arrow { image: url(@arrow@); width: 14px; height: 14px; }
     QPushButton::menu-indicator, QToolButton::menu-indicator { subcontrol-origin: padding; subcontrol-position: center right; right: 8px; image: url(@arrow@); width: 14px; height: 14px; }
     QPushButton[hasMenu="true"], QToolButton[hasMenu="true"] { padding-right: 25px; }
+    QToolButton#syncButton::menu-button { width: 24px; border-left: 1px solid @line@; }
+    QToolButton#syncButton::menu-arrow { image: url(@arrow@); width: 14px; height: 14px; }
     QComboBox QAbstractItemView { padding: 4px; border: 1px solid @line@; background: @panel@; selection-background-color: @greenWash@; }
     QCheckBox, QRadioButton { spacing: 7px; font-size: 12px; }
     QCheckBox::indicator, QRadioButton::indicator { width: 13px; height: 13px; }

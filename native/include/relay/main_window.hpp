@@ -94,7 +94,7 @@ class MainWindow final : public QMainWindow {
   QToolButton* orderDirection_{};
   QToolButton* repositoryButton_{};
   QComboBox* branchPicker_{};
-  QPushButton* syncButton_{};
+  QToolButton* syncButton_{};
   QToolButton* accountButton_{};
   QMenu* accountMenu_{};
   QCheckBox* selectAllFiles_{};

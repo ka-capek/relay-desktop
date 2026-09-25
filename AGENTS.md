@@ -1424,6 +1424,22 @@ outputs/installers/
 The NSIS installer is interactive, allows choosing an install directory, and
 creates desktop and Start Menu shortcuts.
 
+### Native usability follow-up after 0.5.2
+
+The toolbar synchronization button has a split menu exposing Fetch, Pull and
+Push independently of the cached ahead/behind counts. Pull still requires an
+origin upstream and fast-forwards only. Changes/history horizontal splitters
+have wider visible handles; history details/files and the diff now use a
+vertical splitter instead of a fixed-height changed-file list.
+The account popover lists repository SSH profiles alongside GitHub account
+management. Matching non-GitHub SSH hosts can select a saved profile or the
+normal SSH agent without a GitHub account. The selected transport is displayed
+in the toolbar/status bar; commit identity still follows existing account/Git
+configuration precedence. GitHub SSH still follows the existing agent/config
+behavior pending explicit scope clarification; no tokens or key material enter
+widgets. UI integration tests cover remote changes pulled before a fetch,
+resizing a populated diff, persisted SSH selection and host mismatch rejection.
+
 ### Native preview installers (0.5.2 onward)
 
 CI packages its validated source-build payloads with Inno Setup 6 on Windows
