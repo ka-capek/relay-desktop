@@ -1494,6 +1494,11 @@ platforms, connect/browse/restart/disconnect UI, failed metadata/vault writes,
 controller shutdown, stale requests, branch browsing without checkout and
 multi-commit conflict continuation. Private real-server authentication remains
 an installed-platform manual check; do not claim fixtures prove it.
+Windows Git service/workflow suite budgets are 180/300 seconds: run
+36154921968 passed the new cases but exhausted the former total suite limits
+near the final fixtures. Individual process limits remain unchanged. Gitea PAT
+requests use Authorization: token; GitLab uses Bearer. Discovery has a 64 MiB
+aggregate payload bound in addition to per-request size and time limits.
 
 ### Native preview installers (0.5.2 onward)
 

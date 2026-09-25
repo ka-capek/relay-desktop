@@ -64,7 +64,7 @@ ForgeAccount forgeAccountFromJson(const QJsonObject& object) {
   if (result.credentialId.size() > 240 || result.credentialId.contains(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.:-]")))) throw std::runtime_error("Invalid credential reference.");
   return result;
 }
-ForgeService::ForgeService(Transport transport) : transport_(transport ? std::move(transport) : networkGet) {}
+ForgeService::ForgeService(Transport transport) : transport_(std::move(transport)) {}
 QString ForgeService::normalizeServerUrl(const QString& server) {
   QUrl url(server.trimmed(), QUrl::StrictMode);
   if (!url.isValid() || url.scheme() != QStringLiteral("https") || url.host().isEmpty() ||
@@ -78,10 +78,14 @@ QString ForgeService::normalizeServerUrl(const QString& server) {
 QUrl ForgeService::tokenSettingsUrl(ForgeKind kind, const QString& server) {
   return QUrl(normalizeServerUrl(server) + (kind == ForgeKind::gitlab ? QStringLiteral("/-/user_settings/personal_access_tokens") : QStringLiteral("/user/settings/applications")));
 }
-ForgeService::Response ForgeService::networkGet(const QUrl& url, const QString& token) {
+QByteArray ForgeService::authorizationHeader(ForgeKind kind, const QString& token) {
+  validateToken(token);
+  return (kind == ForgeKind::gitea ? QByteArrayLiteral("token ") : QByteArrayLiteral("Bearer ")) + token.toUtf8();
+}
+ForgeService::Response ForgeService::networkGet(ForgeKind kind, const QUrl& url, const QString& token) {
   QNetworkAccessManager manager;
   QNetworkRequest request(url);
-  request.setRawHeader("Authorization", "Bearer " + token.toUtf8());
+  request.setRawHeader(QByteArrayLiteral("Authorization"), authorizationHeader(kind, token));
   request.setRawHeader("Accept", "application/json");
   request.setRawHeader("User-Agent", "Relay-Desktop");
   request.setTransferTimeout(30000);
@@ -108,11 +112,11 @@ ForgeService::Response ForgeService::networkGet(const QUrl& url, const QString& 
   if (error.error != QJsonParseError::NoError) throw std::runtime_error("Git server returned invalid JSON.");
   return {status, body, reply->rawHeader("X-Next-Page"), reply->rawHeader("Link")};
 }
-ForgeService::Response ForgeService::get(const QUrl& url, const QString& token) const {
+ForgeService::Response ForgeService::get(ForgeKind kind, const QUrl& url, const QString& token) const {
   validateToken(token);
   if (url.scheme() != QStringLiteral("https") || url.host().isEmpty() || !url.userInfo().isEmpty())
     throw std::runtime_error("Refusing an unsafe Git server request.");
-  auto response = transport_(url, token);
+  auto response = transport_ ? transport_(url, token) : networkGet(kind, url, token);
   if (response.status == 401 || response.status == 403) throw std::runtime_error("Git server denied access. Check your token, its scopes and repository permissions.");
   if (response.status < 200 || response.status >= 300)
     throw std::runtime_error(QStringLiteral("Git server request failed (HTTP %1). Redirects are not followed; check the server address.").arg(response.status).toStdString());
@@ -120,7 +124,7 @@ ForgeService::Response ForgeService::get(const QUrl& url, const QString& token) 
 }
 ForgeAccount ForgeService::profile(ForgeKind kind, const QString& server, const QString& token) const {
   const auto base = normalizeServerUrl(server);
-  const auto response = get(QUrl(base + apiPath(kind) + QStringLiteral("/user")), token);
+  const auto response = get(kind, QUrl(base + apiPath(kind) + QStringLiteral("/user")), token);
   const auto object = response.body.object();
   const auto userId = identifier(object.value(QStringLiteral("id")));
   const auto handle = object.value(kind == ForgeKind::gitlab ? QStringLiteral("username") : QStringLiteral("login")).toString();
@@ -137,6 +141,7 @@ QList<ForgeRepository> ForgeService::repositories(const ForgeAccount& account, c
   const QString endpoint = base + apiPath(account.kind) + (gitlab ? QStringLiteral("/projects") : QStringLiteral("/user/repos"));
   QList<ForgeRepository> result;
   QSet<QString> seen;
+  qsizetype totalBytes = 0;
   QElapsedTimer duration;
   duration.start();
   for (int page = 1; page <= 1000; ++page) {
@@ -147,8 +152,11 @@ QList<ForgeRepository> ForgeService::repositories(const ForgeAccount& account, c
     query.addQueryItem(gitlab ? QStringLiteral("per_page") : QStringLiteral("limit"), QStringLiteral("100"));
     if (gitlab) { query.addQueryItem(QStringLiteral("membership"), QStringLiteral("true")); query.addQueryItem(QStringLiteral("order_by"), QStringLiteral("id")); query.addQueryItem(QStringLiteral("sort"), QStringLiteral("asc")); }
     url.setQuery(query);
-    const auto response = get(url, token);
+    const auto response = get(account.kind, url, token);
     if (!response.body.isArray()) throw std::runtime_error("Git server returned an invalid repository list.");
+    totalBytes += response.body.toJson(QJsonDocument::Compact).size();
+    if (totalBytes > 64 * 1024 * 1024)
+      throw std::runtime_error("Repository listing exceeded the total response size limit. No incomplete list was saved.");
     const auto entries = response.body.array();
     if (entries.isEmpty()) return result;
     const auto previousSize = result.size();

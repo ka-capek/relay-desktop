@@ -14,6 +14,10 @@ endforeach()
 # substantially slower than the individual unit/UI suites.
 set_tests_properties(git_workflows PROPERTIES TIMEOUT 180)
 if(WIN32)
+  # Run 36154921968 passed the new branch/cherry-pick cases, then exhausted
+  # suite limits near the final fixtures. Git process startup dominates here.
+  set_tests_properties(git_service PROPERTIES TIMEOUT 180)
+  set_tests_properties(git_workflows PROPERTIES TIMEOUT 300)
   # The UI suite also creates real Git repositories. With the toolbar pull,
   # resize and SSH-binding fixtures, Windows process startup can exceed the
   # workflow's 60-second default even while every individual test passes.

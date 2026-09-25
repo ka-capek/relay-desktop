@@ -11,6 +11,11 @@ using namespace relay;
 class ForgeServiceTest final : public QObject {
   Q_OBJECT
  private slots:
+  void usesProviderSpecificPersonalAccessTokenScheme() {
+    QCOMPARE(ForgeService::authorizationHeader(ForgeKind::gitea, QStringLiteral("fixture-token")), QByteArrayLiteral("token fixture-token"));
+    QCOMPARE(ForgeService::authorizationHeader(ForgeKind::gitlab, QStringLiteral("fixture-token")), QByteArrayLiteral("Bearer fixture-token"));
+    QVERIFY_THROWS_EXCEPTION(std::runtime_error, ForgeService::authorizationHeader(ForgeKind::gitea, QStringLiteral("token\r\nInjected: x")));
+  }
   void validatesServerAndTokenBeforeNetwork() {
     QCOMPARE(ForgeService::normalizeServerUrl(QStringLiteral("https://GIT.example.com:443/gitea/")), QStringLiteral("https://git.example.com/gitea"));
     for (const auto& url : {"http://git.example.com", "https://token@git.example.com", "https://git.example.com/?a=1", "https://git.example.com/#x"})

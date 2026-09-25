@@ -85,6 +85,7 @@ class ForgeIntegrationTest final : public QObject {
     QFile state(settings.storeFile);
     QVERIFY(state.open(QIODevice::ReadOnly));
     const auto json = state.readAll();
+    state.close(); // Windows readers otherwise prevent the later atomic store replacement.
     QVERIFY(!json.contains("fixture-secret"));
     QVERIFY(!json.contains("apiToken"));
     const auto account = controller.state().forgeAccounts.front();
