@@ -1439,6 +1439,8 @@ configuration precedence. GitHub SSH still follows the existing agent/config
 behavior pending explicit scope clarification; no tokens or key material enter
 widgets. UI integration tests cover remote changes pulled before a fetch,
 resizing a populated diff, persisted SSH selection and host mismatch rejection.
+The Windows main-window suite has a 180-second CTest limit because its real
+Git fixtures exceed the default 60 seconds on CI; individual waits stay bounded.
 
 ### Native preview installers (0.5.2 onward)
 

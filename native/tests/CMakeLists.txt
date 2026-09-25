@@ -13,6 +13,12 @@ endforeach()
 # Git for Windows process startup makes this multi-repository integration suite
 # substantially slower than the individual unit/UI suites.
 set_tests_properties(git_workflows PROPERTIES TIMEOUT 180)
+if(WIN32)
+  # The UI suite also creates real Git repositories. With the toolbar pull,
+  # resize and SSH-binding fixtures, Windows process startup can exceed the
+  # workflow's 60-second default even while every individual test passes.
+  set_tests_properties(main_window PROPERTIES TIMEOUT 180)
+endif()
 
 add_test(NAME app_smoke COMMAND $<TARGET_FILE:relay_native> --smoke-test)
 set_tests_properties(app_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
