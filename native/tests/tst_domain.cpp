@@ -6,6 +6,16 @@ class DomainTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void roundTripsThemeAndDefaultsLegacyState() {
+    relay::AppState state;
+    state.preferences.themeId = QStringLiteral("catppuccin-mocha");
+    state.preferences.customTheme = {{QStringLiteral("accent"), QStringLiteral("#ff99cc")}};
+    const auto loaded = relay::appStateFromJson(relay::mergeAppStateIntoJson(state, {}));
+    QCOMPARE(loaded.preferences.themeId, state.preferences.themeId);
+    QCOMPARE(loaded.preferences.customTheme, state.preferences.customTheme);
+    QCOMPARE(relay::appStateFromJson({}).preferences.themeId, QStringLiteral("light"));
+  }
+
   void mapsGitStatuses() {
     QCOMPARE(relay::fileStatusFromGit(QStringLiteral("??")), relay::FileStatus::added);
     QCOMPARE(relay::fileStatusFromGit(QStringLiteral(" D")), relay::FileStatus::deleted);

@@ -48,3 +48,7 @@ tsconfig.tsbuildinfo
 
 # agent worktrees and local agent state
 /.claude/
+
+# Python helper bytecode
+__pycache__/
+*.py[cod]

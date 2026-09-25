@@ -4,6 +4,9 @@
 #include <QFont>
 #include <QPalette>
 #include <QString>
+#include <QStringList>
+#include <QJsonObject>
+#include <QList>
 
 class QApplication;
 
@@ -27,6 +30,8 @@ struct Colors {
   QColor avatarBlue;
   QColor added;
   QColor removed;
+  QColor onAccent;
+  QList<QColor> branches;
 };
 
 struct Metrics {
@@ -55,6 +60,12 @@ struct Metrics {
 [[nodiscard]] QPalette palette();
 [[nodiscard]] QString styleSheet();
 
+[[nodiscard]] QStringList presetIds();
+[[nodiscard]] QJsonObject definition(const QString& id);
+[[nodiscard]] QString validate(const QJsonObject& definition);
+void configure(const QString& id, const QJsonObject& custom = {});
+[[nodiscard]] QColor tint(const QColor& color, double amount = 0.15);
+[[nodiscard]] QColor branchColor(int identity);
 void apply(QApplication& application);
 
 }  // namespace relay::theme

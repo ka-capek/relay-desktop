@@ -7,6 +7,8 @@
 #include <QString>
 
 #include <functional>
+#include <atomic>
+#include <memory>
 
 namespace relay {
 
@@ -34,7 +36,8 @@ class GitHubAuth final {
   [[nodiscard]] QString accountToken(const QString& handle) const;
   void switchAccount(const QString& handle) const;
   void removeAccount(const QString& handle) const;
-  void login(const std::function<void(const GitHubLoginProgress&)>& onProgress = {}) const;
+  void login(const std::function<void(const GitHubLoginProgress&)>& onProgress = {},
+             const std::shared_ptr<std::atomic_bool>& canceled = {}) const;
 
   static QString cleanOutput(QString value);
   static QList<AuthenticatedAccount> accountsFromStatus(const QByteArray& json);

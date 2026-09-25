@@ -15,8 +15,27 @@ class QListWidget;
 class QPushButton;
 class QStackedWidget;
 class QTabWidget;
+class QSpinBox;
+class QPlainTextEdit;
 
 namespace relay {
+
+class SettingsDialog final : public QDialog {
+  Q_OBJECT
+ public:
+  explicit SettingsDialog(Preferences preferences, QWidget* parent = nullptr);
+  [[nodiscard]] Preferences preferences() const;
+ signals:
+  void manageAccountsRequested();
+ private:
+  QCheckBox* refreshOnFocus_{};
+  QSpinBox* diffFontSize_{};
+  QLineEdit* commitName_{};
+  QLineEdit* commitEmail_{};
+  QCheckBox* graphHistory_{};
+  QComboBox* themeId_{};
+  QPlainTextEdit* themeJson_{};
+};
 
 enum class CloneSource { github, url };
 

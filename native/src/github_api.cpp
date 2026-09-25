@@ -24,7 +24,10 @@ QString githubError(const int status, const QJsonDocument& body, const QString& 
 
 }  // namespace
 
-GitHubApi::Response GitHubApi::get(const QUrl& url, const QString& token) const {
+GitHubApi::Response GitHubApi::get(const QUrl& url, const QString& token, const QJsonObject& body) const {
+  if (url.scheme() != QStringLiteral("https") || url.host() != QStringLiteral("api.github.com") ||
+      !url.userInfo().isEmpty() || (url.port() != -1 && url.port() != 443))
+    throw std::runtime_error("Refusing a GitHub API request to an unexpected host.");
   QNetworkAccessManager manager;
   QNetworkRequest request(url);
   request.setRawHeader(QByteArrayLiteral("Accept"), QByteArrayLiteral("application/vnd.github+json"));
@@ -32,12 +35,23 @@ GitHubApi::Response GitHubApi::get(const QUrl& url, const QString& token) const 
   request.setRawHeader(QByteArrayLiteral("User-Agent"), QByteArrayLiteral("Relay-Desktop"));
   request.setRawHeader(QByteArrayLiteral("X-GitHub-Api-Version"), QByteArrayLiteral("2022-11-28"));
   request.setTransferTimeout(30000);
+  request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
-  auto* reply = manager.get(request);
+  request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+  auto* reply = body.isEmpty() ? manager.get(request) : manager.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
+  bool oversized = false;
+  QObject::connect(reply, &QNetworkReply::readyRead, reply, [reply, &oversized] {
+    if (reply->bytesAvailable() > 10 * 1024 * 1024) { oversized = true; reply->abort(); }
+  });
+  QTimer deadline;
+  deadline.setSingleShot(true);
+  QObject::connect(&deadline, &QTimer::timeout, reply, &QNetworkReply::abort);
+  deadline.start(30000);
   QEventLoop loop;
   QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
   loop.exec();
 
+  if (oversized) throw std::runtime_error("GitHub returned a response too large to process.");
   const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
   const auto payload = reply->readAll();
   const auto link = reply->rawHeader(QByteArrayLiteral("Link"));
@@ -116,6 +130,40 @@ GitHubRepositoryPage GitHubApi::repositories(const QString& token, const QString
     next = match.hasMatch() ? QUrl(match.captured(1)) : QUrl{};
   }
   return result;
+}
+
+QJsonObject GitHubApi::newRepositoryPayload(const QString& name, const QString& description, const bool isPrivate) {
+  static const QRegularExpression validName(QStringLiteral("^[A-Za-z0-9_.-]{1,100}$"));
+  if (!validName.match(name).hasMatch() || name == QStringLiteral(".") || name == QStringLiteral(".."))
+    throw std::runtime_error("Use a repository name of 1–100 letters, digits, dots, underscores or hyphens.");
+  if (description.size() > 350) throw std::runtime_error("Keep the repository description to 350 characters or fewer.");
+  return {{QStringLiteral("name"), name}, {QStringLiteral("description"), description},
+          {QStringLiteral("private"), isPrivate}, {QStringLiteral("auto_init"), false}};
+}
+
+QString GitHubApi::createRepository(const QString& token, const QString& handle, const QString& name,
+                                    const QString& description, const bool isPrivate) const {
+  const auto payload = newRepositoryPayload(name, description, isPrivate);
+  const auto user = profile(token, handle);
+  if (user.value(QStringLiteral("login")).toString().compare(handle, Qt::CaseInsensitive) != 0)
+    throw std::runtime_error("The authenticated account changed. Select your account again before publishing.");
+  Response response;
+  try { response = get(QUrl(QStringLiteral("https://api.github.com/user/repos")), token, payload); }
+  catch (const std::exception& failure) {
+    throw std::runtime_error(QStringLiteral("Creation may have succeeded. Check https://github.com/%1/%2 before retrying. %3")
+        .arg(handle, name, QString::fromUtf8(failure.what())).toStdString());
+  }
+  if (response.status != 201)
+    throw std::runtime_error(githubError(response.status, response.body, QStringLiteral("Sign in again before publishing.")).toStdString());
+  if (!response.body.isObject())
+    throw std::runtime_error("The repository was created but GitHub returned an unexpected response. Check your repositories on GitHub before retrying.");
+  const auto remote = response.body.object().value(QStringLiteral("clone_url")).toString();
+  const QUrl url(remote);
+  if (url.scheme() != QStringLiteral("https") || url.host() != QStringLiteral("github.com") ||
+      !url.userInfo().isEmpty() || !url.query().isEmpty() || !url.fragment().isEmpty() ||
+      !url.path().startsWith(u'/' + handle + u'/', Qt::CaseInsensitive))
+    throw std::runtime_error("The repository was created but GitHub returned an unexpected URL. Check your repositories on GitHub before retrying.");
+  return remote;
 }
 
 QString GitHubApi::noreplyAddress(const Account& account) {

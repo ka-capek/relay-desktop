@@ -7,6 +7,23 @@ class ProcessRunnerTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void providesInputAndClosesThePipe() {
+    relay::ProcessRequest request{QStringLiteral("git"), {QStringLiteral("hash-object"), QStringLiteral("--stdin")}};
+    request.standardInput = QByteArrayLiteral("hello\n");
+    const auto result = relay::ProcessRunner::run(request);
+    QCOMPARE(result.standardOutput.trimmed(), QByteArrayLiteral("ce013625030ba8dba906f756967f9e9ca394464a"));
+  }
+
+  void oversizedOutputFailsInsteadOfReturningTruncatedSuccess() {
+#ifdef Q_OS_WIN
+    relay::ProcessRequest request{QStringLiteral("cmd.exe"), {QStringLiteral("/C"), QStringLiteral("echo too-long")}};
+#else
+    relay::ProcessRequest request{QStringLiteral("/usr/bin/printf"), {QStringLiteral("too-long")}};
+#endif
+    request.maximumOutputBytes = 3;
+    QVERIFY_EXCEPTION_THROWN(relay::ProcessRunner::run(request), relay::ProcessError);
+  }
+
   void capturesOutput() {
 #ifdef Q_OS_WIN
     const relay::ProcessRequest request{QStringLiteral("cmd.exe"), {QStringLiteral("/C"), QStringLiteral("echo relay")}};

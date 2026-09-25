@@ -1,4 +1,10 @@
 #include "relay/dialogs.hpp"
+#include "relay/theme.hpp"
+#include <QPlainTextEdit>
+#include <QJsonDocument>
+#include <QJsonParseError>
+#include <QSaveFile>
+#include <QSpinBox>
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -20,6 +26,142 @@
 #include <utility>
 
 namespace relay {
+
+SettingsDialog::SettingsDialog(Preferences preferences, QWidget* parent) : QDialog(parent) {
+  setWindowTitle(tr("Settings"));
+  setObjectName(QStringLiteral("settingsDialog"));
+  resize(640, 520);
+  setMinimumSize(600, 480);
+  auto* layout = new QVBoxLayout(this);
+  auto* tabs = new QTabWidget(this);
+  auto* general = new QWidget(tabs);
+  auto* form = new QFormLayout(general);
+  refreshOnFocus_ = new QCheckBox(tr("Refresh repository when Relay becomes active"), general);
+  refreshOnFocus_->setObjectName(QStringLiteral("refreshOnFocus"));
+  refreshOnFocus_->setChecked(preferences.refreshOnFocus);
+  form->addRow(refreshOnFocus_);
+  diffFontSize_ = new QSpinBox(general);
+  diffFontSize_->setObjectName(QStringLiteral("diffFontSize"));
+  diffFontSize_->setRange(10, 24);
+  diffFontSize_->setValue(preferences.diffFontSize);
+  diffFontSize_->setSuffix(tr(" px"));
+  form->addRow(tr("Diff text size"), diffFontSize_);
+  graphHistory_ = new QCheckBox(tr("Show branch graph in History (all branches)"), general);
+  graphHistory_->setObjectName(QStringLiteral("graphHistory"));
+  graphHistory_->setChecked(preferences.graphHistory);
+  form->addRow(graphHistory_);
+  tabs->addTab(general, tr("General"));
+  auto* appearance = new QWidget(tabs);
+  auto* appearanceLayout = new QVBoxLayout(appearance);
+  themeId_ = new QComboBox(appearance);
+  themeId_->setObjectName(QStringLiteral("themePreset"));
+  themeId_->addItem(tr("Light"), QStringLiteral("light"));
+  themeId_->addItem(tr("Dark"), QStringLiteral("dark"));
+  themeId_->addItem(tr("Catppuccin Latte"), QStringLiteral("catppuccin-latte"));
+  themeId_->addItem(tr("Catppuccin Mocha"), QStringLiteral("catppuccin-mocha"));
+  themeId_->setCurrentIndex(qMax(0, themeId_->findData(preferences.themeId)));
+  appearanceLayout->addWidget(new QLabel(tr("Base theme"), appearance));
+  appearanceLayout->addWidget(themeId_);
+  auto* themeHelp = new QLabel(tr("Optional color overrides (#RRGGBB). Import or export a JSON palette to share a theme. Save applies it without restarting."), appearance);
+  themeHelp->setWordWrap(true);
+  appearanceLayout->addWidget(themeHelp);
+  themeJson_ = new QPlainTextEdit(appearance);
+  themeJson_->setObjectName(QStringLiteral("themeOverrides"));
+  themeJson_->setFont(theme::codeFont());
+  themeJson_->setPlainText(QString::fromUtf8(QJsonDocument(preferences.customTheme).toJson()));
+  themeJson_->setMinimumHeight(160);
+  appearanceLayout->addWidget(themeJson_);
+  auto* themeActions = new QHBoxLayout;
+  auto* importTheme = new QPushButton(tr("Import…"), appearance);
+  auto* exportTheme = new QPushButton(tr("Export…"), appearance);
+  auto* resetTheme = new QPushButton(tr("Reset overrides"), appearance);
+  themeActions->addWidget(importTheme);
+  themeActions->addWidget(exportTheme);
+  themeActions->addWidget(resetTheme);
+  appearanceLayout->addLayout(themeActions);
+  auto* themeError = new QLabel(appearance);
+  themeError->setWordWrap(true);
+  themeError->setTextFormat(Qt::PlainText);
+  themeError->setProperty("role", QStringLiteral("error"));
+  themeError->setObjectName(QStringLiteral("themeError"));
+  appearanceLayout->addWidget(themeError);
+  const auto parseTheme = [this, themeError](QJsonObject* output) {
+    QJsonParseError error;
+    const auto doc = QJsonDocument::fromJson(themeJson_->toPlainText().toUtf8(), &error);
+    QString message;
+    if (error.error != QJsonParseError::NoError || !doc.isObject()) message = tr("Enter a JSON object containing color overrides.");
+    else message = theme::validate(doc.object());
+    themeError->setText(message);
+    if (!message.isEmpty()) return false;
+    *output = doc.object();
+    return true;
+  };
+  connect(resetTheme, &QPushButton::clicked, this, [this] { themeJson_->setPlainText(QStringLiteral("{}")); });
+  connect(importTheme, &QPushButton::clicked, this, [this, themeError] {
+    const auto path = QFileDialog::getOpenFileName(this, tr("Import theme"), {}, tr("JSON palettes (*.json)"));
+    if (path.isEmpty()) return;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() > 65536) { themeError->setText(tr("Choose a readable theme file smaller than 64 KB.")); return; }
+    QJsonParseError error;
+    const auto doc = QJsonDocument::fromJson(file.readAll(), &error);
+    if (error.error != QJsonParseError::NoError || !doc.isObject()) { themeError->setText(tr("The theme must be a JSON object.")); return; }
+    const auto message = theme::validate(doc.object());
+    if (!message.isEmpty()) { themeError->setText(message); return; }
+    themeJson_->setPlainText(QString::fromUtf8(doc.toJson()));
+    themeError->clear();
+  });
+  connect(exportTheme, &QPushButton::clicked, this, [this, parseTheme, themeError] {
+    QJsonObject overrides;
+    if (!parseTheme(&overrides)) return;
+    auto palette = theme::definition(themeId_->currentData().toString());
+    for (auto it = overrides.begin(); it != overrides.end(); ++it) palette.insert(it.key(), it.value());
+    const auto path = QFileDialog::getSaveFileName(this, tr("Export theme"), QStringLiteral("relay-theme.json"), tr("JSON palettes (*.json)"));
+    if (path.isEmpty()) return;
+    QSaveFile file(path);
+    const auto data = QJsonDocument(palette).toJson();
+    if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit()) themeError->setText(tr("Could not save the theme file."));
+  });
+  tabs->addTab(appearance, tr("Appearance"));
+  auto* git = new QWidget(tabs);
+  auto* gitForm = new QFormLayout(git);
+  auto* identityHelp = new QLabel(tr("Used when no GitHub account is selected. Leave blank to use this repository’s Git configuration."), git);
+  identityHelp->setWordWrap(true);
+  gitForm->addRow(identityHelp);
+  commitName_ = new QLineEdit(preferences.commitName, git);
+  commitName_->setObjectName(QStringLiteral("defaultCommitName"));
+  commitEmail_ = new QLineEdit(preferences.commitEmail, git);
+  commitEmail_->setObjectName(QStringLiteral("defaultCommitEmail"));
+  gitForm->addRow(tr("Name"), commitName_);
+  gitForm->addRow(tr("Email"), commitEmail_);
+  tabs->addTab(git, tr("Git"));
+  auto* accounts = new QWidget(tabs);
+  auto* accountLayout = new QVBoxLayout(accounts);
+  auto* explanation = new QLabel(tr("Connect multiple GitHub accounts and choose their commit emails. You can assign a different account to each repository in Repository settings."), accounts);
+  explanation->setWordWrap(true);
+  accountLayout->addWidget(explanation);
+  auto* manage = new QPushButton(tr("Manage accounts…"), accounts);
+  manage->setObjectName(QStringLiteral("settingsManageAccounts"));
+  accountLayout->addWidget(manage, 0, Qt::AlignLeft);
+  accountLayout->addStretch();
+  connect(manage, &QPushButton::clicked, this, &SettingsDialog::manageAccountsRequested);
+  tabs->addTab(accounts, tr("Accounts"));
+  layout->addWidget(tabs);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
+  connect(buttons, &QDialogButtonBox::accepted, this, [this, parseTheme, tabs, appearance] {
+    QJsonObject object;
+    if (parseTheme(&object)) accept();
+    else tabs->setCurrentWidget(appearance);
+  });
+  connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+  layout->addWidget(buttons);
+}
+
+Preferences SettingsDialog::preferences() const {
+  return {refreshOnFocus_->isChecked(), diffFontSize_->value(), commitName_->text().trimmed(),
+          commitEmail_->text().trimmed(), graphHistory_->isChecked(),
+          themeId_->currentData().toString(), QJsonDocument::fromJson(themeJson_->toPlainText().toUtf8()).object()};
+}
+
 namespace {
 
 constexpr int githubIdRole = Qt::UserRole;
@@ -71,16 +213,6 @@ bool isSshRemote(const QString& remote) {
   static const QRegularExpression windowsPath{QStringLiteral(R"(^[A-Za-z]:[\\/])")};
   return explicitSsh.match(value).hasMatch() ||
          (scpLike.match(value).hasMatch() && !windowsPath.match(value).hasMatch());
-}
-
-bool isGithubRemote(const QString& remote) {
-  const QString value = remote.trimmed();
-  static const QRegularExpression https{QStringLiteral(R"(^https://github\.com/)"),
-                                         QRegularExpression::CaseInsensitiveOption};
-  static const QRegularExpression ssh{
-      QStringLiteral(R"(^(?:ssh://)?(?:[^@\s]+@)?github\.com[:/])"),
-      QRegularExpression::CaseInsensitiveOption};
-  return https.match(value).hasMatch() || ssh.match(value).hasMatch();
 }
 
 bool validEmail(const QString& value) {
@@ -194,7 +326,7 @@ CloneDialog::CloneDialog(QWidget* parent) : QDialog(parent) {
   fields->addRow(tr("SSH identity"), sshCombo_);
   layout->addLayout(fields);
   sshHint_ = new QLabel(
-      tr("SSH identities apply only to non-GitHub SSH URLs. Otherwise Relay uses the selected account or your normal SSH configuration."),
+      tr("SSH identities apply to SSH URLs, including GitHub. Choose an identity for the same host. HTTPS uses the selected GitHub account."),
       this);
   sshHint_->setProperty("role", QStringLiteral("meta"));
   sshHint_->setWordWrap(true);
@@ -230,6 +362,9 @@ CloneDialog::CloneDialog(QWidget* parent) : QDialog(parent) {
   connect(nameEdit_, &QLineEdit::textChanged, this, &CloneDialog::updateValidation);
   connect(parentEdit_, &QLineEdit::textChanged, this, &CloneDialog::updateValidation);
   connect(accountCombo_, &QComboBox::currentIndexChanged, this, [this] {
+    // A repository selected under one account must not remain cloneable
+    // while the other account's list is still loading.
+    setGithubRepositories({});
     emit accountChanged(selectedAccountId());
     updateValidation();
   });
@@ -321,7 +456,7 @@ CloneRequest CloneDialog::request() const {
   } else {
     value.remoteUrl = urlEdit_->text().trimmed();
   }
-  if (isSshRemote(value.remoteUrl) && !isGithubRemote(value.remoteUrl)) {
+  if (isSshRemote(value.remoteUrl)) {
     value.sshProfileId = selectedSshProfileId();
   }
   return value;
@@ -401,9 +536,9 @@ void CloneDialog::updateFromSelectedRepository() {
 
 void CloneDialog::updateValidation() {
   const CloneRequest value = request();
-  const bool nonGithubSsh = isSshRemote(value.remoteUrl) && !isGithubRemote(value.remoteUrl);
-  sshCombo_->setEnabled(nonGithubSsh);
-  sshHint_->setVisible(nonGithubSsh);
+  const bool sshRemote = isSshRemote(value.remoteUrl);
+  sshCombo_->setEnabled(sshRemote);
+  sshHint_->setVisible(sshRemote);
   cloneButton_->setEnabled(isRequestValid());
   if (validationLabel_->isVisible() && isRequestValid()) validationLabel_->hide();
 }
@@ -624,7 +759,7 @@ SshProfileDialog::SshProfileDialog(QWidget* parent) : QDialog(parent) {
   layout->setSpacing(10);
   layout->addWidget(heading(tr("SSH identity"), this));
   layout->addWidget(explanatoryText(
-      tr("For Git hosts other than GitHub.com. Leave the key blank to use your SSH agent and ~/.ssh/config."),
+      tr("For Git hosts including GitHub.com (user: git). Leave the key blank to use your SSH agent and ~/.ssh/config."),
       this));
   auto* form = new QFormLayout;
   labelEdit_ = new QLineEdit(this);

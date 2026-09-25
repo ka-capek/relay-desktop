@@ -1,0 +1,30 @@
+{
+  "text": "#4c4f69",
+  "muted": "#6c6f85",
+  "border": "#bcc0cc",
+  "borderSoft": "#ccd0da",
+  "panel": "#eff1f5",
+  "canvas": "#e6e9ef",
+  "surface": "#dce0e8",
+  "accent": "#8839ef",
+  "accentHover": "#7287fd",
+  "selection": "#ded1f3",
+  "warning": "#9c4800",
+  "background": "#dce0e8",
+  "coral": "#d20f39",
+  "violet": "#8839ef",
+  "blue": "#1e66f5",
+  "added": "#287c20",
+  "removed": "#d20f39",
+  "onAccent": "#ffffff",
+  "branches": [
+    "#8839ef",
+    "#1e66f5",
+    "#287c20",
+    "#a74c00",
+    "#ad268e",
+    "#147d83",
+    "#916600",
+    "#d20f39"
+  ]
+}

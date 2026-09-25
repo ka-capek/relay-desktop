@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.30)
 
 project(RelayNative
-  VERSION 0.6.0
+  VERSION 0.5.2
   DESCRIPTION "A native multi-account Git desktop client"
   HOMEPAGE_URL "https://github.com/ka-capek/relay-desktop"
   LANGUAGES CXX
@@ -14,6 +14,7 @@ set(RELAY_QT_MIN_VERSION "6.11.1" CACHE STRING "Minimum supported Qt 6 version")
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)

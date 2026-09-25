@@ -23,6 +23,9 @@ bool hasTimestamp(const QJsonValue& value) {
 
 QCollator repositoryCollator() {
   QCollator collator;
+  // Qt's C locale ignores numeric mode. Preserve natural ordering for users
+  // launching with LANG=C/C.UTF-8 as well as ordinary desktop locales.
+  if (collator.locale().language() == QLocale::C) collator.setLocale(QLocale(QLocale::English));
   collator.setCaseSensitivity(Qt::CaseInsensitive);
   collator.setNumericMode(true);
   return collator;
@@ -140,7 +143,9 @@ QList<RepositorySummary> sortRepositories(
 
   if (order.mode == RepositoryOrderMode::manual) {
     QHash<QString, qsizetype> positions;
-    for (qsizetype index = 0; index < manualOrder.size(); ++index) positions.tryInsert(manualOrder[index], index);
+    for (qsizetype index = 0; index < manualOrder.size(); ++index) {
+      if (!positions.contains(manualOrder[index])) positions.insert(manualOrder[index], index);
+    }
     std::stable_sort(sorted.begin(), sorted.end(), [&](const auto& left, const auto& right) {
       const auto leftPosition = positions.value(left.path, std::numeric_limits<qsizetype>::max());
       const auto rightPosition = positions.value(right.path, std::numeric_limits<qsizetype>::max());

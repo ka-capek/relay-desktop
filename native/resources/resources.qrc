@@ -2,5 +2,15 @@
 <RCC version="1.0">
   <qresource prefix="/relay">
     <file alias="icon.svg">../../build/icon.svg</file>
+    <file>chevron-light.svg</file>
+    <file>chevron-dark.svg</file>
+    <file>Lucide-LICENSE.txt</file>
+    <file>themes/light.json</file>
+    <file>themes/dark.json</file>
+    <file>themes/catppuccin-latte.json</file>
+    <file>themes/catppuccin-mocha.json</file>
+    <file>Catppuccin-LICENSE.txt</file>
+    <file>chevron-up-light.svg</file>
+    <file>chevron-up-dark.svg</file>
   </qresource>
 </RCC>

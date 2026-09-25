@@ -1,6 +1,7 @@
 #include "relay/repository_order.hpp"
 
 #include <QJsonArray>
+#include <QLocale>
 #include <QTest>
 
 namespace {
@@ -28,6 +29,17 @@ class RepositoryOrderTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void naturalSortAlsoWorksInCLocale() {
+    const QLocale previous;
+    QLocale::setDefault(QLocale::c());
+    const auto sorted = paths(relay::sortRepositories(
+        {repository(QStringLiteral("/10"), QStringLiteral("Repo 10")),
+         repository(QStringLiteral("/2"), QStringLiteral("repo 2"))},
+        {relay::RepositoryOrderMode::name, relay::SortDirection::ascending}, {}));
+    QLocale::setDefault(previous);
+    QCOMPARE(sorted, QStringList({QStringLiteral("/2"), QStringLiteral("/10")}));
+  }
+
   void upgradesLegacyOrderingWithoutReshuffling() {
     const QJsonObject legacy{
         {QStringLiteral("repositories"),

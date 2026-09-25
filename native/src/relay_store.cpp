@@ -1,6 +1,7 @@
 #include "relay/relay_store.hpp"
 
 #include "relay/app_paths.hpp"
+#include "relay/forge_types.hpp"
 #include "relay/repository_order.hpp"
 
 #include <QDir>
@@ -92,6 +93,33 @@ QJsonObject normalizeStoreJson(QJsonObject store, const QDateTime& now) {
     if (!store.contains(it.key())) store.insert(it.key(), it.value());
   }
 
+  if (store.contains(QStringLiteral("forgeAccounts")) && !store.value(QStringLiteral("forgeAccounts")).isArray())
+    throw StoreError(QStringLiteral("Invalid saved Git server accounts."));
+  if (store.contains(QStringLiteral("forgeCredentialCleanup")) && !store.value(QStringLiteral("forgeCredentialCleanup")).isArray())
+    throw StoreError(QStringLiteral("Invalid saved credential cleanup list."));
+  QJsonArray forgeAccounts;
+  QSet<QString> forgeIds;
+  QSet<QString> activeCredentials;
+  for (const auto& value : store.value(QStringLiteral("forgeAccounts")).toArray()) {
+    const auto account = forgeAccountFromJson(value.toObject());
+    if (account.id.isEmpty() || forgeIds.contains(account.id)) continue;
+    forgeIds.insert(account.id);
+    activeCredentials.insert(account.credentialId);
+    forgeAccounts.append(forgeAccountToJson(account));
+  }
+  store.insert(QStringLiteral("forgeAccounts"), forgeAccounts);
+  QJsonArray pendingCredentials;
+  QSet<QString> pendingIds;
+  static const QRegularExpression validCredential(QStringLiteral("^[A-Za-z0-9_.:-]{1,240}$"));
+  for (const auto& value : store.value(QStringLiteral("forgeCredentialCleanup")).toArray()) {
+    const auto key = value.toString();
+    if (!validCredential.match(key).hasMatch())
+      throw StoreError(QStringLiteral("Invalid saved credential cleanup reference."));
+    if (activeCredentials.contains(key) || pendingIds.contains(key)) continue;
+    pendingIds.insert(key);
+    pendingCredentials.append(key);
+  }
+  store.insert(QStringLiteral("forgeCredentialCleanup"), pendingCredentials);
   QJsonArray accounts;
   for (const auto& value : store.value(QStringLiteral("accounts")).toArray()) {
     if (!value.isObject()) continue;
@@ -143,11 +171,14 @@ const QString& RelayStore::filePath() const { return filePath_; }
 
 QJsonObject RelayStore::read() const {
   QFile file(filePath_);
-  if (!file.open(QIODevice::ReadOnly)) return emptyStoreJson();
+  if (!QFileInfo::exists(filePath_)) return emptyStoreJson();
+  if (!file.open(QIODevice::ReadOnly))
+    throw StoreError(QStringLiteral("Relay could not read its settings: %1").arg(file.errorString()));
 
   QJsonParseError error;
   const auto document = QJsonDocument::fromJson(file.readAll(), &error);
-  if (error.error != QJsonParseError::NoError || !document.isObject()) return emptyStoreJson();
+  if (error.error != QJsonParseError::NoError || !document.isObject())
+    throw StoreError(QStringLiteral("Relay's settings file is damaged. Restore a backup of %1 before saving changes. The file has been kept.").arg(filePath_));
   return normalizeStoreJson(document.object());
 }
 

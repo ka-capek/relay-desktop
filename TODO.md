@@ -1,5 +1,20 @@
 # Relay Desktop TODO
 
+Latest continuation (2026-09-14):
+[`docs/native-completion-2026-09-14.md`](docs/native-completion-2026-09-14.md).
+The earlier branch now has passing Qt 6.11.1 macOS/Windows CI and macOS source
+installer checks. New local work adds Windows source installation, dependency
+setup/retry, downloadable CI source-build artifacts, and C-locale natural-sort
+fixes. Its Windows installation/CI changes still require a new native run.
+Historical Electron acceptance items below are not automatically validated by
+native test results.
+
+Native continuation (2026-09-07): see
+[`docs/native-completion-2026-09-07.md`](docs/native-completion-2026-09-07.md)
+for the implemented workflows, optional graph, reviews and remaining gaps.
+The original packaged-platform gates below remain open until actual installers
+are verified. Local Linux tests do not satisfy those gates.
+
 This file tracks explicitly requested product work that is not finished. Do not
 describe an item as supported until its acceptance criteria have been verified
 in packaged builds on the relevant platforms, which is why implemented work with
