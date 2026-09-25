@@ -236,6 +236,7 @@ void MainWindow::buildShell() {
   connect(repositoryButton_, &QToolButton::clicked, this, &MainWindow::openRepositoryDialog);
   branchPicker_ = new QComboBox(actionRow);
   branchPicker_->setAccessibleName(tr("Current branch"));
+  branchPicker_->setObjectName(QStringLiteral("branchPicker"));
   branchPicker_->setMinimumWidth(150);
   branchPicker_->addItem(tr("No branch"));
   syncButton_ = new QToolButton(actionRow);
@@ -269,8 +270,8 @@ void MainWindow::buildShell() {
   accountButton_ = new QToolButton(actionRow);
   accountButton_->setPopupMode(QToolButton::InstantPopup);
   accountButton_->setObjectName(QStringLiteral("accountButton"));
-  accountButton_->setText(tr("Connect GitHub account"));
-  accountButton_->setAccessibleName(tr("GitHub account and repository SSH identity"));
+  accountButton_->setText(tr("Accounts and SSH identities"));
+  accountButton_->setAccessibleName(tr("Git hosting accounts and repository SSH identity"));
   accountMenu_ = new QMenu(accountButton_);
   accountButton_->setMenu(accountMenu_);
   connect(accountMenu_, &QMenu::aboutToShow, this, &MainWindow::rebuildAccountMenu);
@@ -322,7 +323,7 @@ void MainWindow::buildShell() {
 
   statusBar()->setObjectName(QStringLiteral("statusBar"));
   statusBar()->showMessage(tr("No repository open"));
-  statusIdentity_ = new QLabel(tr("No GitHub account connected"), this);
+  statusIdentity_ = new QLabel(tr("No account connected"), this);
   statusIdentity_->setProperty("role", QStringLiteral("meta"));
   repositorySettingsButton_ = new QPushButton(tr("Repository settings"), this);
   repositorySettingsButton_->setObjectName(QStringLiteral("repositorySettingsButton"));
@@ -334,14 +335,15 @@ void MainWindow::buildShell() {
 
   connect(branchPicker_, &QComboBox::currentIndexChanged, this, [this](const int index) {
     if (!repository_ || index < 0) return;
-    const auto branch = branchPicker_->itemText(index);
-    if (!branch.isEmpty() && branch != repository_->branch) {
-      { const QSignalBlocker blocker(branchPicker_); branchPicker_->setCurrentText(repository_->branch); }
-      controller_->switchBranch(branch);
-    }
+    const auto ref = branchPicker_->itemData(index).toString();
+    { const QSignalBlocker blocker(branchPicker_); branchPicker_->setCurrentIndex(branchPicker_->findData(QStringLiteral("refs/heads/") + repository_->branch)); }
+    if (ref.startsWith(QStringLiteral("refs/remotes/")))
+      controller_->executeRepositoryAction(RepositoryAction::checkoutRemote, ref.mid(13));
+    else if (ref.startsWith(QStringLiteral("refs/heads/")) && ref.mid(11) != repository_->branch)
+      controller_->switchBranch(ref.mid(11));
   });
   connect(contentTabs_, &QTabWidget::currentChanged, this, [this](const int index) {
-    if (index == 1 && repository_ && historyModel_->rowCount() == 0) controller_->requestHistory();
+    if (index == 1 && repository_ && historyModel_->rowCount() == 0) controller_->requestHistory(0, 50, {}, historyBranch_->currentData().toString());
   });
 }
 
@@ -597,10 +599,46 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
     preferences.graphHistory = index == 1;
     controller_->setPreferences(preferences);
   });
+  historyBranch_ = new QComboBox(left);
+  historyBranch_->setObjectName(QStringLiteral("historyBranch"));
+  historyBranch_->setAccessibleName(tr("Browse branch history without checkout"));
+  historyBranch_->setToolTip(tr("Browse local and fetched remote branches without changing your working files. Fetch to discover new remote branches."));
+  leftLayout->addWidget(historyBranch_);
+  fetchHistoryBranches_ = new QPushButton(tr("Fetch all origin branches"), left);
+  fetchHistoryBranches_->setObjectName(QStringLiteral("fetchHistoryBranches"));
+  fetchHistoryBranches_->setToolTip(tr("Discover every branch on origin, including in single-branch clones. Does not change your checked-out branch or files."));
+  leftLayout->addWidget(fetchHistoryBranches_);
+  connect(fetchHistoryBranches_, &QPushButton::clicked, this, [this] {
+    controller_->fetchOrigin(currentAccountId(), true);
+  });
+  auto* branchActions = new QHBoxLayout;
+  checkoutHistoryBranch_ = new QPushButton(tr("Check out branch"), left);
+  checkoutHistoryBranch_->setObjectName(QStringLiteral("checkoutHistoryBranch"));
+  createHistoryBranch_ = new QPushButton(tr("New branch from here…"), left);
+  createHistoryBranch_->setObjectName(QStringLiteral("createHistoryBranch"));
+  branchActions->addWidget(checkoutHistoryBranch_);
+  branchActions->addWidget(createHistoryBranch_);
+  leftLayout->addLayout(branchActions);
+  connect(historyBranch_, &QComboBox::currentIndexChanged, this, [this] { reloadHistory(); });
+  connect(checkoutHistoryBranch_, &QPushButton::clicked, this, [this] {
+    const auto ref = historyBranch_->currentData().toString();
+    if (ref.startsWith(QStringLiteral("refs/remotes/")))
+      controller_->executeRepositoryAction(RepositoryAction::checkoutRemote, ref.mid(13));
+    else if (ref.startsWith(QStringLiteral("refs/heads/"))) controller_->switchBranch(ref.mid(11));
+  });
+  connect(createHistoryBranch_, &QPushButton::clicked, this, [this] {
+    bool accepted = false;
+    const auto name = QInputDialog::getText(this, tr("New branch"),
+        tr("Create and check out a branch from %1:").arg(historyBranch_->currentData().toString().isEmpty() && repository_ ? repository_->branch : historyBranch_->currentText()),
+        QLineEdit::Normal, {}, &accepted).trimmed();
+    if (accepted && !name.isEmpty()) controller_->createBranch(name, historyBranch_->currentData().toString());
+  });
   historyModel_ = new HistoryCommitListModel(this);
   historyList_ = new QListView(left);
   historyList_->setObjectName(QStringLiteral("historyList"));
   historyList_->setModel(historyModel_);
+  historyList_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  connect(historyList_->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this] { updateWorkflowActions(); });
   historyList_->setItemDelegate(new HistoryCommitItemDelegate(historyList_));
   historyList_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
   historyList_->setAccessibleName(tr("Commit history"));
@@ -729,6 +767,7 @@ void MainWindow::connectController() {
     repositoryButton_->setText(tr("Choose a repository"));
     branchPicker_->clear();
     branchPicker_->addItem(tr("No branch"));
+    updateHistoryBranches();
     changedFileModel_->setFiles({});
     historyModel_->clear();
     workingDiff_->clearDiff();
@@ -841,6 +880,7 @@ void MainWindow::connectController() {
     else if (busyOperations_.value(operation) <= 1) busyOperations_.remove(operation);
     else --busyOperations_[operation];
     branchPicker_->setEnabled(repository_.has_value() && busyOperations_.isEmpty());
+    updateHistoryBranchActions();
     createBranchAction_->setEnabled(repository_.has_value() && busyOperations_.isEmpty());
     pullAction_->setEnabled(repository_ && repository_->hasUpstream && busyOperations_.isEmpty());
     syncButton_->setEnabled(repository_.has_value() && busyOperations_.isEmpty());
@@ -882,9 +922,10 @@ void MainWindow::applyState(const AppState& state) {
   historySearch_->setPlaceholderText(state.preferences.graphHistory
       ? tr("Filter commits (hides graph)") : tr("Search loaded history"));
   if (historyModeChanged) {
+    updateHistoryBranches();
     historyModel_->clear();
     clearCommitDetail();
-    if (repository_) controller_->requestHistory();
+    if (repository_) controller_->requestHistory(0, 50, {}, historyBranch_->currentData().toString());
   }
   workingDiff_->setCodeFontSize(state.preferences.diffFontSize);
   historyDiff_->setCodeFontSize(state.preferences.diffFontSize);
@@ -911,9 +952,10 @@ void MainWindow::applyState(const AppState& state) {
   orderDirection_->setEnabled(state.repositoryOrder.mode != RepositoryOrderMode::manual);
   const auto* active = accountNamed(state, state.activeAccountId);
   accountButton_->setText(active ? QStringLiteral("%1  @%2").arg(active->name, active->handle)
-                                 : tr("Connect GitHub account"));
+                                 : tr("Accounts and SSH identities"));
   statusIdentity_->setText(active ? tr("Signed in as @%1").arg(active->handle)
-                                  : tr("No GitHub account connected"));
+                                  : state.forgeAccounts.isEmpty() ? tr("No account connected")
+                                      : tr("%1 server accounts connected").arg(state.forgeAccounts.size()));
   if (repository_ && SshService::parseRemote(repository_->remote)) {
     const auto profileId = controller_->resolvedSshProfileId(repository_->path);
     const auto profile = std::find_if(state.sshProfiles.cbegin(), state.sshProfiles.cend(),
@@ -961,16 +1003,21 @@ void MainWindow::applyRepository(const Repository& repository) {
     copyHashButton_->setEnabled(false);
     openGitHubButton_->setEnabled(false);
   }
+  if (!sameRepository) { const QSignalBlocker blocker(historyBranch_); historyBranch_->clear(); }
   repository_ = repository;
+  updateHistoryBranches();
   workspaceStack_->setCurrentIndex(1);
   repositoryButton_->setText(QStringLiteral("%1  ·  %2").arg(repository.name, repository.owner));
   repositoryButton_->setToolTip(repository.path);
   {
     const QSignalBlocker blocker(branchPicker_);
     branchPicker_->clear();
-    branchPicker_->addItems(repository.branches);
-    if (!repository.branches.contains(repository.branch)) branchPicker_->addItem(repository.branch);
-    branchPicker_->setCurrentText(repository.branch);
+    for (const auto& branch : repository.branches)
+      branchPicker_->addItem(branch, QStringLiteral("refs/heads/") + branch);
+    if (!repository.branches.contains(repository.branch)) branchPicker_->addItem(repository.branch, QStringLiteral("refs/heads/") + repository.branch);
+    for (const auto& branch : repository.remoteBranches)
+      branchPicker_->addItem(tr("Remote · %1").arg(branch), QStringLiteral("refs/remotes/") + branch);
+    branchPicker_->setCurrentIndex(branchPicker_->findData(QStringLiteral("refs/heads/") + repository.branch));
   }
   const auto* previousFile = changedFileModel_->fileAt(changedFileList_->currentIndex().row());
   const QString selectedPath = sameRepository && previousFile ? previousFile->path : QString{};
@@ -995,7 +1042,7 @@ void MainWindow::applyRepository(const Repository& repository) {
     if (repository.files.at(selectedRow).path != selectedPath) workingDiff_->clearDiff();
     changedFileList_->setCurrentIndex(changedFileModel_->index(selectedRow, 0));
   } else workingDiff_->clearDiff();
-  if (contentTabs_->currentIndex() == 1 && historyModel_->rowCount() == 0) controller_->requestHistory();
+  if (contentTabs_->currentIndex() == 1 && historyModel_->rowCount() == 0) controller_->requestHistory(0, 50, {}, historyBranch_->currentData().toString());
   branchPicker_->setEnabled(busyOperations_.isEmpty());
   createBranchAction_->setEnabled(busyOperations_.isEmpty());
   pullAction_->setEnabled(repository.hasUpstream && busyOperations_.isEmpty());
@@ -1028,6 +1075,7 @@ void MainWindow::rebuildAccountMenu() {
                       [this, id = account.id] { showAccountEmailDialog(id); });
   }
   accountMenu_->addAction(tr("Manage accounts…"), this, &MainWindow::showAccountsDialog);
+  accountMenu_->addAction(tr("Gitea / GitLab accounts and repositories…"), this, &MainWindow::showForgeDialog);
   accountMenu_->addSeparator();
   accountMenu_->addSection(tr("SSH identity for this repository"));
   const auto remote = repository_ ? SshService::parseRemote(repository_->remote) : std::nullopt;
@@ -1266,10 +1314,44 @@ void MainWindow::showSshProfilesDialog() {
   if (dialog.exec() == QDialog::Accepted) controller_->saveSshProfile(dialog.profile());
 }
 
+void MainWindow::reloadHistory() {
+  if (!repository_) return;
+  historyModel_->clear();
+  clearCommitDetail();
+  updateHistoryBranchActions();
+  controller_->requestHistory(0, 50, {}, historyBranch_->currentData().toString());
+}
+
+void MainWindow::updateHistoryBranches() {
+  const auto selected = historyBranch_->currentData().toString();
+  const QSignalBlocker blocker(historyBranch_);
+  historyBranch_->clear();
+  historyBranch_->addItem(appState_.preferences.graphHistory ? tr("All branches (graph default)") : tr("Current branch"), QString{});
+  historyBranch_->addItem(tr("All local and remote branches"), QStringLiteral("*"));
+  if (repository_) {
+    for (const auto& branch : repository_->branches)
+      historyBranch_->addItem(tr("Local · %1").arg(branch), QStringLiteral("refs/heads/") + branch);
+    for (const auto& branch : repository_->remoteBranches)
+      historyBranch_->addItem(tr("Remote · %1").arg(branch), QStringLiteral("refs/remotes/") + branch);
+  }
+  const auto index = historyBranch_->findData(selected);
+  historyBranch_->setCurrentIndex(index < 0 ? 0 : index);
+  historyBranch_->setEnabled(repository_.has_value());
+  updateHistoryBranchActions();
+}
+
+void MainWindow::updateHistoryBranchActions() {
+  const auto ref = historyBranch_->currentData().toString();
+  const bool ready = repository_ && busyOperations_.isEmpty();
+  checkoutHistoryBranch_->setEnabled(ready && ref.startsWith(QStringLiteral("refs/")) && ref != QStringLiteral("refs/heads/") + repository_->branch);
+  createHistoryBranch_->setEnabled(ready && ref != QStringLiteral("*"));
+  fetchHistoryBranches_->setEnabled(ready && !repository_->remote.isEmpty());
+}
+
 void MainWindow::requestNextHistoryPage() {
   if (!repository_ || historyModel_->endOfHistory() || busyOperations_.contains(QStringLiteral("history"))) return;
   controller_->requestHistory(static_cast<int>(historyModel_->commits().size()), 50,
-                              historyModel_->anchor());
+                              historyModel_->anchor(), historyBranch_->currentData().toString());
 }
 
 void MainWindow::updateStatus() {

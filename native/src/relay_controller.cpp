@@ -1,5 +1,7 @@
 #include "relay/relay_controller.hpp"
 #include "relay/theme.hpp"
+#include "relay/forge_service.hpp"
+#include "relay/credential_store.hpp"
 #include "relay/runtime_check.hpp"
 
 #include "relay/app_paths.hpp"
@@ -128,10 +130,13 @@ RelayController::RelayController(RelayControllerConfig config, QObject* parent)
   auth_ = std::make_shared<GitHubAuth>(GitHubAuthContext{
       config_.sourceRoot, config_.resourcesRoot, userDataPath, config_.packaged});
   github_ = std::make_shared<GitHubApi>();
+  forge_ = config_.forgeService ? config_.forgeService : std::make_shared<ForgeService>();
+  credentials_ = config_.credentialStore ? config_.credentialStore : std::make_shared<CredentialStore>();
   avatars_ = std::make_shared<AvatarCache>(userDataPath);
   ssh_ = std::make_shared<SshService>(config_.sourceRoot, config_.resourcesRoot);
 
   qRegisterMetaType<AppState>();
+  qRegisterMetaType<QList<ForgeRepository>>();
   qRegisterMetaType<Repository>();
   qRegisterMetaType<HistoryPage>();
   qRegisterMetaType<CommitDetail>();
@@ -201,6 +206,7 @@ void RelayController::start() {
     ++repositoryGeneration_;
     publishState();
     emit repositoryClosed();
+    if (!state_.forgeCredentialCleanup.isEmpty()) retryForgeCredentialCleanup();
     if (config_.synchronizeAccountsOnStart) checkRuntimes();
   } catch (const std::exception& error) {
     emit operationFailed(QStringLiteral("startup"), QString::fromUtf8(error.what()));
@@ -551,7 +557,7 @@ void RelayController::requestFileDiff(const QString& filePath) {
                     }, [this, generation] { return generation == diffGeneration_; });
 }
 
-void RelayController::requestHistory(const int skip, const int limit, const QString& anchor) {
+void RelayController::requestHistory(const int skip, const int limit, const QString& anchor, const QString& reference) {
   if (!currentRepository_) return;
   const auto repositoryPath = currentRepository_->path;
   const auto generation = ++historyGeneration_;
@@ -559,9 +565,10 @@ void RelayController::requestHistory(const int skip, const int limit, const QStr
   const auto operationGate = config_.operationGate;
   const bool graph = state_.preferences.graphHistory;
   runAsync<HistoryPage>(QStringLiteral("history"),
-                        [git, operationGate, repositoryPath, skip, limit, anchor, graph] {
+                        [git, operationGate, repositoryPath, skip, limit, anchor, graph, reference] {
                           invokeGate(operationGate, QStringLiteral("history"), repositoryPath);
-                          return git->readHistoryPage(repositoryPath, skip, limit, anchor, graph);
+                          return git->readHistoryPage(repositoryPath, skip, limit, anchor, (graph && reference.isEmpty()) || reference == QStringLiteral("*"),
+                                                      reference == QStringLiteral("*") ? QString{} : reference);
                         },
                         [this, generation, repositoryPath](HistoryPage page) {
                           if (generation != historyGeneration_ || !currentRepository_ ||
@@ -661,7 +668,7 @@ QString RelayController::sshCommand(const QString& repositoryPath, const QString
   return profile ? ssh_->commandForRemote(*profile, remote) : QString{};
 }
 
-void RelayController::fetchOrigin(const QString& accountId) {
+void RelayController::fetchOrigin(const QString& accountId, const bool allBranches) {
   if (!currentRepository_) return;
   if (repositoryMutationActive_) {
     emit operationFailed(QStringLiteral("fetch"), QStringLiteral("Wait for the current Git operation to finish."));
@@ -679,7 +686,7 @@ void RelayController::fetchOrigin(const QString& accountId) {
   const auto ssh = ssh_;
   const auto operationGate = config_.operationGate;
   runAsync<Repository>(QStringLiteral("fetch"),
-                       [git, auth, ssh, operationGate, repositoryPath, selectedAccount, profile] {
+                       [git, auth, ssh, operationGate, repositoryPath, selectedAccount, profile, allBranches] {
                          invokeGate(operationGate, QStringLiteral("fetch"), repositoryPath);
                          const auto remote = git->originRemoteUrl(repositoryPath);
                          const auto token = selectedAccount && remote.startsWith(QStringLiteral("https://github.com/"), Qt::CaseInsensitive)
@@ -689,7 +696,7 @@ void RelayController::fetchOrigin(const QString& accountId) {
                                                       : QString{};
                          git->fetchOrigin(repositoryPath, token,
                                           selectedAccount ? selectedAccount->handle : QString{},
-                                          command);
+                                          command, allBranches);
                          return git->readRepository(repositoryPath);
                        },
                        [this, generation, repositoryPath](Repository repository) {
@@ -811,7 +818,7 @@ void RelayController::switchBranch(const QString& branch) {
                        });
 }
 
-void RelayController::createBranch(const QString& branch) {
+void RelayController::createBranch(const QString& branch, const QString& startPoint) {
   if (!currentRepository_) return;
   if (repositoryMutationActive_) {
     emit operationFailed(QStringLiteral("create-branch"), QStringLiteral("Wait for the current Git operation to finish."));
@@ -823,9 +830,9 @@ void RelayController::createBranch(const QString& branch) {
   const auto git = git_;
   const auto operationGate = config_.operationGate;
   runAsync<Repository>(QStringLiteral("create-branch"),
-                       [git, operationGate, repositoryPath, branch] {
+                       [git, operationGate, repositoryPath, branch, startPoint] {
                          invokeGate(operationGate, QStringLiteral("create-branch"), branch);
-                         git->createBranch(repositoryPath, branch);
+                         git->createBranch(repositoryPath, branch, startPoint);
                          return git->readRepository(repositoryPath);
                        },
                        [this, generation, repositoryPath](Repository repository) {

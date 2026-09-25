@@ -1,4 +1,13 @@
 set(RELAY_NATIVE_SOURCES
+  include/relay/forge_types.hpp
+  include/relay/forge_service.hpp
+  include/relay/credential_store.hpp
+  include/relay/forge_dialog.hpp
+  src/forge_service.cpp
+  src/credential_store.cpp
+  src/forge_controller.cpp
+  src/forge_dialog.cpp
+  src/forge_ui.cpp
   include/relay/domain.hpp
   include/relay/avatar_cache.hpp
   include/relay/app_paths.hpp
@@ -63,6 +72,11 @@ endif()
 
 add_library(relay_native_core STATIC ${RELAY_NATIVE_SOURCES} resources/resources.qrc)
 target_link_libraries(relay_native PRIVATE relay_native_core)
+if(APPLE)
+  target_link_libraries(relay_native_core PUBLIC "-framework Security" "-framework CoreFoundation")
+elseif(WIN32)
+  target_link_libraries(relay_native_core PUBLIC Advapi32)
+endif()
 
 foreach(target IN ITEMS relay_native relay_native_core)
   target_include_directories(${target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "relay/forge_types.hpp"
+
 #include <QDateTime>
 #include <QHash>
 #include <QImage>
@@ -166,6 +168,8 @@ struct Preferences {
 };
 
 struct AppState {
+  QList<ForgeAccount> forgeAccounts;
+  QStringList forgeCredentialCleanup;
   QList<Account> accounts;
   QString activeAccountId;
   QList<RepositorySummary> repositories;

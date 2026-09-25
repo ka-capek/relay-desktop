@@ -67,6 +67,51 @@ class MainWindowTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void browsesAllRemoteBranchesWithoutCheckout() {
+    QTemporaryDir temporary;
+    createRepository(temporary.path());
+    runGit(temporary.path(), {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("review")});
+    runGit(temporary.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Remote-only change")});
+    runGit(temporary.path(), {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("gitea"), temporary.filePath(QStringLiteral("upstream.git"))});
+    runGit(temporary.path(), {QStringLiteral("update-ref"), QStringLiteral("refs/remotes/gitea/review"), QStringLiteral("HEAD")});
+    runGit(temporary.path(), {QStringLiteral("switch"), QStringLiteral("main")});
+    runGit(temporary.path(), {QStringLiteral("branch"), QStringLiteral("-D"), QStringLiteral("review")});
+    relay::RelayControllerConfig config;
+    config.storeFile = temporary.filePath(QStringLiteral("profile/relay-data.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.resize(1250, 820);
+    window.show();
+    controller.start();
+    controller.openRepository(temporary.path());
+    auto* branches = window.findChild<QComboBox*>(QStringLiteral("historyBranch"));
+    auto* current = window.findChild<QComboBox*>(QStringLiteral("branchPicker"));
+    auto* history = window.findChild<QListView*>(QStringLiteral("historyList"));
+    QVERIFY(branches && current && history);
+    QTRY_VERIFY_WITH_TIMEOUT(branches->findData(QStringLiteral("refs/remotes/gitea/review")) >= 0, 10000);
+    QVERIFY(current->findData(QStringLiteral("refs/remotes/gitea/review")) >= 0);
+    branches->setCurrentIndex(branches->findData(QStringLiteral("refs/remotes/gitea/review")));
+    auto* model = dynamic_cast<relay::HistoryCommitListModel*>(history->model());
+    QVERIFY(model);
+    QCOMPARE(history->selectionMode(), QAbstractItemView::ExtendedSelection);
+    QTRY_COMPARE_WITH_TIMEOUT(model->commits().size(), 2, 10000);
+    QCOMPARE(model->commits().first().title, QStringLiteral("Remote-only change"));
+    QCOMPARE(controller.currentRepository()->branch, QStringLiteral("main"));
+    QCOMPARE(current->currentText(), QStringLiteral("main"));
+    window.findChild<QTabWidget*>()->setCurrentIndex(1);
+    const auto screenshots = qEnvironmentVariable("RELAY_SCREENSHOT_DIR");
+    if (!screenshots.isEmpty()) {
+      QDir().mkpath(screenshots);
+      QVERIFY(window.grab().save(screenshots + QStringLiteral("/remote-branch-history.png")));
+    }
+    auto* checkout = window.findChild<QPushButton*>(QStringLiteral("checkoutHistoryBranch"));
+    QTRY_VERIFY(checkout->isEnabled());
+    checkout->click();
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->branch, QStringLiteral("review"), 10000);
+    QCOMPARE(current->currentText(), QStringLiteral("review"));
+  }
+
   void toolbarPullFetchesUnknownRemoteChanges() {
     QTemporaryDir temporary;
     const auto seed = temporary.filePath(QStringLiteral("seed"));

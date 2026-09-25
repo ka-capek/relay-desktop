@@ -162,6 +162,12 @@ QJsonObject sshProfileToJson(const SshProfile& profile) {
 
 AppState appStateFromJson(const QJsonObject& object) {
   AppState state;
+  for (const auto& key : object.value(QStringLiteral("forgeCredentialCleanup")).toArray())
+    if (!key.toString().isEmpty()) state.forgeCredentialCleanup.append(key.toString());
+  for (const auto& value : object.value(QStringLiteral("forgeAccounts")).toArray()) {
+    const auto account = forgeAccountFromJson(value.toObject());
+    if (!account.id.isEmpty()) state.forgeAccounts.append(account);
+  }
   for (const auto& value : object.value(QStringLiteral("accounts")).toArray())
     state.accounts.append(accountFromJson(value.toObject()));
   state.activeAccountId = object.value(QStringLiteral("activeAccountId")).toString();
@@ -194,6 +200,10 @@ AppState appStateFromJson(const QJsonObject& object) {
 }
 
 QJsonObject mergeAppStateIntoJson(const AppState& state, QJsonObject base) {
+  base.insert(QStringLiteral("forgeCredentialCleanup"), QJsonArray::fromStringList(state.forgeCredentialCleanup));
+  QJsonArray forgeAccounts;
+  for (const auto& account : state.forgeAccounts) forgeAccounts.append(forgeAccountToJson(account));
+  base.insert(QStringLiteral("forgeAccounts"), forgeAccounts);
   QJsonArray accounts;
   for (const auto& account : state.accounts) accounts.append(accountToJson(account));
   QJsonArray repositories;

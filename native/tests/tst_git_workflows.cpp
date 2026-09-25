@@ -335,6 +335,80 @@ class GitWorkflowsTest final : public QObject {
     QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.performAction(root, RepositoryAction::undoCommit));
   }
 
+  void multiCherryPickValidatesBeforeApplyingAndPreservesOrder() {
+    QTemporaryDir dir; const auto root = dir.path(); init(root);
+    relay::GitService service;
+    service.createBranch(root, QStringLiteral("topic"));
+    write(root, QStringLiteral("topic.txt"), "first\n"); commit(root, QStringLiteral("first"));
+    const auto first = git(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    write(root, QStringLiteral("topic.txt"), "second\n"); commit(root, QStringLiteral("second"));
+    const auto second = git(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    service.switchBranch(root, QStringLiteral("main"));
+    const auto original = git(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.performAction(root, RepositoryAction::cherryPick, {}, {first, QStringLiteral("--all")}, identity));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.performAction(root, RepositoryAction::cherryPick, {}, {first, first}, identity));
+    QCOMPARE(git(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), original);
+    QVERIFY(!QFileInfo::exists(root + QStringLiteral("/topic.txt")));
+    service.performAction(root, RepositoryAction::cherryPick, {}, {first, second}, identity);
+    QCOMPARE(read(root, QStringLiteral("topic.txt")), QByteArray("second\n"));
+    QCOMPARE(git(root, {QStringLiteral("log"), QStringLiteral("-2"), QStringLiteral("--format=%s")}), QStringLiteral("second\nfirst"));
+    QVERIFY(service.readRepository(root).pendingOperation.isEmpty());
+  }
+
+  void multiCherryPickIncludesMergeAgainstFirstParent() {
+    QTemporaryDir dir; const auto root = dir.path(); init(root);
+    relay::GitService service;
+    service.createBranch(root, QStringLiteral("topic"));
+    write(root, QStringLiteral("topic.txt"), "topic\n"); commit(root);
+    service.switchBranch(root, QStringLiteral("main"));
+    git(root, {QStringLiteral("merge"), QStringLiteral("--no-ff"), QStringLiteral("-m"), QStringLiteral("merge topic"), QStringLiteral("topic")});
+    const auto merge = git(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    write(root, QStringLiteral("next.txt"), "next\n"); commit(root);
+    const auto next = git(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    git(root, {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("destination"), merge + QStringLiteral("^1")});
+    service.performAction(root, RepositoryAction::cherryPick, {}, {merge, next}, identity);
+    QCOMPARE(read(root, QStringLiteral("topic.txt")), QByteArray("topic\n"));
+    QCOMPARE(read(root, QStringLiteral("next.txt")), QByteArray("next\n"));
+    QVERIFY(service.readRepository(root).pendingOperation.isEmpty());
+  }
+
+  void multiCherryPickConflictCanAbortContinueOrSkip_data() {
+    QTest::addColumn<int>("action");
+    QTest::newRow("abort") << static_cast<int>(RepositoryAction::abortOperation);
+    QTest::newRow("continue") << static_cast<int>(RepositoryAction::continueOperation);
+    QTest::newRow("skip") << static_cast<int>(RepositoryAction::skipOperation);
+  }
+
+  void multiCherryPickConflictCanAbortContinueOrSkip() {
+    QFETCH(int, action);
+    QTemporaryDir dir; const auto root = dir.path(); divergent(root);
+    relay::GitService service;
+    service.switchBranch(root, QStringLiteral("topic"));
+    const auto conflict = git(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    write(root, QStringLiteral("first.txt"), "first\n"); commit(root, QStringLiteral("first"));
+    const auto first = git(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    write(root, QStringLiteral("last.txt"), "last\n"); commit(root, QStringLiteral("last"));
+    const auto last = git(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    service.switchBranch(root, QStringLiteral("main"));
+    const auto original = git(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.performAction(root, RepositoryAction::cherryPick, {}, {first, conflict, last}, identity));
+    QCOMPARE(read(root, QStringLiteral("first.txt")), QByteArray("first\n"));
+    QCOMPARE(service.readRepository(root).pendingOperation, QStringLiteral("cherry-pick"));
+    const auto operation = static_cast<RepositoryAction>(action);
+    if (operation == RepositoryAction::continueOperation)
+      service.performAction(root, RepositoryAction::resolveTheirs, {}, {QStringLiteral("file.txt")});
+    service.performAction(root, operation, {}, {}, identity);
+    QVERIFY(service.readRepository(root).pendingOperation.isEmpty());
+    if (operation == RepositoryAction::abortOperation) {
+      QCOMPARE(git(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), original);
+      QVERIFY(!QFileInfo::exists(root + QStringLiteral("/first.txt")));
+      QVERIFY(!QFileInfo::exists(root + QStringLiteral("/last.txt")));
+    } else {
+      QCOMPARE(read(root, QStringLiteral("last.txt")), QByteArray("last\n"));
+      QCOMPARE(read(root, QStringLiteral("file.txt")), operation == RepositoryAction::continueOperation ? QByteArray("topic\n") : QByteArray("main\n"));
+    }
+  }
+
   void remoteCheckoutAndCherryPick() {
     QTemporaryDir dir; const auto root = dir.path(); init(root);
     relay::GitService service;

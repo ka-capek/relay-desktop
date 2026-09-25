@@ -67,9 +67,13 @@ class MainWindow final : public QMainWindow {
   void removeCurrentRepository();
   void showRepositoryAccountDialog();
   void showAccountsDialog();
+  void showForgeDialog();
   void showAccountEmailDialog(const QString& accountId);
   void showSshProfilesDialog();
   void requestNextHistoryPage();
+  void reloadHistory();
+  void updateHistoryBranches();
+  void updateHistoryBranchActions();
   void updateStatus();
   void showNotice(const QString& message, bool error = false);
   [[nodiscard]] QString currentAccountId() const;
@@ -104,6 +108,10 @@ class MainWindow final : public QMainWindow {
   QPushButton* commitButton_{};
   QLineEdit* historySearch_{};
   QComboBox* historyMode_{};
+  QComboBox* historyBranch_{};
+  QPushButton* checkoutHistoryBranch_{};
+  QPushButton* createHistoryBranch_{};
+  QPushButton* fetchHistoryBranches_{};
   QLabel* historyTitle_{};
   QLabel* historyMetadata_{};
   QLabel* historyBody_{};

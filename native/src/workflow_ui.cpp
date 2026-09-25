@@ -13,10 +13,12 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListView>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QVBoxLayout>
+#include <algorithm>
 
 namespace relay {
 namespace {
@@ -144,11 +146,24 @@ void MainWindow::buildWorkflowMenus(QMenu* file, QMenu* repositoryMenu) {
     if (confirm(this, tr("Revert commit"), tr("Create a new commit that reverses “%1”? Merge commits are reversed against their first parent.").arg(commitDetail_->title)))
       controller_->executeRepositoryAction(RepositoryAction::revertCommit, hash);
   });
-  add(tr("Cherry-pick selected commit…"), QStringLiteral("cherryPickAction"), QStringLiteral("commit"), [this] {
-    if (!commitDetail_) return;
-    const auto hash = currentCommitHash();
-    if (confirm(this, tr("Cherry-pick commit"), tr("Apply “%1” to the current branch? For merge commits, changes are taken against the first parent.").arg(commitDetail_->title)))
-      controller_->executeRepositoryAction(RepositoryAction::cherryPick, hash);
+  add(tr("Cherry-pick selected commits…"), QStringLiteral("cherryPickAction"), QStringLiteral("commit"), [this] {
+    if (!repository_) return;
+    auto rows = historyList_->selectionModel()->selectedRows();
+    std::sort(rows.begin(), rows.end(), [](const auto& left, const auto& right) { return left.row() > right.row(); });
+    QStringList hashes;
+    QStringList titles;
+    for (const auto& row : rows) {
+      if (const auto* commit = historyModel_->commitAt(row.row())) {
+        hashes.append(commit->fullHash);
+        titles.append(commit->fullHash.left(8) + QStringLiteral("  ") + commit->title);
+      }
+    }
+    if (hashes.isEmpty()) return;
+    if (hashes.size() > 200) { showNotice(tr("Select at most 200 commits at once."), true); return; }
+    if (confirm(this, tr("Cherry-pick commits"),
+        tr("Apply %1 selected commit(s) to %2 in the following order? For merge commits, changes are taken against the first parent.\n\n%3")
+          .arg(hashes.size()).arg(repository_->branch, titles.join(u'\n'))))
+      controller_->executeRepositoryAction(RepositoryAction::cherryPick, {}, hashes);
   });
   add(tr("Resolve conflicts / continue…"), QStringLiteral("conflictsAction"), QStringLiteral("conflict"), [this] { showConflicts(); });
   connect(repositoryMenu, &QMenu::aboutToShow, this, &MainWindow::updateWorkflowActions);

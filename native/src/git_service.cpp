@@ -521,12 +521,12 @@ QString GitService::assertCommitInRepository(const QString& repositoryPath,
 }
 
 HistoryPage GitService::readHistoryPage(const QString& repositoryPath, const int skip,
-                                        const int limit, const QString& requestedAnchor, const bool allBranches) const {
+                                        const int limit, const QString& requestedAnchor, const bool allBranches, const QString& reference) const {
   const auto root = runGit(repositoryPath,
                            {QStringLiteral("rev-parse"), QStringLiteral("--show-toplevel")});
   const auto head =
       runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
-  if (head.isEmpty() && !allBranches) return {{}, {}, {}, true};
+  if (head.isEmpty() && !allBranches && reference.isEmpty()) return {{}, {}, {}, true};
 
   const auto boundedSkip = std::max(0, skip);
   const auto boundedLimit = std::clamp(limit == 0 ? 50 : limit, 1, historyBatchLimit);
@@ -541,6 +541,12 @@ HistoryPage GitService::readHistoryPage(const QString& repositoryPath, const int
         {}, false, true, (tips.join(u'\n') + u'\n').toUtf8()).split(u'\n');
     if (objects.size() != tips.size() || std::any_of(objects.cbegin(), objects.cend(), [](const QString& type) { return type != QStringLiteral("commit"); }))
       throw ProcessError(QStringLiteral("This history snapshot is no longer available. Refresh the repository."));
+  } else if (!reference.isEmpty()) {
+    if (!reference.startsWith(QStringLiteral("refs/heads/")) &&
+        !reference.startsWith(QStringLiteral("refs/remotes/")))
+      throw ProcessError(QStringLiteral("Choose an existing local or remote branch."));
+    static_cast<void>(runGit(root, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"), reference}));
+    tips.append(runGit(root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), reference + QStringLiteral("^{commit}")}));
   } else if (allBranches) {
     tips = runGit(root, {QStringLiteral("rev-parse"), QStringLiteral("--branches"), QStringLiteral("--remotes")}).split(u'\n', Qt::SkipEmptyParts);
     if (!head.isEmpty()) tips.append(head);
@@ -854,7 +860,7 @@ QString GitService::githubCredentialHelper() {
 }
 
 void GitService::fetchOrigin(const QString& repositoryPath, const QString& token,
-                             const QString& handle, const QString& sshCommand) const {
+                             const QString& handle, const QString& sshCommand, const bool allBranches) const {
   const auto remote = originRemoteUrl(repositoryPath);
   if (remote.isEmpty()) {
     throw ProcessError(QStringLiteral("This repository does not have an origin remote."));
@@ -873,8 +879,10 @@ void GitService::fetchOrigin(const QString& repositoryPath, const QString& token
     environment.insert(QStringLiteral("RELAY_GIT_TOKEN"), token);
     environment.insert(QStringLiteral("RELAY_GIT_USERNAME"), username);
   }
-  arguments.append(
-      {QStringLiteral("fetch"), QStringLiteral("origin"), QStringLiteral("--prune")});
+  arguments.append({QStringLiteral("fetch"), QStringLiteral("origin")});
+  if (allBranches)
+    arguments.append({QStringLiteral("--no-prune"), QStringLiteral("+refs/heads/*:refs/remotes/origin/*")});
+  else arguments.append(QStringLiteral("--prune"));
   static_cast<void>(runGit(repositoryPath, arguments, environment));
 }
 
@@ -940,14 +948,21 @@ void GitService::switchBranch(const QString& repositoryPath, const QString& bran
       runGit(repositoryPath, {QStringLiteral("switch"), QStringLiteral("--no-guess"), branch}));
 }
 
-void GitService::createBranch(const QString& repositoryPath, const QString& branch) const {
+void GitService::createBranch(const QString& repositoryPath, const QString& branch, const QString& startPoint) const {
   requireIdle(repositoryPath);
   if (branch.isEmpty() || branch.startsWith(u'-'))
     throw ProcessError(QStringLiteral("Enter a valid branch name."));
   static_cast<void>(runGit(repositoryPath, {QStringLiteral("check-ref-format"),
       QStringLiteral("refs/heads/") + branch}));
-  static_cast<void>(runGit(repositoryPath, {QStringLiteral("switch"),
-      QStringLiteral("--create"), branch}));
+  QStringList arguments{QStringLiteral("switch"), QStringLiteral("--create"), branch};
+  if (!startPoint.isEmpty()) {
+    if (!startPoint.startsWith(QStringLiteral("refs/heads/")) && !startPoint.startsWith(QStringLiteral("refs/remotes/")))
+      throw ProcessError(QStringLiteral("Choose an existing branch as the starting point."));
+    static_cast<void>(runGit(repositoryPath, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"), startPoint}));
+    // Resolve to an immutable commit, without creating an implicit upstream binding.
+    arguments.append(runGit(repositoryPath, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), startPoint + QStringLiteral("^{commit}")}));
+  }
+  static_cast<void>(runGit(repositoryPath, arguments));
 }
 
 void GitService::pullOrigin(const QString& repositoryPath, const QString& token,

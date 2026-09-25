@@ -8,7 +8,7 @@ native release passes its cross-platform stop/go gate.
 
 ## Download
 
-Native preview: [**Relay 0.5.2 — Native installers and upgrades**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.5.2)
+Native preview: [**Relay 0.5.2 — C++ rewrite, installers and SSH identities**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.5.2)
 is a prerelease of the C++26/Qt client. Its Windows setup and macOS DMG require
 external Git >=2.35.0 and GitHub CLI >=2.98.0. They are unsigned (macOS uses
 ad-hoc signing), are not notarized, and do not bundle Git/gh. Real multi-account OAuth,
@@ -142,6 +142,54 @@ remain independent of the SSH key and can be set through Settings/local Git.
 For GitHub, use a remote such as git@github.com:owner/repo.git and a profile
 with host github.com and user git. Clone, fetch, pull and push use that key;
 HTTPS remotes continue to use the selected GitHub OAuth account.
+
+## Native branches and ordinary Git operations
+
+The current-branch picker lists local and fetched remote-tracking branches.
+Selecting a remote branch checks it out as a local tracking branch. In History,
+use the branch selector to browse a local branch, a remote branch, or all
+branches together without changing the working tree. **Check out branch** is
+an explicit action; **New branch from here** starts a branch at the selected
+branch tip. **Fetch all origin branches** discovers origin branches even when
+the repository was cloned with a single-branch fetch configuration. It does
+not change that configuration or prune old remote-tracking refs. Branches
+already fetched from other remotes are also visible.
+
+Repository actions include branch creation/rename/local deletion, merge,
+unpublished rebase, revert, stash/apply/drop, tags, recoverable discard, undo,
+amend and conflict resolution with continue/skip/abort. Select multiple history
+rows with Ctrl/Cmd or Shift, then **Repository → Cherry-pick selected commits…**.
+The confirmation shows the destination and applies the selected commits from
+oldest to newest in displayed history order (up to 200). A conflicting series
+can be continued, skipped, or aborted as one operation. Merge commits use their
+first-parent changes. Force push and deleting remote branches remain CLI tasks.
+
+## Native Gitea, Forgejo and GitLab accounts
+
+Open the account menu → **Gitea / GitLab accounts and repositories…**.
+Choose the server type and HTTPS server address (GitLab.com or a self-hosted
+instance, including installations under a URL subpath). Use **Open token
+settings in browser**, sign in and create a read-only API token: Gitea/Forgejo
+needs read:user and read:repository; GitLab needs read_api. GitHub retains its
+existing browser/device login. Direct OAuth for arbitrary third-party servers
+requires a registered application and is not configured in this build.
+
+Relay lists the repositories available to the connected account, including
+private, read-only and archived repositories, with pagination and filtering.
+GitLab listing covers projects the account belongs to. Multiple accounts on
+different servers or the same server stay separate. Open a repository in the
+browser or choose **Clone with SSH…** and an SSH profile for its transport host.
+The API token is used for discovery only; Git operations use SSH identities
+or the existing Git credential configuration. SSH-only servers work through
+normal Git URLs and local repositories without a provider API account.
+
+API tokens are stored in macOS Keychain or Windows Credential Manager, never
+in relay-data.json. Disconnecting removes the account and its saved token;
+failed vault cleanup can be retried and is retried on startup. Tokens remain
+bound to their provider/server/account even if public metadata is edited.
+The Linux development harness uses an injected test vault; no plaintext
+credential fallback is provided. Real account login and private operations
+still need installed-platform testing against your own server.
 
 ## Native themes and branch graph
 

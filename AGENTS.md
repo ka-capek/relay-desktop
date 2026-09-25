@@ -58,7 +58,11 @@ Preserve these behaviors unless the user explicitly requests a product change:
 
 1. **Start with no repository open.** Recent repositories may remain in the
    sidebar, but application startup must not automatically reopen one.
-2. **Never ask for a PAT.** Authentication is browser-based GitHub CLI OAuth.
+2. **Never ask for a GitHub PAT.** GitHub authentication remains browser-based
+   GitHub CLI OAuth. The owner explicitly authorized API-token fallback for
+   native Gitea/Forgejo/GitLab discovery on 2026-09-25. Only the one-time password
+   input may hold that token; keep it out of account models, JSON and logs,
+   and store it in macOS Keychain / Windows Credential Manager.
 3. **Never persist an OAuth token in `relay-data.json`, React state, logs, or Git
    configuration.** Tokens may exist only transiently in the main process and a
    child process environment.
@@ -90,7 +94,7 @@ must also be checked manually.
 - Public repository: <https://github.com/ka-capek/relay-desktop>
 - Default branch: `main`
 - Current release line: `v0.5.0`
-- Native prerelease: `v0.5.2`, titled `Relay 0.5.2 — Native installers and upgrades`.
+- Native prerelease: `v0.5.2`, titled `Relay 0.5.2 — C++ rewrite, installers and SSH identities`.
   The initial C++ rewrite preview was `v0.5.1`. These previews use external Git/gh
   and do not satisfy the stable bundled-runtime distribution gate. Electron
   package versions remain 0.5.0; the native CMake version is 0.5.2.
@@ -1427,7 +1431,7 @@ outputs/installers/
 The NSIS installer is interactive, allows choosing an install directory, and
 creates desktop and Start Menu shortcuts.
 
-### Native usability follow-up after 0.5.2
+### Native usability included in refreshed 0.5.2
 
 The toolbar synchronization button has a split menu exposing Fetch, Pull and
 Push independently of the cached ahead/behind counts. Pull still requires an
@@ -1447,6 +1451,49 @@ its frozen behavior. UI integration tests cover remote changes pulled before a f
 resizing a populated diff, persisted SSH selection and host mismatch rejection.
 The Windows main-window suite has a 180-second CTest limit because its real
 Git fixtures exceed the default 60 seconds on CI; individual waits stay bounded.
+
+### Native multi-host and branch work (2026-09-25)
+
+The native current-branch picker includes local and remote-tracking branches.
+History has a separate scope selector (current/all/specific local or remote).
+Reading another branch never checks it out. Explicit checkout and creation
+from a selected branch are separate actions. History paging snapshots commit
+tips and applies request generations across scope changes. The explicit
+Fetch all origin branches action fetches the complete heads refspec, even for
+single-branch clones, without changing Git configuration or pruning refs.
+Other remotes' already-fetched refs remain visible.
+
+Multiple selected history commits use one Git cherry-pick sequencer operation
+in displayed oldest-to-newest order, capped at 200; validate every object and
+duplicates before mutation. Continue/skip/abort preserve the full sequence.
+Merge picks use first parent. The owner leaves force push and remote branch
+deletion to the CLI. Existing merge/rebase/revert/stash/conflict actions remain.
+
+New forge_service/forge_controller/forge_dialog files implement API discovery
+for Gitea/Forgejo and GitLab, including self-hosted HTTPS/subpath servers.
+Public AppState.forgeAccounts is separate from GitHub OAuth accounts and
+commit identity. Paginate access/member repositories, retaining private,
+read-only and archived entries. These API credentials are not Git transport
+credentials; cloning uses the chosen SSH profile. Browser token-settings links
+support manual token creation; direct OAuth requires a registered application
+and is not claimed. Other Git services still work through generic Git/SSH.
+
+credential_store.cpp uses native Security.framework or Advapi32 APIs, only
+from controller workers; Linux has no plaintext fallback. Inject a memory
+vault only in tests. User-entered tokens leave the password input immediately;
+widgets never receive them back. Vault references bind to the deterministic
+provider/server/user identity. Reconnection writes a new unique key, publishes
+metadata only after saving, and retains the previous credential on save failure.
+An uncommitted result owns cleanup even if its controller closes. Persisted
+forgeCredentialCleanup references permit retry after vault removal errors.
+Drop stale API successes and failures after account selection/dialog closure.
+Requests are HTTPS, bounded, redirect-free; never surface raw remote errors.
+
+Tests cover paginated discovery/security, native OS vault roundtrip on target
+platforms, connect/browse/restart/disconnect UI, failed metadata/vault writes,
+controller shutdown, stale requests, branch browsing without checkout and
+multi-commit conflict continuation. Private real-server authentication remains
+an installed-platform manual check; do not claim fixtures prove it.
 
 ### Native preview installers (0.5.2 onward)
 

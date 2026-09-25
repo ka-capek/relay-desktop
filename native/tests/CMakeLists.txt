@@ -1,6 +1,6 @@
 find_package(Qt6 ${RELAY_QT_MIN_VERSION} EXACT REQUIRED COMPONENTS Test)
 
-foreach(test_name IN ITEMS app_paths avatar_cache dialogs diff_model domain git_service git_workflows github_api github_auth list_models main_window process_runner relay_controller relay_store repository_discovery repository_order runtime_check ssh_service theme)
+foreach(test_name IN ITEMS forge_integration forge_service app_paths avatar_cache dialogs diff_model domain git_service git_workflows github_api github_auth list_models main_window process_runner relay_controller relay_store repository_discovery repository_order runtime_check ssh_service theme)
   qt_add_executable(tst_${test_name} tst_${test_name}.cpp)
   # Console entry points keep QtTest diagnostics visible to CTest on Windows.
   set_target_properties(tst_${test_name} PROPERTIES WIN32_EXECUTABLE FALSE)

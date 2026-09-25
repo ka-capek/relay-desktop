@@ -299,12 +299,25 @@ void GitService::performAction(const QString& root, const RepositoryAction actio
     case RepositoryAction::revertCommit:
     case RepositoryAction::cherryPick: {
       requireIdle(root, true);
-      const auto hash = assertCommitInRepository(root, target);
-      const auto detail = readCommitDetail(root, hash);
+      // Validate the whole selection before Git can apply its first commit.
+      // One invocation preserves Git's sequencer across conflicts, including
+      // aborting back to the original HEAD after earlier picks succeeded.
+      const auto requested = action == RepositoryAction::cherryPick && !paths.isEmpty()
+          ? paths : QStringList{target};
+      if (requested.size() > 200)
+        throw ProcessError(QStringLiteral("Select at most 200 commits to cherry-pick at once."));
+      QStringList hashes;
+      bool hasMerge = false;
+      for (const auto& value : requested) {
+        const auto hash = assertCommitInRepository(root, value);
+        if (hashes.contains(hash)) throw ProcessError(QStringLiteral("Select each commit only once."));
+        hasMerge = hasMerge || readCommitDetail(root, hash).isMerge;
+        hashes.append(hash);
+      }
       QStringList arguments{action == RepositoryAction::revertCommit ? QStringLiteral("revert") : QStringLiteral("cherry-pick"),
                             QStringLiteral("--no-edit")};
-      if (detail.isMerge) arguments.append({QStringLiteral("--mainline"), QStringLiteral("1")});
-      arguments.append(hash);
+      if (hasMerge) arguments.append({QStringLiteral("--mainline"), QStringLiteral("1")});
+      arguments.append(hashes);
       execute(arguments, environment);
       break;
     }

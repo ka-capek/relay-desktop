@@ -30,7 +30,8 @@ class GitService final {
 
   [[nodiscard]] HistoryPage readHistoryPage(const QString& repositoryPath, int skip = 0,
                                             int limit = 50,
-                                            const QString& anchor = {}, bool allBranches = false) const;
+                                            const QString& anchor = {}, bool allBranches = false,
+                                            const QString& reference = {}) const;
   [[nodiscard]] CommitDetail readCommitDetail(const QString& repositoryPath,
                                               const QString& requestedHash) const;
   [[nodiscard]] QString readCommitFileDiff(const QString& repositoryPath,
@@ -45,7 +46,7 @@ class GitService final {
                    const QString& summary, const QString& description,
                    const Account& account) const;
   void fetchOrigin(const QString& repositoryPath, const QString& token = {},
-                   const QString& handle = {}, const QString& sshCommand = {}) const;
+                   const QString& handle = {}, const QString& sshCommand = {}, bool allBranches = false) const;
   void pushOrigin(const QString& repositoryPath, const QString& token = {},
                   const QString& handle = {}, const QString& sshCommand = {}) const;
   void pullOrigin(const QString& repositoryPath, const QString& token = {},
@@ -55,7 +56,7 @@ class GitService final {
                      const Account& account = {}) const;
   [[nodiscard]] Repository createRepository(const QString& destinationPath) const;
   void setOriginRemote(const QString& repositoryPath, const QString& remote, bool replace = false) const;
-  void createBranch(const QString& repositoryPath, const QString& branch) const;
+  void createBranch(const QString& repositoryPath, const QString& branch, const QString& startPoint = {}) const;
   [[nodiscard]] Repository cloneRepository(const QString& remoteUrl,
                                            const QString& destinationPath,
                                            const QString& token = {},

@@ -199,6 +199,58 @@ class GitServiceTest final : public QObject {
     QVERIFY(!ask(QByteArrayLiteral("protocol=http\nhost=github.com\n\n")).contains("test-token"));
   }
 
+  void fetchesAllOriginBranchesFromSingleBranchClone() {
+    QTemporaryDir root;
+    const auto seed = root.filePath(QStringLiteral("seed"));
+    const auto clone = root.filePath(QStringLiteral("clone"));
+    QVERIFY(QDir().mkpath(seed));
+    initRepository(seed);
+    writeFile(seed + QStringLiteral("/a.txt"), QByteArrayLiteral("main\n"));
+    commitAll(seed, QStringLiteral("Initial"));
+    runGit(seed, {QStringLiteral("branch"), QStringLiteral("remote-only")});
+    runGit(root.path(), {QStringLiteral("clone"), QStringLiteral("--single-branch"), QStringLiteral("--branch"), QStringLiteral("main"), seed, clone});
+    const auto refspec = runGit(clone, {QStringLiteral("config"), QStringLiteral("--get-all"), QStringLiteral("remote.origin.fetch")});
+    relay::GitService service;
+    QVERIFY(!service.readRepository(clone).remoteBranches.contains(QStringLiteral("origin/remote-only")));
+    service.fetchOrigin(clone, {}, {}, {}, true);
+    QVERIFY(service.readRepository(clone).remoteBranches.contains(QStringLiteral("origin/remote-only")));
+    QCOMPARE(runGit(clone, {QStringLiteral("config"), QStringLiteral("--get-all"), QStringLiteral("remote.origin.fetch")}), refspec);
+    QCOMPARE(service.readRepository(clone).branch, QStringLiteral("main"));
+    runGit(seed, {QStringLiteral("branch"), QStringLiteral("-D"), QStringLiteral("remote-only")});
+    runGit(clone, {QStringLiteral("config"), QStringLiteral("fetch.prune"), QStringLiteral("true")});
+    service.fetchOrigin(clone, {}, {}, {}, true);
+    QVERIFY(service.readRepository(clone).remoteBranches.contains(QStringLiteral("origin/remote-only")));
+  }
+
+  void browsesRemoteHistoryAndCreatesFromItWithoutChangingHead() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    writeFile(root.filePath(QStringLiteral("a.txt")), QByteArrayLiteral("main\n"));
+    commitAll(root.path(), QStringLiteral("Initial"));
+    const auto original = runGit(root.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    runGit(root.path(), {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("remote-only")});
+    writeFile(root.filePath(QStringLiteral("a.txt")), QByteArrayLiteral("remote\n"));
+    commitAll(root.path(), QStringLiteral("Remote work"));
+    const auto remote = runGit(root.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    runGit(root.path(), {QStringLiteral("update-ref"), QStringLiteral("refs/remotes/gitea/remote-only"), remote});
+    runGit(root.path(), {QStringLiteral("switch"), QStringLiteral("main")});
+    runGit(root.path(), {QStringLiteral("branch"), QStringLiteral("-D"), QStringLiteral("remote-only")});
+    relay::GitService service;
+    const auto repository = service.readRepository(root.path());
+    QVERIFY(repository.remoteBranches.contains(QStringLiteral("gitea/remote-only")));
+    const auto page = service.readHistoryPage(root.path(), 0, 1, {}, false, QStringLiteral("refs/remotes/gitea/remote-only"));
+    QCOMPARE(page.commits.first().fullHash, remote);
+    const auto next = service.readHistoryPage(root.path(), 1, 1, page.anchor, false, QStringLiteral("refs/remotes/gitea/remote-only"));
+    QCOMPARE(next.commits.first().fullHash, original);
+    QCOMPARE(runGit(root.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), original);
+    QCOMPARE(service.readHistoryPage(root.path()).commits.size(), 1);
+    QCOMPARE(service.readHistoryPage(root.path(), 0, 50, {}, true).commits.size(), 2);
+    QVERIFY_EXCEPTION_THROWN(service.readHistoryPage(root.path(), 0, 50, {}, false, QStringLiteral("--all")), relay::ProcessError);
+    service.createBranch(root.path(), QStringLiteral("review"), QStringLiteral("refs/remotes/gitea/remote-only"));
+    QCOMPARE(runGit(root.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), remote);
+    QCOMPARE(service.readRepository(root.path()).branch, QStringLiteral("review"));
+  }
+
   void createsBranchesAndRejectsOptionLikeNames() {
     QTemporaryDir root;
     initRepository(root.path());
