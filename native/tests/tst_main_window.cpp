@@ -26,6 +26,7 @@
 #include <QSplitter>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include <QListView>
@@ -183,7 +184,7 @@ class MainWindowTest final : public QObject {
       }
     }
     QCOMPARE(controller.resolvedSshProfileId(local), QStringLiteral("work"));
-    QCOMPARE(relay::RelayStore(config.storeFile).read().value(QStringLiteral("repositorySshProfiles")).toObject().value(local).toString(), QStringLiteral("work"));
+    QCOMPARE(relay::RelayStore(config.storeFile).read().value(QStringLiteral("repositorySshProfiles")).toObject().value(QFileInfo(local).canonicalFilePath()).toString(), QStringLiteral("work"));
     button->menu()->hide();
     QVERIFY(button->text().contains(QStringLiteral("Work key")));
     QVERIFY(controller.state().accounts.isEmpty());
