@@ -135,10 +135,13 @@ Drag the dividers to resize changes/history panels. In History, the horizontal
 divider above the diff also changes the space shared by commit details/files
 and the diff.
 
-For a non-GitHub SSH repository, open the top-right account/identity menu and
+For an SSH repository (including GitHub), open the top-right account/identity menu and
 select a saved SSH identity for that host. No GitHub sign-in is needed. Choose
 **Use SSH agent and configuration** to clear the override. Commit author details
 remain independent of the SSH key and can be set through Settings/local Git.
+For GitHub, use a remote such as git@github.com:owner/repo.git and a profile
+with host github.com and user git. Clone, fetch, pull and push use that key;
+HTTPS remotes continue to use the selected GitHub OAuth account.
 
 ## Native themes and branch graph
 

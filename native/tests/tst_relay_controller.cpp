@@ -58,6 +58,104 @@ class RelayControllerTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void githubSshUsesSelectedKeyForCloneFetchPullAndPush() {
+#ifndef Q_OS_UNIX
+    QSKIP("Local SSH transport shim requires a POSIX shell.");
+#else
+    QTemporaryDir root;
+    const auto source = root.filePath(QStringLiteral("source"));
+    const auto bare = root.filePath(QStringLiteral("remote.git"));
+    const auto bin = root.filePath(QStringLiteral("bin"));
+    QVERIFY(QDir().mkpath(source));
+    QVERIFY(QDir().mkpath(bin));
+    initRepository(source);
+    runGit(source, {QStringLiteral("config"), QStringLiteral("user.name"), QStringLiteral("Fixture")});
+    runGit(source, {QStringLiteral("config"), QStringLiteral("user.email"), QStringLiteral("fixture@example.test")});
+    writeFile(QDir(source).filePath(QStringLiteral("file.txt")), "initial\n");
+    runGit(source, {QStringLiteral("add"), QStringLiteral(".")});
+    runGit(source, {QStringLiteral("commit"), QStringLiteral("-qm"), QStringLiteral("initial")});
+    runGit(source, {QStringLiteral("clone"), QStringLiteral("--bare"), source, bare});
+    const auto shim = QDir(bin).filePath(QStringLiteral("ssh"));
+    writeFile(shim, R"SH(#!/bin/sh
+[ -z "$RELAY_GIT_TOKEN$GH_TOKEN$GITHUB_TOKEN" ] || exit 91
+key=no
+previous=
+for argument do
+  [ "$previous" != "-i" ] || { [ "$argument" = "/fixture/work key" ] && key=yes; }
+  previous="$argument"
+  last="$argument"
+done
+[ "$key" = yes ] || exit 92
+case "$last" in
+  "git-upload-pack "*|"git-receive-pack "*) exec sh -c "$last" ;;
+  *) exit 93 ;;
+esac
+)SH");
+    QVERIFY(QFile::setPermissions(shim, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                                         QFileDevice::ExeOwner));
+    const auto oldPath = qgetenv("PATH");
+    const auto oldVariant = qgetenv("GIT_SSH_VARIANT");
+    const auto restore = qScopeGuard([&] {
+      qputenv("PATH", oldPath);
+      if (oldVariant.isNull()) qunsetenv("GIT_SSH_VARIANT");
+      else qputenv("GIT_SSH_VARIANT", oldVariant);
+    });
+    qputenv("PATH", bin.toUtf8() + ":" + oldPath);
+    qputenv("GIT_SSH_VARIANT", "ssh");
+    const auto config = controllerConfig(root);
+    relay::AppState state;
+    relay::Account account;
+    account.id = QStringLiteral("github-fixture"); account.githubId = 1;
+    account.handle = QStringLiteral("fixture"); account.email = QStringLiteral("fixture@example.test");
+    state.accounts = {account}; state.activeAccountId = account.id;
+    state.sshProfiles = {{QStringLiteral("work"), QStringLiteral("Work"), QStringLiteral("github.com"), QStringLiteral("git"), std::nullopt,
+                          QStringLiteral("/fixture/work key"), true}};
+    seedState(config, state);
+    relay::RelayController controller(config);
+    controller.start();
+    QSignalSpy changed(&controller, &relay::RelayController::currentRepositoryChanged);
+    QSignalSpy errors(&controller, &relay::RelayController::operationFailed);
+    controller.cloneRepository(QStringLiteral("git@github.com:") + bare, root.path(), QStringLiteral("clone"), account.id, QStringLiteral("work"));
+    QTRY_VERIFY_WITH_TIMEOUT(!changed.isEmpty() || !errors.isEmpty(), 10000);
+    QVERIFY2(errors.isEmpty(), errors.isEmpty() ? "" : qPrintable(errors.last().at(1).toString()));
+    QVERIFY(controller.currentRepository());
+    const auto clone = controller.currentRepository()->path;
+    QCOMPARE(controller.resolvedSshProfileId(clone), QStringLiteral("work"));
+    QCOMPARE(controller.resolvedAccountId(clone), account.id);
+    changed.clear();
+    controller.fetchOrigin();
+    QTRY_VERIFY_WITH_TIMEOUT(!changed.isEmpty() || !errors.isEmpty(), 10000);
+    QVERIFY(errors.isEmpty());
+    writeFile(QDir(source).filePath(QStringLiteral("file.txt")), "upstream\n");
+    runGit(source, {QStringLiteral("commit"), QStringLiteral("-qam"), QStringLiteral("upstream")});
+    runGit(source, {QStringLiteral("push"), bare, QStringLiteral("main")});
+    changed.clear();
+    controller.pullOrigin();
+    QTRY_VERIFY_WITH_TIMEOUT(!changed.isEmpty() || !errors.isEmpty(), 10000);
+    QVERIFY(errors.isEmpty());
+    QFile pulled(QDir(clone).filePath(QStringLiteral("file.txt")));
+    QVERIFY(pulled.open(QIODevice::ReadOnly));
+    QCOMPARE(pulled.readAll(), QByteArray("upstream\n"));
+    runGit(clone, {QStringLiteral("config"), QStringLiteral("user.name"), QStringLiteral("Fixture")});
+    runGit(clone, {QStringLiteral("config"), QStringLiteral("user.email"), QStringLiteral("fixture@example.test")});
+    writeFile(QDir(clone).filePath(QStringLiteral("new.txt")), "pushed\n");
+    runGit(clone, {QStringLiteral("add"), QStringLiteral(".")});
+    runGit(clone, {QStringLiteral("commit"), QStringLiteral("-qm"), QStringLiteral("pushed")});
+    changed.clear();
+    controller.pushOrigin();
+    QTRY_VERIFY_WITH_TIMEOUT(!changed.isEmpty() || !errors.isEmpty(), 10000);
+    QVERIFY(errors.isEmpty());
+    relay::ProcessRequest check{QStringLiteral("git"), {QStringLiteral("--git-dir"), bare, QStringLiteral("show"), QStringLiteral("main:new.txt")}};
+    QCOMPARE(relay::ProcessRunner::run(check).standardOutput, QByteArray("pushed\n"));
+    runGit(clone, {QStringLiteral("remote"), QStringLiteral("set-url"),
+                   QStringLiteral("--push"), QStringLiteral("origin"),
+                   QStringLiteral("git@other.example:") + bare});
+    controller.pushOrigin();
+    QTRY_COMPARE_WITH_TIMEOUT(errors.size(), 1, 10000);
+    QVERIFY(errors.last().at(1).toString().contains(QStringLiteral("another host")));
+#endif
+  }
+
   void failedRepositorySaveCannotSwitchTheEffectiveCommitTarget() {
     QTemporaryDir root;
     const auto first = root.filePath(QStringLiteral("first"));

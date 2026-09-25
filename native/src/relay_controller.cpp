@@ -656,10 +656,9 @@ void RelayController::commit(const QStringList& files, const QString& summary,
 }
 
 QString RelayController::sshCommand(const QString& repositoryPath, const QString& remote) const {
-  if (SshService::isGitHubRemote(remote)) return {};
   const auto profileId = resolvedSshProfileId(repositoryPath);
   const auto profile = valueNamed(state_.sshProfiles, profileId);
-  return profile ? ssh_->commandFor(*profile) : QString{};
+  return profile ? ssh_->commandForRemote(*profile, remote) : QString{};
 }
 
 void RelayController::fetchOrigin(const QString& accountId) {
@@ -683,12 +682,11 @@ void RelayController::fetchOrigin(const QString& accountId) {
                        [git, auth, ssh, operationGate, repositoryPath, selectedAccount, profile] {
                          invokeGate(operationGate, QStringLiteral("fetch"), repositoryPath);
                          const auto remote = git->originRemoteUrl(repositoryPath);
-                         const auto githubRemote = SshService::isGitHubRemote(remote);
                          const auto token = selectedAccount && remote.startsWith(QStringLiteral("https://github.com/"), Qt::CaseInsensitive)
                                                 ? auth->accountToken(selectedAccount->handle)
                                                 : QString{};
-                         const auto command = !githubRemote && profile ? ssh->commandFor(*profile)
-                                                                       : QString{};
+                         const auto command = profile ? ssh->commandForRemote(*profile, remote)
+                                                      : QString{};
                          git->fetchOrigin(repositoryPath, token,
                                           selectedAccount ? selectedAccount->handle : QString{},
                                           command);
@@ -725,12 +723,11 @@ void RelayController::pullOrigin(const QString& accountId) {
                        [git, auth, ssh, operationGate, repositoryPath, selectedAccount, profile] {
                          invokeGate(operationGate, QStringLiteral("pull"), repositoryPath);
                          const auto remote = git->originRemoteUrl(repositoryPath);
-                         const auto githubRemote = SshService::isGitHubRemote(remote);
                          const auto token = selectedAccount && remote.startsWith(QStringLiteral("https://github.com/"), Qt::CaseInsensitive)
                                                 ? auth->accountToken(selectedAccount->handle)
                                                 : QString{};
-                         const auto command = !githubRemote && profile ? ssh->commandFor(*profile)
-                                                                       : QString{};
+                         const auto command = profile ? ssh->commandForRemote(*profile, remote)
+                                                      : QString{};
                          git->pullOrigin(repositoryPath, token,
                                           selectedAccount ? selectedAccount->handle : QString{},
                                           command);
@@ -767,12 +764,11 @@ void RelayController::pushOrigin(const QString& accountId) {
                        [git, auth, ssh, operationGate, repositoryPath, selectedAccount, profile] {
                          invokeGate(operationGate, QStringLiteral("push"), repositoryPath);
                          const auto remote = git->originRemoteUrl(repositoryPath, true);
-                         const auto githubRemote = SshService::isGitHubRemote(remote);
                          const auto token = selectedAccount && remote.startsWith(QStringLiteral("https://github.com/"), Qt::CaseInsensitive)
                                                 ? auth->accountToken(selectedAccount->handle)
                                                 : QString{};
-                         const auto command = !githubRemote && profile ? ssh->commandFor(*profile)
-                                                                       : QString{};
+                         const auto command = profile ? ssh->commandForRemote(*profile, remote)
+                                                      : QString{};
                          git->pushOrigin(repositoryPath, token,
                                          selectedAccount ? selectedAccount->handle : QString{},
                                          command);
@@ -1014,11 +1010,11 @@ void RelayController::cloneRepository(const QString& remoteUrl, const QString& p
         const auto token = selectedAccount && remote.startsWith(QStringLiteral("https://github.com/"), Qt::CaseInsensitive)
                                ? auth->accountToken(selectedAccount->handle)
                                : QString{};
-        const auto command = !githubRemote && profile ? ssh->commandFor(*profile) : QString{};
+        const auto command = profile ? ssh->commandForRemote(*profile, remote) : QString{};
         return ClonePayload{
             git->cloneRepository(remote, destination, token,
                                  selectedAccount ? selectedAccount->handle : QString{}, command),
-            profile ? sshProfileId : QString{},
+            profile && SshService::parseRemote(remote) ? sshProfileId : QString{},
             githubRemote && selectedAccount ? selectedAccount->id : QString{}};
       },
       [this, generation](ClonePayload payload) {

@@ -215,16 +215,6 @@ bool isSshRemote(const QString& remote) {
          (scpLike.match(value).hasMatch() && !windowsPath.match(value).hasMatch());
 }
 
-bool isGithubRemote(const QString& remote) {
-  const QString value = remote.trimmed();
-  static const QRegularExpression https{QStringLiteral(R"(^https://github\.com/)"),
-                                         QRegularExpression::CaseInsensitiveOption};
-  static const QRegularExpression ssh{
-      QStringLiteral(R"(^(?:ssh://)?(?:[^@\s]+@)?github\.com[:/])"),
-      QRegularExpression::CaseInsensitiveOption};
-  return https.match(value).hasMatch() || ssh.match(value).hasMatch();
-}
-
 bool validEmail(const QString& value) {
   if (value.trimmed().isEmpty()) return true;
   static const QRegularExpression expression{
@@ -336,7 +326,7 @@ CloneDialog::CloneDialog(QWidget* parent) : QDialog(parent) {
   fields->addRow(tr("SSH identity"), sshCombo_);
   layout->addLayout(fields);
   sshHint_ = new QLabel(
-      tr("SSH identities apply only to non-GitHub SSH URLs. Otherwise Relay uses the selected account or your normal SSH configuration."),
+      tr("SSH identities apply to SSH URLs, including GitHub. Choose an identity for the same host. HTTPS uses the selected GitHub account."),
       this);
   sshHint_->setProperty("role", QStringLiteral("meta"));
   sshHint_->setWordWrap(true);
@@ -466,7 +456,7 @@ CloneRequest CloneDialog::request() const {
   } else {
     value.remoteUrl = urlEdit_->text().trimmed();
   }
-  if (isSshRemote(value.remoteUrl) && !isGithubRemote(value.remoteUrl)) {
+  if (isSshRemote(value.remoteUrl)) {
     value.sshProfileId = selectedSshProfileId();
   }
   return value;
@@ -546,9 +536,9 @@ void CloneDialog::updateFromSelectedRepository() {
 
 void CloneDialog::updateValidation() {
   const CloneRequest value = request();
-  const bool nonGithubSsh = isSshRemote(value.remoteUrl) && !isGithubRemote(value.remoteUrl);
-  sshCombo_->setEnabled(nonGithubSsh);
-  sshHint_->setVisible(nonGithubSsh);
+  const bool sshRemote = isSshRemote(value.remoteUrl);
+  sshCombo_->setEnabled(sshRemote);
+  sshHint_->setVisible(sshRemote);
   cloneButton_->setEnabled(isRequestValid());
   if (validationLabel_->isVisible() && isRequestValid()) validationLabel_->hide();
 }
@@ -769,7 +759,7 @@ SshProfileDialog::SshProfileDialog(QWidget* parent) : QDialog(parent) {
   layout->setSpacing(10);
   layout->addWidget(heading(tr("SSH identity"), this));
   layout->addWidget(explanatoryText(
-      tr("For Git hosts other than GitHub.com. Leave the key blank to use your SSH agent and ~/.ssh/config."),
+      tr("For Git hosts including GitHub.com (user: git). Leave the key blank to use your SSH agent and ~/.ssh/config."),
       this));
   auto* form = new QFormLayout;
   labelEdit_ = new QLineEdit(this);

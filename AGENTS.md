@@ -478,7 +478,7 @@ default locale is C, where Qt otherwise ignores numeric mode.
 | `native/src/relay_store.cpp` | Atomic, owner-only, Electron-compatible metadata persistence |
 | `native/src/repository_discovery.cpp` | Bounded non-destructive breadth-first repository scanning |
 | `native/src/repository_order.cpp` | Ordering normalization, sorting, and manual-order compatibility |
-| `native/src/ssh_service.cpp` | Non-GitHub SSH profile parsing, command construction, and connection tests |
+| `native/src/ssh_service.cpp` | SSH profile parsing (including GitHub), host-checked commands, and connection tests |
 | `native/src/avatar_cache.cpp` | Restricted-host, size-bounded, offline avatar cache |
 | `native/src/diff_model.cpp`, `native/src/diff_view.cpp` | Virtualized accessible unified-diff parser and table view |
 | `native/src/list_models.cpp` | Repository, file, history, and commit-file models |
@@ -724,6 +724,9 @@ The clone dialog uses the globally active account because a cloned repository
 does not yet have a path binding.
 
 ### 9.6 SSH identities for non-GitHub hosts
+
+This section describes frozen Electron behavior. Native also supports saved
+identities for GitHub SSH URLs; see the native TODO follow-up section below.
 
 GitHub accounts and SSH identities are deliberately separate models. An account
 is an OAuth identity held by the GitHub CLI; an SSH profile is only a hint about
@@ -1432,12 +1435,15 @@ origin upstream and fast-forwards only. Changes/history horizontal splitters
 have wider visible handles; history details/files and the diff now use a
 vertical splitter instead of a fixed-height changed-file list.
 The account popover lists repository SSH profiles alongside GitHub account
-management. Matching non-GitHub SSH hosts can select a saved profile or the
+management. Matching SSH hosts, including GitHub.com, can select a saved profile or the
 normal SSH agent without a GitHub account. The selected transport is displayed
 in the toolbar/status bar; commit identity still follows existing account/Git
-configuration precedence. GitHub SSH still follows the existing agent/config
-behavior pending explicit scope clarification; no tokens or key material enter
-widgets. UI integration tests cover remote changes pulled before a fetch,
+configuration precedence. Native clone/fetch/pull/push apply the selected SSH
+profile to GitHub SSH URLs as explicitly requested by the owner. HTTPS keeps
+OAuth routing. Validate the profile host against the actual transport URL
+(including origin push URL); refuse mismatches before launching SSH. No tokens
+or key material enter widgets. The Electron restrictions in section 9.6 remain
+its frozen behavior. UI integration tests cover remote changes pulled before a fetch,
 resizing a populated diff, persisted SSH selection and host mismatch rejection.
 The Windows main-window suite has a 180-second CTest limit because its real
 Git fixtures exceed the default 60 seconds on CI; individual waits stay bounded.

@@ -148,13 +148,20 @@ class MainWindowTest final : public QObject {
     }
   }
 
+  void sshIdentityCanBeChosenWithoutAGitHubAccount_data() {
+    QTest::addColumn<QString>("host");
+    QTest::newRow("other-host") << QStringLiteral("git.example.com");
+    QTest::newRow("github") << QStringLiteral("github.com");
+  }
+
   void sshIdentityCanBeChosenWithoutAGitHubAccount() {
+    QFETCH(QString, host);
     QTemporaryDir temporary;
     const auto local = temporary.filePath(QStringLiteral("local"));
     QVERIFY(QDir{}.mkpath(local));
     createRepository(local);
     runGit(local, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"),
-                   QStringLiteral("git@git.example.com:team/project.git")});
+                   QStringLiteral("git@%1:team/project.git").arg(host)});
     relay::RelayControllerConfig config;
     config.storeFile = temporary.filePath(QStringLiteral("state.json"));
     config.synchronizeAccountsOnStart = false;
@@ -163,7 +170,7 @@ class MainWindowTest final : public QObject {
     window.show();
     controller.start();
     controller.saveSshProfile({QStringLiteral("work"), QStringLiteral("Work key"),
-        QStringLiteral("git.example.com"), QStringLiteral("git"), std::nullopt, {}, true});
+        host, QStringLiteral("git"), std::nullopt, {}, true});
     controller.saveSshProfile({QStringLiteral("other"), QStringLiteral("Other host"),
         QStringLiteral("other.example.com"), QStringLiteral("git"), std::nullopt, {}, true});
     controller.openRepository(local);

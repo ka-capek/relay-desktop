@@ -142,14 +142,22 @@ class DialogsTest final : public QObject {
     QCOMPARE(request.accountId, QStringLiteral("one"));
   }
 
+  void cloneDialogSupportsArbitrarySshUrlAndIdentity_data() {
+    QTest::addColumn<QString>("remote");
+    QTest::newRow("other-host") << QStringLiteral("git@gitlab.example.com:team/project.git");
+    QTest::newRow("github-scp") << QStringLiteral("git@github.com:team/project.git");
+    QTest::newRow("github-url") << QStringLiteral("ssh://git@github.com/team/project.git");
+  }
+
   void cloneDialogSupportsArbitrarySshUrlAndIdentity() {
+    QFETCH(QString, remote);
     relay::CloneDialog dialog;
     dialog.setAccounts({account(QStringLiteral("one"), QStringLiteral("alice"),
                                 QStringLiteral("alice@example.com"))});
     dialog.setSshProfiles({sshProfile()});
     relay::CloneRequest input;
     input.source = relay::CloneSource::url;
-    input.remoteUrl = QStringLiteral("git@gitlab.example.com:team/project.git");
+    input.remoteUrl = remote;
     input.parentPath = QStringLiteral("/work");
     input.repositoryName = QStringLiteral("project");
     input.accountId = QStringLiteral("one");
@@ -164,6 +172,10 @@ class DialogsTest final : public QObject {
     auto* ssh = dialog.findChild<QComboBox*>(QStringLiteral("cloneSshProfile"));
     QVERIFY(ssh != nullptr);
     QVERIFY(ssh->isEnabled());
+    input.remoteUrl = QStringLiteral("https://github.com/team/project.git");
+    dialog.setRequest(input);
+    QVERIFY(!ssh->isEnabled());
+    QVERIFY(dialog.request().sshProfileId.isEmpty());
   }
 
   void cloneDialogRejectsIncompleteRequest() {

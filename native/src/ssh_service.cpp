@@ -91,6 +91,16 @@ QString SshService::commandFor(const SshProfile& profile) const {
   return parts.size() == 1 ? QString{} : parts.join(u' ');
 }
 
+QString SshService::commandForRemote(const SshProfile& profile, const QString& remote) const {
+  const auto parsed = parseRemote(remote);
+  if (!parsed) return {};
+  const auto normalized = normalizeProfile(profile);
+  if (!normalized || normalized->host.compare(parsed->host, Qt::CaseInsensitive) != 0) {
+    throw std::runtime_error("The selected SSH identity belongs to another host. Choose an identity matching this remote, or use your SSH agent and configuration.");
+  }
+  return commandFor(*normalized);
+}
+
 SshTestResult SshService::describeResult(const QString& host, const int code, const QString& output) {
   const auto contains = [&output](const QString& expression) {
     return QRegularExpression(expression, QRegularExpression::CaseInsensitiveOption).match(output).hasMatch();

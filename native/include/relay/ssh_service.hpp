@@ -25,6 +25,7 @@ class SshService final {
   static std::optional<SshProfile> normalizeProfile(const SshProfile& profile);
   [[nodiscard]] QString executable() const;
   [[nodiscard]] QString commandFor(const SshProfile& profile) const;
+  [[nodiscard]] QString commandForRemote(const SshProfile& profile, const QString& remote) const;
   [[nodiscard]] SshTestResult testConnection(const SshProfile& profile) const;
   static SshTestResult describeResult(const QString& host, int code, const QString& output);
 

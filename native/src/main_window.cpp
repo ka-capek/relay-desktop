@@ -914,8 +914,7 @@ void MainWindow::applyState(const AppState& state) {
                                  : tr("Connect GitHub account"));
   statusIdentity_->setText(active ? tr("Signed in as @%1").arg(active->handle)
                                   : tr("No GitHub account connected"));
-  if (repository_ && SshService::parseRemote(repository_->remote) &&
-      !SshService::isGitHubRemote(repository_->remote)) {
+  if (repository_ && SshService::parseRemote(repository_->remote)) {
     const auto profileId = controller_->resolvedSshProfileId(repository_->path);
     const auto profile = std::find_if(state.sshProfiles.cbegin(), state.sshProfiles.cend(),
         [&profileId](const SshProfile& value) { return value.id == profileId; });
@@ -1032,7 +1031,7 @@ void MainWindow::rebuildAccountMenu() {
   accountMenu_->addSeparator();
   accountMenu_->addSection(tr("SSH identity for this repository"));
   const auto remote = repository_ ? SshService::parseRemote(repository_->remote) : std::nullopt;
-  const bool supportsSsh = remote && !SshService::isGitHubRemote(repository_->remote);
+  const bool supportsSsh = remote.has_value();
   const auto selected = repository_ ? controller_->resolvedSshProfileId(repository_->path) : QString{};
   auto* useAgent = accountMenu_->addAction(tr("Use SSH agent and configuration"));
   useAgent->setObjectName(QStringLiteral("useSshAgentAction"));
