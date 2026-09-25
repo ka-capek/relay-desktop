@@ -116,6 +116,34 @@ jobs:
         run: |
           ./native/tools/install-windows.ps1 -Source $PWD -QtDir $env:QT_ROOT_DIR -NoOpen
           "app_dir=$env:LOCALAPPDATA/Programs/Relay Native" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - name: Package and verify macOS preview DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          version=$(sed -n 's/^  VERSION \(.*\)$/\1/p' CMakeLists.txt)
+          bash native/tools/build-preview-dmg.sh "$HOME/Applications/Relay Native.app" "$version" "$PWD/build-native/preview-installers"
+          mkdir -p "$RUNNER_TEMP/relay-dmg"
+          hdiutil attach "build-native/preview-installers/Relay-Native-$version-arm64.dmg" -nobrowse -mountpoint "$RUNNER_TEMP/relay-dmg"
+          ditto "$RUNNER_TEMP/relay-dmg/Relay Native.app" "$RUNNER_TEMP/Relay Native.app"
+          codesign --verify --deep --strict "$RUNNER_TEMP/Relay Native.app"
+          open -W "$RUNNER_TEMP/Relay Native.app" --args --smoke-test
+          hdiutil detach "$RUNNER_TEMP/relay-dmg"
+      - name: Package and test Windows preview installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe"
+          if (!(Test-Path $compiler)) { throw 'Inno Setup 6 is required on the Windows runner' }
+          $version = (Select-String -Path CMakeLists.txt -Pattern '^  VERSION (.+)$').Matches.Groups[1].Value
+          ./native/tools/test-preview-windows.ps1 -Compiler $compiler -Payload '${{ steps.windows-install.outputs.app_dir }}' -Version $version -Output "$PWD/build-native/preview-installers"
+      - name: Upload preview installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: Relay-Native-${{ matrix.target }}-installers
+          path: |
+            build-native/preview-installers/*.exe
+            build-native/preview-installers/*.dmg
+          if-no-files-found: error
       - name: Upload macOS source build
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
@@ -139,4 +167,5 @@ jobs:
             build-native/${{ matrix.target }}/Testing/Temporary/
             build-native/${{ matrix.target }}/native/tests/*.txt
             build-native/screenshots/
+            build-native/preview-installers/*.log
           if-no-files-found: ignore

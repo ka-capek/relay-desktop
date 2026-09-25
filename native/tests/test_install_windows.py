@@ -52,6 +52,13 @@ class WindowsInstallerTest(unittest.TestCase):
         self.assertIsNone(installer.install_staged(self.stage, self.destination))
         self.assertEqual((self.destination / "Relay.exe").read_bytes(), b"new app")
 
+    def test_registered_installer_is_not_replaced_by_source_build(self):
+        self.old_app()
+        (self.destination / "relay-native-install.ini").write_text("registered")
+        with self.assertRaisesRegex(RuntimeError, "Setup executable"):
+            installer.install_staged(self.stage, self.destination)
+        self.assertEqual((self.destination / "Relay.exe").read_bytes(), b"old app")
+
     def test_update_retains_old_app(self):
         self.old_app()
         backup = installer.install_staged(self.stage, self.destination)

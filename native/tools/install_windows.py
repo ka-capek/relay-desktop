@@ -57,6 +57,8 @@ def install_staged(stage: Path, destination: Path) -> Path | None:
         raise RuntimeError("The staged application is incomplete.")
     if destination.is_symlink():
         raise RuntimeError("The install destination must not be a symbolic link.")
+    if (destination / "relay-native-install.ini").exists():
+        raise RuntimeError("Update this installation with the Relay Native Setup executable, not the source installer.")
     if destination.exists() and not (destination / "Relay.exe").is_file():
         raise RuntimeError("The destination exists but is not a Relay installation. Choose an empty location.")
     backup = None

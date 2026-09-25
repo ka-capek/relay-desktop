@@ -1424,6 +1424,24 @@ outputs/installers/
 The NSIS installer is interactive, allows choosing an install directory, and
 creates desktop and Start Menu shortcuts.
 
+### Native preview installers (0.5.2 onward)
+
+CI packages its validated source-build payloads with Inno Setup 6 on Windows
+(`native/packaging/preview/windows.iss`) and a standard DMG on macOS
+(`native/tools/build-preview-dmg.sh`). These remain unsigned previews using
+external Git/gh, separate from strict bundled-runtime release packaging.
+The stable Inno AppId is `dev.relay.native.preview`, distinct from Electron.
+Keep it stable across native versions so upgrades reuse the per-user directory
+and uninstall registration. The wizard always offers a directory page and an
+optional desktop shortcut. It adopts 0.5.1 ZIPs through their installation.json,
+refuses unrelated/Electron directories and junctions, and refuses locked app
+executables. Never delete profiles or repositories from installer scripts.
+Source installs refuse to replace an Inno-managed app so its uninstall record
+cannot be orphaned. Windows CI tests a custom-directory upgrade, both shortcut
+choices, real 0.5.1 ZIP adoption, locked-file refusal and Electron preservation.
+macOS uses the same Relay Native.app filename; Finder replaces it in its existing
+location without an uninstall. CI verifies the DMG and launches its copied app.
+
 ### 20.1 Release checklist
 
 1. Confirm the intended version.

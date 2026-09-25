@@ -26,6 +26,27 @@ and choose **Open** the first time; Windows SmartScreen may also ask for
 confirmation. The macOS app is ad-hoc signed during packaging, which is what
 stops Apple Silicon reporting it as damaged.
 
+## Native installers and upgrades (0.5.2 onward)
+
+Native prereleases provide a Windows **Relay-Native-Setup-<version>-x64.exe**
+and an Apple Silicon **Relay-Native-<version>-arm64.dmg**. These are unsigned
+preview distributions with external Git and GitHub CLI, as described above.
+
+On Windows, the wizard lets you choose the install folder and optionally add a
+desktop shortcut. Subsequent installers remember that folder and update the
+native client in place: no manual uninstall is needed. Quit Relay Native before
+updating. The default is `%LOCALAPPDATA%/Programs/Relay Native`; installation
+requires no administrator privileges. The 0.5.1 native ZIP can be adopted by
+selecting its extracted folder once. Unrelated and Electron folders are refused.
+Use Setup for later updates of an installation managed by Setup.
+
+On macOS, quit Relay Native, open the DMG, drag **Relay Native.app** into
+Applications and confirm **Replace**. If the old native app is in
+`~/Applications` or another folder, replace it there. Do not replace the old
+Electron `Relay.app`. No uninstall is needed. Account settings, CLI credentials
+and repositories live outside the application and are preserved on both systems.
+There is no background update download: run each new installer yourself.
+
 ## Prerequisites
 
 - Node.js `>=22.13.0` (development only)
