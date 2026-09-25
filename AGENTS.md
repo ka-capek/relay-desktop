@@ -90,10 +90,10 @@ must also be checked manually.
 - Public repository: <https://github.com/ka-capek/relay-desktop>
 - Default branch: `main`
 - Current release line: `v0.5.0`
-- Native prerelease: `v0.5.1`, titled `Relay 0.5.1 — Rewrite in C++`.
-  This preview uses CI source-build archives with external Git/gh; it does not
-  satisfy the stable bundled-runtime distribution gate. Electron package
-  versions remain 0.5.0; the native CMake version is 0.5.1.
+- Native prerelease: `v0.5.2`, titled `Relay 0.5.2 — Native installers and upgrades`.
+  The initial C++ rewrite preview was `v0.5.1`. These previews use external Git/gh
+  and do not satisfy the stable bundled-runtime distribution gate. Electron
+  package versions remain 0.5.0; the native CMake version is 0.5.2.
 - Release page: <https://github.com/ka-capek/relay-desktop/releases>
 - App ID: `dev.relay.gitclient`
 - Electron product name: `Relay`

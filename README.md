@@ -8,10 +8,10 @@ native release passes its cross-platform stop/go gate.
 
 ## Download
 
-Native preview: **Relay 0.5.1 — Rewrite in C++** is a prerelease of the
-C++26/Qt client. Its source-build archives require external Git >=2.35.0 and
-GitHub CLI >=2.98.0. They are unsigned (macOS uses ad-hoc signing), are not
-notarized, and are not self-contained installers. Real multi-account OAuth,
+Native preview: [**Relay 0.5.2 — Native installers and upgrades**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.5.2)
+is a prerelease of the C++26/Qt client. Its Windows setup and macOS DMG require
+external Git >=2.35.0 and GitHub CLI >=2.98.0. They are unsigned (macOS uses
+ad-hoc signing), are not notarized, and do not bundle Git/gh. Real multi-account OAuth,
 private clone/fetch/push and publication still need installed-platform
 verification. Relay 0.5.0 remains the stable Electron release.
 
