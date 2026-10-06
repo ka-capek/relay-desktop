@@ -633,9 +633,9 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   auto* leftLayout = new QVBoxLayout(left);
   leftLayout->setContentsMargins(0, 0, 0, 0);
   historySearch_ = new QLineEdit(left);
-  historySearch_->setPlaceholderText(tr("Search loaded history"));
+  historySearch_->setPlaceholderText(tr("Search history"));
   historySearch_->setClearButtonEnabled(true);
-  historySearch_->setAccessibleName(tr("Search loaded commits"));
+  historySearch_->setAccessibleName(tr("Search commits"));
   auto* historyTools = new QHBoxLayout;
   historyTools->setContentsMargins(8, 6, 8, 6);
   historyMode_ = new QComboBox(left);
@@ -750,6 +750,27 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
 
   connect(historyModel_, &QAbstractItemModel::modelAboutToBeReset, this, &MainWindow::clearCommitDetail);
   connect(historySearch_, &QLineEdit::textChanged, historyModel_, &HistoryCommitListModel::setSearch);
+  // Loaded commits filter as you type; once typing pauses, Git searches the
+  // rest of the history if it is not all loaded.
+  historySearchTimer_ = new QTimer(this);
+  historySearchTimer_->setSingleShot(true);
+  historySearchTimer_->setInterval(400);
+  connect(historySearch_, &QLineEdit::textChanged, historySearchTimer_, qOverload<>(&QTimer::start));
+  connect(historySearchTimer_, &QTimer::timeout, this, [this] {
+    if (!repository_) return;
+    const auto query = historySearch_->text().trimmed();
+    const auto reference = historyBranch_->currentData().toString();
+    if (query.isEmpty()) {
+      if (historyModel_->showingSearchResults()) {
+        historyModel_->clear();
+        clearCommitDetail();
+        controller_->requestHistory(0, 50, {}, reference);
+      }
+      return;
+    }
+    if (historyModel_->endOfHistory() && !historyModel_->showingSearchResults()) return;
+    controller_->searchHistory(query, reference);
+  });
   connect(historyList_->selectionModel(), &QItemSelectionModel::currentChanged, this, [this](const QModelIndex& index) {
     clearCommitDetail();
     if (const auto* commit = historyModel_->commitAt(index.row())) controller_->requestCommitDetail(commit->fullHash);
@@ -857,9 +878,18 @@ void MainWindow::connectController() {
   connect(controller_, &RelayController::historyReady, this,
           [this](const QString& repositoryPath, const HistoryPage& page) {
             if (!repository_ || repository_->path != repositoryPath) return;
-            if (historyModel_->anchor().isEmpty() || historyModel_->anchor() != page.anchor)
+            if (historyModel_->anchor().isEmpty() || historyModel_->anchor() != page.anchor) {
               historyModel_->resetPage(page);
-            else static_cast<void>(historyModel_->appendPage(page));
+              // A reload replaces search results; search the new history again.
+              if (!historySearch_->text().trimmed().isEmpty() && !page.endOfHistory) historySearchTimer_->start();
+            } else static_cast<void>(historyModel_->appendPage(page));
+          });
+  connect(controller_, &RelayController::historySearchReady, this,
+          [this](const QString& repositoryPath, const QString& query, const QList<HistoryCommit>& commits, const bool truncated) {
+            if (!repository_ || repository_->path != repositoryPath || query != historySearch_->text().trimmed()) return;
+            historyModel_->showSearchResults(commits);
+            clearCommitDetail();
+            if (truncated) showNotice(tr("Showing the newest %1 matching commits.").arg(commits.size()));
           });
   connect(controller_, &RelayController::commitDetailReady, this,
           [this](const QString& repositoryPath, const CommitDetail& detail) {
@@ -997,7 +1027,7 @@ void MainWindow::applyState(const AppState& state) {
   { const QSignalBlocker blocker(historyMode_); historyMode_->setCurrentIndex(state.preferences.graphHistory ? 1 : 0); }
   historyModel_->setGraphEnabled(state.preferences.graphHistory);
   historySearch_->setPlaceholderText(state.preferences.graphHistory
-      ? tr("Filter commits (hides graph)") : tr("Search loaded history"));
+      ? tr("Search history (hides graph)") : tr("Search history"));
   if (historyModeChanged) {
     updateHistoryBranches();
     historyModel_->clear();
@@ -1429,7 +1459,8 @@ void MainWindow::updateHistoryBranchActions() {
 }
 
 void MainWindow::requestNextHistoryPage() {
-  if (!repository_ || historyModel_->endOfHistory() || busyOperations_.contains(QStringLiteral("history"))) return;
+  if (!repository_ || historyModel_->endOfHistory() || historyModel_->showingSearchResults() ||
+      busyOperations_.contains(QStringLiteral("history"))) return;
   controller_->requestHistory(static_cast<int>(historyModel_->commits().size()), 50,
                               historyModel_->anchor(), historyBranch_->currentData().toString());
 }

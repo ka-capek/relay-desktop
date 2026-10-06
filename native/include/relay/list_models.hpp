@@ -161,6 +161,11 @@ class HistoryCommitListModel final : public QAbstractListModel {
   [[nodiscard]] qsizetype appendPage(const HistoryPage& page);
   void clear();
   void setSearch(QString search);
+  // Shows whole-history search results in place of the loaded pages until
+  // the next resetHistory(). Results are shown unfiltered: Git matched them,
+  // including on message bodies the model does not hold.
+  void showSearchResults(QList<HistoryCommit> commits);
+  [[nodiscard]] bool showingSearchResults() const noexcept;
   void setGraphEnabled(bool enabled);
   [[nodiscard]] const HistoryGraphRow* graphRowAt(int row) const;
   void setPagingState(QString anchor, bool endOfHistory);
@@ -178,6 +183,7 @@ class HistoryCommitListModel final : public QAbstractListModel {
   void appendGraph(const HistoryCommit& commit);
 
   bool graphEnabled_{};
+  bool searchResults_{};
   QStringList graphLanes_;
   QList<HistoryGraphRow> graphRows_;
   QHash<QString, int> graphColors_;

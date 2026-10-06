@@ -518,6 +518,48 @@ class GitServiceTest final : public QObject {
     QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.pushOrigin(root.path()));
   }
 
+  void searchesWholeHistoryByMessageAuthorAndHash() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    const auto commitAs = [&](const QString& name, const QString& email, const QString& subject, const QString& body) {
+      auto environment = gitIdentity();
+      environment.insert(QStringLiteral("GIT_AUTHOR_NAME"), name);
+      environment.insert(QStringLiteral("GIT_AUTHOR_EMAIL"), email);
+      runGit(root.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-q"),
+                           QStringLiteral("-m"), subject, QStringLiteral("-m"), body}, environment);
+      return runGit(root.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    };
+    const auto first = commitAs(QStringLiteral("Ada"), QStringLiteral("ada@example.com"), QStringLiteral("Initial"), QStringLiteral("Nothing special"));
+    const auto body = commitAs(QStringLiteral("Ada"), QStringLiteral("ada@example.com"), QStringLiteral("Tidy"), QStringLiteral("Fixes the FROBNICATOR"));
+    const auto byLinus = commitAs(QStringLiteral("Linus"), QStringLiteral("linus@example.com"), QStringLiteral("Merge work"), QStringLiteral("x"));
+    for (int index = 0; index < 5; ++index)
+      commitAs(QStringLiteral("Ada"), QStringLiteral("ada@example.com"), QStringLiteral("Repeat %1").arg(index), QStringLiteral("repeat"));
+
+    relay::GitService service;
+    const auto hashes = [](const relay::GitService::SearchResult& result) {
+      QStringList list;
+      for (const auto& commit : result.commits) list.append(commit.fullHash);
+      return list;
+    };
+    // Message body, case-insensitive.
+    QCOMPARE(hashes(service.searchHistory(root.path(), QStringLiteral("frobnicator"))), QStringList{body});
+    // Author name and email; Git would AND --grep with --author.
+    QCOMPARE(hashes(service.searchHistory(root.path(), QStringLiteral("linus"))), QStringList{byLinus});
+    QCOMPARE(hashes(service.searchHistory(root.path(), QStringLiteral("linus@example"))), QStringList{byLinus});
+    // A hash prefix, and characters that would be regular expressions.
+    QCOMPARE(hashes(service.searchHistory(root.path(), first.left(10))), QStringList{first});
+    QVERIFY(service.searchHistory(root.path(), QStringLiteral("Repeat .*")).commits.isEmpty());
+    // Newest first, truncated at the limit.
+    const auto limited = service.searchHistory(root.path(), QStringLiteral("repeat"), false, {}, 3);
+    QCOMPARE(limited.commits.size(), 3);
+    QVERIFY(limited.truncated);
+    QCOMPARE(limited.commits.first().title, QStringLiteral("Repeat 4"));
+    QVERIFY(!service.searchHistory(root.path(), QStringLiteral("repeat")).truncated);
+    QVERIFY(service.searchHistory(root.path(), QStringLiteral("   ")).commits.isEmpty());
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError,
+        static_cast<void>(service.searchHistory(root.path(), QStringLiteral("x"), false, QStringLiteral("--all"))));
+  }
+
   void pagesAcrossCachedHistoryWindowsWithoutGapsOrRepeats() {
     QTemporaryDir root;
     initRepository(root.path());

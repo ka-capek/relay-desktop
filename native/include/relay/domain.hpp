@@ -241,6 +241,7 @@ QJsonObject mergeAppStateIntoJson(const AppState& state, QJsonObject base = {});
 
 Q_DECLARE_METATYPE(relay::Repository)
 Q_DECLARE_METATYPE(relay::HistoryPage)
+Q_DECLARE_METATYPE(relay::HistoryCommit)
 Q_DECLARE_METATYPE(relay::CommitDetail)
 
 Q_DECLARE_METATYPE(relay::FilePreview)

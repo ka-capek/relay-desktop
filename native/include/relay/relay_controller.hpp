@@ -86,6 +86,8 @@ class RelayController final : public QObject {
   void closeRepository();
   void requestFileDiff(const QString& filePath);
   void requestHistory(int skip = 0, int limit = 50, const QString& anchor = {}, const QString& reference = {});
+  // Searches the whole history in the scope requestHistory would read.
+  void searchHistory(const QString& query, const QString& reference = {});
   void requestCommitDetail(const QString& hash);
   void requestCommitFileDiff(const QString& hash, const QString& filePath);
   void commit(const QStringList& files, const QString& summary, const QString& description,
@@ -129,6 +131,7 @@ class RelayController final : public QObject {
   void commitFilePreviewReady(QString repositoryPath, QString hash, QString filePath, relay::FilePreview preview);
   void fileDiffReady(QString repositoryPath, QString filePath, QString diff);
   void historyReady(QString repositoryPath, relay::HistoryPage page);
+  void historySearchReady(QString repositoryPath, QString query, QList<relay::HistoryCommit> commits, bool truncated);
   void commitDetailReady(QString repositoryPath, relay::CommitDetail detail);
   void commitFileDiffReady(QString repositoryPath, QString hash, QString filePath,
                            QString diff);
@@ -228,6 +231,7 @@ class RelayController final : public QObject {
   quint64 repositoryGeneration_{};
   quint64 diffGeneration_{};
   quint64 historyGeneration_{};
+  quint64 searchGeneration_{};
   quint64 detailGeneration_{};
   quint64 commitDiffGeneration_{};
 };

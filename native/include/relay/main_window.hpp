@@ -149,6 +149,7 @@ class MainWindow final : public QMainWindow {
   QPushButton* conflictButton_{};
   QTimer* noticeTimer_{};
   QTimer* layoutTimer_{};
+  QTimer* historySearchTimer_{};
   QList<QSplitter*> splitters_;
   QJsonObject defaultLayout_;
   bool layoutRestored_{};

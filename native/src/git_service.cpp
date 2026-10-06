@@ -625,6 +625,63 @@ HistoryPage GitService::readHistoryPage(const QString& repositoryPath, const int
   return page;
 }
 
+GitService::SearchResult GitService::searchHistory(const QString& repositoryPath, const QString& query,
+                                                  const bool allBranches, const QString& reference,
+                                                  const int limit) const {
+  const auto needle = query.trimmed();
+  if (needle.isEmpty()) return {};
+  const auto bounded = std::clamp(limit, 1, 1000);
+  const auto root = runGit(repositoryPath,
+                           {QStringLiteral("rev-parse"), QStringLiteral("--show-toplevel")});
+  QStringList scope;
+  if (!reference.isEmpty()) {
+    if (!reference.startsWith(QStringLiteral("refs/heads/")) &&
+        !reference.startsWith(QStringLiteral("refs/remotes/")))
+      throw ProcessError(QStringLiteral("Choose an existing local or remote branch."));
+    static_cast<void>(runGit(root, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"), reference}));
+    scope.append(reference);
+  } else if (allBranches) {
+    scope = {QStringLiteral("--branches"), QStringLiteral("--remotes")};
+    if (!runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), QStringLiteral("--quiet"), QStringLiteral("HEAD")}).isEmpty())
+      scope.append(QStringLiteral("HEAD"));
+  } else {
+    if (runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), QStringLiteral("--quiet"), QStringLiteral("HEAD")}).isEmpty())
+      return {};
+    scope.append(QStringLiteral("HEAD"));
+  }
+  const auto format = QStringLiteral("--pretty=format:%H%x1f%h%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%aI%x1f%D%x1e");
+  // Git ANDs --grep with --author, so message and author matches are two
+  // walks merged here. One more than the limit tells whether to truncate.
+  const auto walk = [&](const QString& filter) {
+    QStringList arguments{QStringLiteral("log"), QStringLiteral("--regexp-ignore-case"), QStringLiteral("--fixed-strings"),
+                          filter + needle, QStringLiteral("-n"), QString::number(bounded + 1), format};
+    arguments.append(scope);
+    arguments.append(QStringLiteral("--"));
+    return parseHistoryPage(runGit(root, arguments, {}, false, false));
+  };
+  QList<HistoryCommit> matches = walk(QStringLiteral("--grep="));
+  matches.append(walk(QStringLiteral("--author=")));
+  static const QRegularExpression hashPrefix(QStringLiteral("^[0-9a-fA-F]{4,64}$"));
+  if (hashPrefix.match(needle).hasMatch()) {
+    const auto hash = runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
+                                           needle + QStringLiteral("^{commit}")});
+    if (!hash.isEmpty())
+      matches.append(parseHistoryPage(runGit(root, {QStringLiteral("log"), QStringLiteral("-n"), QStringLiteral("1"), format, hash, QStringLiteral("--")})));
+  }
+  std::stable_sort(matches.begin(), matches.end(), [](const HistoryCommit& left, const HistoryCommit& right) {
+    return left.date > right.date;
+  });
+  QSet<QString> seen;
+  SearchResult result;
+  for (auto& commit : matches) {
+    if (seen.contains(commit.fullHash)) continue;
+    seen.insert(commit.fullHash);
+    if (result.commits.size() == bounded) { result.truncated = true; break; }
+    result.commits.append(std::move(commit));
+  }
+  return result;
+}
+
 CommitDetail GitService::readCommitDetail(const QString& repositoryPath,
                                           const QString& requestedHash) const {
   const auto root = runGit(repositoryPath,

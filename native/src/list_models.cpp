@@ -567,6 +567,7 @@ void HistoryCommitListModel::resetHistory(QList<HistoryCommit> commits, QString 
   graphColors_.clear();
   visibleIndices_.clear();
   hashes_.clear();
+  searchResults_ = false;
   anchor_ = std::move(anchor);
   endOfHistory_ = endOfHistory;
   hashes_.reserve(commits.size());
@@ -632,6 +633,16 @@ void HistoryCommitListModel::setSearch(QString search) {
   rebuildVisible();
   endResetModel();
 }
+
+void HistoryCommitListModel::showSearchResults(QList<HistoryCommit> commits) {
+  resetHistory(std::move(commits), {}, true);
+  beginResetModel();
+  searchResults_ = true;
+  rebuildVisible();
+  endResetModel();
+}
+
+bool HistoryCommitListModel::showingSearchResults() const noexcept { return searchResults_; }
 
 void HistoryCommitListModel::setGraphEnabled(bool enabled) {
   if (graphEnabled_ == enabled) return;
@@ -717,7 +728,7 @@ const QString& HistoryCommitListModel::anchor() const noexcept { return anchor_;
 bool HistoryCommitListModel::endOfHistory() const noexcept { return endOfHistory_; }
 
 bool HistoryCommitListModel::matchesSearch(const HistoryCommit& commit) const {
-  if (search_.isEmpty()) return true;
+  if (search_.isEmpty() || searchResults_) return true;
   const QString searchable = commit.title + QChar{u' '} + commit.author + QChar{u' '} +
                              commit.email + QChar{u' '} + commit.fullHash;
   return searchable.contains(search_, Qt::CaseInsensitive);

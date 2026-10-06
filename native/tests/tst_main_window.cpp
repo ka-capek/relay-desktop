@@ -67,6 +67,41 @@ class MainWindowTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void searchFindsCommitsBeyondTheLoadedPages() {
+    QTemporaryDir temporary;
+    createRepository(temporary.path());
+    runGit(temporary.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"),
+                              QStringLiteral("Old work"), QStringLiteral("-m"), QStringLiteral("Mentions the zephyr bug")});
+    for (int index = 0; index < 60; ++index)
+      runGit(temporary.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"),
+                                QStringLiteral("Filler %1").arg(index)});
+    relay::RelayControllerConfig config;
+    config.storeFile = temporary.filePath(QStringLiteral("profile/relay-data.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.resize(1250, 820);
+    window.show();
+    controller.start();
+    controller.openRepository(temporary.path());
+    auto* history = window.findChild<QListView*>(QStringLiteral("historyList"));
+    QVERIFY(history);
+    window.findChild<QTabWidget*>()->setCurrentIndex(1);
+    auto* model = dynamic_cast<relay::HistoryCommitListModel*>(history->model());
+    QTRY_COMPARE_WITH_TIMEOUT(model->commits().size(), 50, 10000);
+    QLineEdit* search = nullptr;
+    for (auto* edit : window.findChildren<QLineEdit*>())
+      if (edit->accessibleName() == QStringLiteral("Search commits")) search = edit;
+    QVERIFY(search);
+    // "zephyr" is only in the body of a commit that is not loaded yet.
+    search->setText(QStringLiteral("ZEPHYR"));
+    QTRY_COMPARE_WITH_TIMEOUT(model->rowCount(), 1, 10000);
+    QCOMPARE(model->commitAt(0)->title, QStringLiteral("Old work"));
+    QVERIFY(model->showingSearchResults());
+    search->clear();
+    QTRY_VERIFY_WITH_TIMEOUT(!model->showingSearchResults() && model->rowCount() == 50, 10000);
+  }
+
   void paneWidthsSurviveRestartAndReset() {
     QTemporaryDir temporary;
     relay::RelayControllerConfig config;
@@ -693,7 +728,7 @@ class MainWindowTest final : public QObject {
     QTRY_VERIFY(commitFiles->currentIndex().isValid());
     auto* search = [&]() -> QLineEdit* {
       for (auto* edit : window.findChildren<QLineEdit*>())
-        if (edit->accessibleName() == QStringLiteral("Search loaded commits")) return edit;
+        if (edit->accessibleName() == QStringLiteral("Search commits")) return edit;
       return nullptr;
     }();
     QVERIFY(search);

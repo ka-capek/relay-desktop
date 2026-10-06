@@ -589,6 +589,21 @@ void RelayController::requestHistory(const int skip, const int limit, const QStr
                         }, [this, generation] { return generation == historyGeneration_; });
 }
 
+void RelayController::searchHistory(const QString& query, const QString& reference) {
+  if (!currentRepository_ || query.trimmed().isEmpty()) return;
+  const auto repositoryPath = currentRepository_->path;
+  const auto generation = ++searchGeneration_;
+  const auto git = git_;
+  const bool all = (state_.preferences.graphHistory && reference.isEmpty()) || reference == QStringLiteral("*");
+  const auto scope = reference == QStringLiteral("*") ? QString{} : reference;
+  runAsync<GitService::SearchResult>(QStringLiteral("history-search"),
+      [git, repositoryPath, query, all, scope] { return git->searchHistory(repositoryPath, query, all, scope); },
+      [this, generation, repositoryPath, query](GitService::SearchResult result) {
+        if (generation != searchGeneration_ || !currentRepository_ || currentRepository_->path != repositoryPath) return;
+        emit historySearchReady(repositoryPath, query, std::move(result.commits), result.truncated);
+      }, [this, generation] { return generation == searchGeneration_; });
+}
+
 void RelayController::requestCommitDetail(const QString& hash) {
   if (!currentRepository_ || hash.isEmpty()) return;
   const auto repositoryPath = currentRepository_->path;

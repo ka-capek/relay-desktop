@@ -34,6 +34,16 @@ class GitService final {
                                             const QString& anchor = {}, bool allBranches = false,
                                             const QString& reference = {},
                                             bool topological = true) const;
+  // Commits in the same scope as readHistoryPage whose message, author name
+  // or email contains `query` (case-insensitive, literal), or whose hash
+  // starts with it. Newest first, at most `limit`; `truncated` reports more.
+  struct SearchResult {
+    QList<HistoryCommit> commits;
+    bool truncated{};
+  };
+  [[nodiscard]] SearchResult searchHistory(const QString& repositoryPath, const QString& query,
+                                           bool allBranches = false, const QString& reference = {},
+                                           int limit = 200) const;
   [[nodiscard]] CommitDetail readCommitDetail(const QString& repositoryPath,
                                               const QString& requestedHash) const;
   [[nodiscard]] QString readCommitFileDiff(const QString& repositoryPath,
