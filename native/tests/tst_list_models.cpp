@@ -120,6 +120,41 @@ class ListModelsTest final : public QObject {
     QVERIFY(model.graphRowAt(0));
   }
 
+  void repositoryRefreshKeepsRowsWhenTheirOrderIsUnchanged() {
+    relay::RepositoryListModel model;
+    QList<relay::RepositorySummary> repositories{
+        repository(QStringLiteral("/a"), QStringLiteral("a"), QStringLiteral("owner")),
+        repository(QStringLiteral("/b"), QStringLiteral("b"), QStringLiteral("owner")),
+    };
+    model.setRepositories(repositories);
+    model.setOrder({relay::RepositoryOrderMode::name, relay::SortDirection::ascending}, {});
+    QSignalSpy resets(&model, &QAbstractItemModel::modelReset);
+    QSignalSpy changed(&model, &QAbstractItemModel::dataChanged);
+
+    // An identical refresh does nothing at all.
+    model.setRepositories(repositories);
+    model.setOrder({relay::RepositoryOrderMode::name, relay::SortDirection::ascending}, {});
+    QCOMPARE(resets.size(), 0);
+    QCOMPARE(changed.size(), 0);
+
+    // New data in the same order updates rows in place.
+    repositories[1].changes = 7;
+    model.setRepositories(repositories);
+    QCOMPARE(resets.size(), 0);
+    QCOMPARE(changed.size(), 1);
+    QCOMPARE(model.repositoryAt(1)->changes, 7);
+
+    // A different order resets, and the rows are in the new order.
+    model.setOrder({relay::RepositoryOrderMode::name, relay::SortDirection::descending}, {});
+    QCOMPARE(resets.size(), 1);
+    QCOMPARE(repositoryPathAt(model, 0), QStringLiteral("/b"));
+    repositories.append(repository(QStringLiteral("/c"), QStringLiteral("c"), QStringLiteral("owner")));
+    model.setRepositories(repositories);
+    QCOMPARE(resets.size(), 2);
+    QCOMPARE(model.rowCount(), 3);
+    QCOMPARE(repositoryPathAt(model, 0), QStringLiteral("/c"));
+  }
+
   void repositoryManualOrderAndNaturalTieBreak() {
     const QLocale previous;
     QLocale::setDefault(QLocale::c());

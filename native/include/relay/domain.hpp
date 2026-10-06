@@ -47,6 +47,7 @@ struct RepositorySummary {
   std::optional<QDateTime> addedAt;
   std::optional<QDateTime> latestCommit;
   std::optional<QDateTime> firstCommit;
+  bool operator==(const RepositorySummary&) const = default;
 };
 
 struct SshProfile {
@@ -65,6 +66,7 @@ enum class SortDirection { ascending, descending };
 struct RepositoryOrder {
   RepositoryOrderMode mode{RepositoryOrderMode::manual};
   SortDirection direction{SortDirection::ascending};
+  bool operator==(const RepositoryOrder&) const = default;
 };
 
 struct ChangedFile {

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include "relay/domain.hpp"
 
 #include <QAbstractListModel>
@@ -67,6 +69,7 @@ class RepositoryListModel final : public QAbstractListModel {
   void manualOrderChanged(const QStringList& repositoryPaths);
 
  private:
+  void replaceContents(const std::function<void()>& change);
   void rebuildVisible();
   [[nodiscard]] int compareByName(const RepositorySummary& left,
                                   const RepositorySummary& right) const;
