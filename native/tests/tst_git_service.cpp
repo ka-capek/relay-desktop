@@ -281,7 +281,7 @@ class GitServiceTest final : public QObject {
     static_cast<void>(service.cloneRepository(upstream, local));
     writeFile(QDir(upstream).filePath(QStringLiteral("second.txt")), QByteArrayLiteral("second\n"));
     commitAll(upstream, QStringLiteral("Second"));
-    service.pullOrigin(local);
+    QVERIFY(service.pullOrigin(local).isEmpty());
     QCOMPARE(runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}),
              runGit(upstream, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}));
     writeFile(QDir(local).filePath(QStringLiteral("local.txt")), QByteArrayLiteral("local\n"));
@@ -289,9 +289,16 @@ class GitServiceTest final : public QObject {
     const auto head = runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
     writeFile(QDir(upstream).filePath(QStringLiteral("remote.txt")), QByteArrayLiteral("remote\n"));
     commitAll(upstream, QStringLiteral("Remote"));
-    QVERIFY_EXCEPTION_THROWN(service.pullOrigin(local), relay::ProcessError);
+    QCOMPARE(service.pullOrigin(local), QStringLiteral("refs/remotes/origin/main"));
     QCOMPARE(runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), head);
     QVERIFY(QFileInfo::exists(QDir(local).filePath(QStringLiteral("local.txt"))));
+    // Up to date with local commits ahead: nothing to pull, nothing diverged.
+    runGit(local, {QStringLiteral("reset"), QStringLiteral("--hard"), QStringLiteral("origin/main")});
+    writeFile(QDir(local).filePath(QStringLiteral("ahead.txt")), QByteArrayLiteral("ahead\n"));
+    commitAll(local, QStringLiteral("Ahead"));
+    const auto ahead = runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    QVERIFY(service.pullOrigin(local).isEmpty());
+    QCOMPARE(runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), ahead);
   }
 
   void resolvesBundledRuntimeAndEnvironment() {

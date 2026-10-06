@@ -487,6 +487,53 @@ esac
              QStringLiteral("Personal Identity|personal@example.test|Personal Identity|personal@example.test"));
   }
 
+  void divergedPullAsksAndThenMerges() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const auto upstream = root.filePath(QStringLiteral("upstream"));
+    const auto local = root.filePath(QStringLiteral("local"));
+    QVERIFY(QDir().mkpath(upstream));
+    initRepository(upstream);
+    const QStringList identity{QStringLiteral("-c"), QStringLiteral("user.name=Fixture"),
+                               QStringLiteral("-c"), QStringLiteral("user.email=fixture@example.test")};
+    const auto commitFile = [&](const QString& repository, const QString& file) {
+      writeFile(QDir(repository).filePath(file), file.toUtf8() + "\n");
+      runGit(repository, {QStringLiteral("add"), QStringLiteral(".")});
+      runGit(repository, identity + QStringList{QStringLiteral("commit"), QStringLiteral("-qm"), file});
+    };
+    commitFile(upstream, QStringLiteral("first.txt"));
+    runGit(root.path(), {QStringLiteral("clone"), QStringLiteral("-q"), upstream, local});
+    runGit(local, {QStringLiteral("config"), QStringLiteral("user.name"), QStringLiteral("Fixture")});
+    runGit(local, {QStringLiteral("config"), QStringLiteral("user.email"), QStringLiteral("fixture@example.test")});
+    commitFile(local, QStringLiteral("local.txt"));
+    commitFile(upstream, QStringLiteral("remote.txt"));
+
+    const auto config = controllerConfig(root);
+    seedState(config, {});
+    relay::RelayController controller(config);
+    controller.start();
+    QSignalSpy changed(&controller, &relay::RelayController::currentRepositoryChanged);
+    QSignalSpy diverged(&controller, &relay::RelayController::pullDiverged);
+    QSignalSpy failures(&controller, &relay::RelayController::operationFailed);
+    controller.openRepository(local);
+    QVERIFY(changed.wait(5000));
+    const auto before = controller.currentRepository()->history.value(0).hash;
+    controller.pullOrigin();
+    QTRY_VERIFY_WITH_TIMEOUT(!diverged.isEmpty() || !failures.isEmpty(), 10000);
+    QVERIFY2(failures.isEmpty(), failures.isEmpty() ? "" : qPrintable(failures.last().at(1).toString()));
+    QCOMPARE(diverged.last().at(1).toString(), QStringLiteral("refs/remotes/origin/main"));
+    QCOMPARE(controller.currentRepository()->history.value(0).hash, before);
+
+    changed.clear();
+    controller.executeRepositoryAction(relay::RepositoryAction::mergeBranch, diverged.last().at(1).toString());
+    QVERIFY(changed.wait(10000));
+    QVERIFY2(failures.isEmpty(), failures.isEmpty() ? "" : qPrintable(failures.last().at(1).toString()));
+    QVERIFY(QFile::exists(QDir(local).filePath(QStringLiteral("remote.txt"))));
+    QVERIFY(QFile::exists(QDir(local).filePath(QStringLiteral("local.txt"))));
+    QCOMPARE(controller.currentRepository()->ahead, 2);
+    QCOMPARE(controller.currentRepository()->behind, 0);
+  }
+
   void invalidPublicationLeavesTheRepositoryUnbound() {
     QTemporaryDir root;
     QVERIFY(root.isValid());

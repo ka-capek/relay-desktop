@@ -121,6 +121,9 @@ class RelayController final : public QObject {
   void currentRepositoryChanged(relay::Repository repository);
   void repositoryClosed();
   void commitCreated(QString repositoryPath);
+  // A pull found local and origin commits on both sides and changed nothing.
+  // upstreamRef is the fetched refs/remotes/origin/... to merge or rebase onto.
+  void pullDiverged(QString repositoryPath, QString upstreamRef);
   void commitUndone(QString repositoryPath, QString summary, QString description);
   void filePreviewReady(QString repositoryPath, QString filePath, relay::FilePreview preview);
   void commitFilePreviewReady(QString repositoryPath, QString hash, QString filePath, relay::FilePreview preview);

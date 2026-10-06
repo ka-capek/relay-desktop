@@ -49,8 +49,11 @@ class GitService final {
                    const QString& handle = {}, const QString& sshCommand = {}, bool allBranches = false) const;
   void pushOrigin(const QString& repositoryPath, const QString& token = {},
                   const QString& handle = {}, const QString& sshCommand = {}) const;
-  void pullOrigin(const QString& repositoryPath, const QString& token = {},
-                  const QString& handle = {}, const QString& sshCommand = {}) const;
+  // Fetches, then fast-forwards to the origin upstream. Returns the upstream
+  // ref (refs/remotes/origin/...) when local and origin have diverged and
+  // nothing was changed; an empty string otherwise.
+  [[nodiscard]] QString pullOrigin(const QString& repositoryPath, const QString& token = {},
+                                   const QString& handle = {}, const QString& sshCommand = {}) const;
   void performAction(const QString& repositoryPath, RepositoryAction action,
                      const QString& target = {}, const QStringList& paths = {},
                      const Account& account = {}) const;

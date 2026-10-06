@@ -736,7 +736,8 @@ void RelayController::pullOrigin(const QString& accountId) {
   const auto auth = auth_;
   const auto ssh = ssh_;
   const auto operationGate = config_.operationGate;
-  runAsync<Repository>(QStringLiteral("pull"),
+  struct Result { Repository repository; QString diverged; };
+  runAsync<Result>(QStringLiteral("pull"),
                        [git, auth, ssh, operationGate, repositoryPath, selectedAccount, profile] {
                          invokeGate(operationGate, QStringLiteral("pull"), repositoryPath);
                          const auto remote = git->originRemoteUrl(repositoryPath);
@@ -745,18 +746,19 @@ void RelayController::pullOrigin(const QString& accountId) {
                                                 : QString{};
                          const auto command = profile ? ssh->commandForRemote(*profile, remote)
                                                       : QString{};
-                         git->pullOrigin(repositoryPath, token,
+                         const auto diverged = git->pullOrigin(repositoryPath, token,
                                           selectedAccount ? selectedAccount->handle : QString{},
                                           command);
-                         return git->readRepository(repositoryPath);
+                         return Result{git->readRepository(repositoryPath), diverged};
                        },
-                       [this, generation, repositoryPath](Repository repository) {
+                       [this, generation, repositoryPath](Result result) {
                          if (generation != repositoryGeneration_ || !currentRepository_ ||
                              currentRepository_->path != repositoryPath)
                            return;
-                         currentRepository_ = std::make_unique<Repository>(repository);
-                         emit currentRepositoryChanged(repository);
-                         rememberRepository(repository);
+                         currentRepository_ = std::make_unique<Repository>(result.repository);
+                         emit currentRepositoryChanged(result.repository);
+                         rememberRepository(result.repository);
+                         if (!result.diverged.isEmpty()) emit pullDiverged(repositoryPath, result.diverged);
                        });
 }
 

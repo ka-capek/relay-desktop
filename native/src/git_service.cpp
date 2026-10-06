@@ -968,19 +968,33 @@ void GitService::createBranch(const QString& repositoryPath, const QString& bran
   static_cast<void>(runGit(repositoryPath, arguments));
 }
 
-void GitService::pullOrigin(const QString& repositoryPath, const QString& token,
-                            const QString& handle, const QString& sshCommand) const {
+QString GitService::pullOrigin(const QString& repositoryPath, const QString& token,
+                               const QString& handle, const QString& sshCommand) const {
   const auto upstream = runGitOrEmpty(repositoryPath, {QStringLiteral("rev-parse"),
       QStringLiteral("--abbrev-ref"), QStringLiteral("--symbolic-full-name"), QStringLiteral("@{upstream}")});
   if (!upstream.startsWith(QStringLiteral("origin/")))
     throw ProcessError(QStringLiteral("Select a branch tracking origin before pulling."));
   fetchOrigin(repositoryPath, token, handle, sshCommand);
+  const auto isAncestor = [&](const QString& ancestor, const QString& descendant) {
+    try {
+      static_cast<void>(runGit(repositoryPath, {QStringLiteral("merge-base"), QStringLiteral("--is-ancestor"),
+          ancestor, descendant}));
+      return true;
+    } catch (const ProcessError&) {
+      return false;
+    }
+  };
+  // Nothing to pull when origin has nothing this branch lacks.
+  if (isAncestor(QStringLiteral("@{upstream}"), QStringLiteral("HEAD"))) return {};
+  if (!isAncestor(QStringLiteral("HEAD"), QStringLiteral("@{upstream}")))
+    return QStringLiteral("refs/remotes/") + upstream;
   try {
     static_cast<void>(runGit(repositoryPath, {QStringLiteral("merge"), QStringLiteral("--ff-only"),
         QStringLiteral("--no-edit"), QStringLiteral("@{upstream}")}));
   } catch (const ProcessError& error) {
-    throw ProcessError(QStringLiteral("Could not fast-forward this branch. Commit or stash conflicting local changes, or merge diverged branches before pulling. %1").arg(error.qMessage()));
+    throw ProcessError(QStringLiteral("Could not fast-forward this branch. Commit or stash conflicting local changes before pulling. %1").arg(error.qMessage()));
   }
+  return {};
 }
 
 }  // namespace relay

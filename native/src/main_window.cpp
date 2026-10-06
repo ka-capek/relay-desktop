@@ -787,6 +787,24 @@ void MainWindow::connectController() {
   connect(controller_, &RelayController::busyChanged, this, [this](const QString& operation, bool busy) {
     if (operation == QStringLiteral("runtime-check")) runtimeRetry_->setEnabled(!busy);
   });
+  connect(controller_, &RelayController::pullDiverged, this, [this](const QString& path, const QString& upstream) {
+    if (!repository_ || repository_->path != path) return;
+    const auto shortName = upstream.mid(QStringLiteral("refs/remotes/").size());
+    QMessageBox box(QMessageBox::Question, tr("Pull origin"),
+        tr("%1 and %2 both have new commits, so a fast-forward is not possible.")
+            .arg(repository_->branch, shortName), QMessageBox::Cancel, this);
+    box.setObjectName(QStringLiteral("pullDivergedDialog"));
+    box.setInformativeText(tr("Merge creates a merge commit. Rebase replays your local commits on top of %1 "
+                              "and is only possible while they have not been pushed.").arg(shortName));
+    auto* merge = box.addButton(tr("Merge"), QMessageBox::AcceptRole);
+    merge->setObjectName(QStringLiteral("pullMergeButton"));
+    auto* rebase = box.addButton(tr("Rebase"), QMessageBox::AcceptRole);
+    rebase->setObjectName(QStringLiteral("pullRebaseButton"));
+    box.setDefaultButton(merge);
+    box.exec();
+    if (box.clickedButton() == merge) controller_->executeRepositoryAction(RepositoryAction::mergeBranch, upstream);
+    else if (box.clickedButton() == rebase) controller_->executeRepositoryAction(RepositoryAction::rebaseBranch, upstream);
+  });
   connect(controller_, &RelayController::commitCreated, this, [this](const QString& path) {
     commitDrafts_.remove(path);
     if (repository_ && repository_->path == path) {
