@@ -80,6 +80,9 @@ class RelayController final : public QObject {
   void retryForgeCredentialCleanup();
   void requestAccountEmails(const QString& accountId);
   void setAccountEmail(const QString& accountId, const QString& requestedEmail);
+  // An absolute path to an existing SSH key signs this account's commits;
+  // an empty path follows the user's Git configuration again.
+  void setAccountSigningKey(const QString& accountId, const QString& keyPath);
 
   void openRepository(const QString& repositoryPath);
   void refreshRepository();

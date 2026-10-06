@@ -728,6 +728,13 @@ CommitDetail GitService::readCommitDetail(const QString& repositoryPath,
     totalRemoved += record.removed;
   }
 
+  // The raw commit header shows a signature without asking GPG or SSH to
+  // verify it, which would need the user's keyring and trust settings.
+  const auto header = runGitOrEmpty(root, {QStringLiteral("cat-file"), QStringLiteral("commit"), fullHash});
+  const auto headerEnd = header.indexOf(QStringLiteral("\n\n"));
+  const auto headers = header.left(headerEnd < 0 ? header.size() : headerEnd);
+  const bool isSigned = headers.contains(QStringLiteral("\ngpgsig ")) || headers.contains(QStringLiteral("\ngpgsig-sha256 "));
+
   return {fullHash,
           fieldAt(fields, 1),
           fieldAt(fields, 3),
@@ -744,7 +751,8 @@ CommitDetail GitService::readCommitDetail(const QString& repositoryPath,
           parents.size() > 1,
           std::move(files),
           totalAdded,
-          totalRemoved};
+          totalRemoved,
+          isSigned};
 }
 
 QString GitService::readCommitFileDiff(const QString& repositoryPath,
@@ -964,7 +972,26 @@ void GitService::commitFiles(const QString& repositoryPath, const QStringList& f
   environment.insert(QStringLiteral("GIT_AUTHOR_EMAIL"), account.email);
   environment.insert(QStringLiteral("GIT_COMMITTER_NAME"), account.name);
   environment.insert(QStringLiteral("GIT_COMMITTER_EMAIL"), account.email);
+  addSigningConfiguration(environment, account);
   static_cast<void>(runGit(repositoryPath, arguments, environment));
+}
+
+void GitService::addSigningConfiguration(QProcessEnvironment& environment, const Account& account) {
+  if (account.signingKey.isEmpty()) return;
+  bool ok = false;
+  auto index = QProcessEnvironment::systemEnvironment().value(QStringLiteral("GIT_CONFIG_COUNT")).toInt(&ok);
+  if (!ok || index < 0) index = 0;
+  const QList<QPair<QString, QString>> settings{
+      {QStringLiteral("gpg.format"), QStringLiteral("ssh")},
+      {QStringLiteral("user.signingkey"), account.signingKey},
+      {QStringLiteral("commit.gpgsign"), QStringLiteral("true")},
+  };
+  for (const auto& [key, value] : settings) {
+    environment.insert(QStringLiteral("GIT_CONFIG_KEY_%1").arg(index), key);
+    environment.insert(QStringLiteral("GIT_CONFIG_VALUE_%1").arg(index), value);
+    ++index;
+  }
+  environment.insert(QStringLiteral("GIT_CONFIG_COUNT"), QString::number(index));
 }
 
 QString GitService::githubCredentialHelper() {

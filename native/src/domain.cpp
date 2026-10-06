@@ -79,6 +79,7 @@ Account accountFromJson(const QJsonObject& object) {
   account.authSource = object.value(QStringLiteral("authSource")).toString(QStringLiteral("github-cli"));
   account.tokenSource = object.value(QStringLiteral("tokenSource")).toString(QStringLiteral("credential store"));
   account.active = object.value(QStringLiteral("active")).toBool();
+  account.signingKey = object.value(QStringLiteral("signingKey")).toString();
   return account;
 }
 
@@ -96,6 +97,7 @@ QJsonObject accountToJson(const Account& account) {
       {QStringLiteral("tokenSource"), account.tokenSource},
       {QStringLiteral("active"), account.active},
   };
+  if (!account.signingKey.isEmpty()) object.insert(QStringLiteral("signingKey"), account.signingKey);
   bool numeric{};
   const auto rawId = account.githubIdText.isEmpty() ? QString::number(account.githubId) : account.githubIdText;
   const auto number = rawId.toLongLong(&numeric);

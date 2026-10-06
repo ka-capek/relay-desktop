@@ -21,6 +21,9 @@ class GitService final {
   static constexpr int historyBatchLimit = 200;
 
   explicit GitService(QString resourcesPath = {}, QString sourceRoot = {});
+  // Adds SSH commit signing with the account's key, after any configuration
+  // already passed through GIT_CONFIG_* in the inherited environment.
+  static void addSigningConfiguration(QProcessEnvironment& environment, const Account& account);
 
   [[nodiscard]] QString gitExecutable() const;
   [[nodiscard]] QProcessEnvironment gitProcessEnvironment(

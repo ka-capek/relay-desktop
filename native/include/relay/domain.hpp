@@ -32,6 +32,9 @@ struct Account {
   QString authSource{QStringLiteral("github-cli")};
   QString tokenSource{QStringLiteral("credential store")};
   bool active{};
+  // Path to an SSH key that signs this account's commits. Empty follows the
+  // user's Git configuration. Never key contents.
+  QString signingKey;
 };
 
 struct RepositorySummary {
@@ -119,6 +122,8 @@ struct CommitDetail {
   QList<ChangedFile> files;
   qsizetype added{};
   qsizetype removed{};
+  // The commit carries a GPG, SSH or X.509 signature. Not verified.
+  bool isSigned{};
 };
 
 enum class RepositoryAction {

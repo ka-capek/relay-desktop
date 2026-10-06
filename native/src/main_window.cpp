@@ -16,7 +16,9 @@
 #include <QDesktopServices>
 #include <QDialogButtonBox>
 #include <QEvent>
+#include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -900,7 +902,8 @@ void MainWindow::connectController() {
             historyTitle_->setText(detail.title);
             historyMetadata_->setText(tr("%1 <%2> · committed by %3 <%4> · %5")
                 .arg(detail.author, detail.authorEmail, detail.committer, detail.committerEmail,
-                     QLocale().toString(detail.committerDate.toLocalTime(), QLocale::ShortFormat)));
+                     QLocale().toString(detail.committerDate.toLocalTime(), QLocale::ShortFormat))
+                + (detail.isSigned ? tr(" · Signed") : QString{}));
             historyBody_->setText(detail.body);
             commitFileModel_->setFiles(detail.files);
             copyHashButton_->setEnabled(true);
@@ -1183,6 +1186,24 @@ void MainWindow::rebuildAccountMenu() {
   for (const auto& account : appState_.accounts) {
     emails->addAction(QStringLiteral("@%1 — %2").arg(account.handle, account.email), this,
                       [this, id = account.id] { showAccountEmailDialog(id); });
+  }
+  auto* signing = accountMenu_->addMenu(tr("Commit signing"));
+  signing->setObjectName(QStringLiteral("commitSigningMenu"));
+  signing->setEnabled(!appState_.accounts.isEmpty());
+  for (const auto& account : appState_.accounts) {
+    auto* menu = signing->addMenu(account.signingKey.isEmpty()
+        ? tr("@%1 — Git configuration").arg(account.handle)
+        : tr("@%1 — %2").arg(account.handle, QFileInfo(account.signingKey).fileName()));
+    menu->addAction(tr("Sign with SSH key…"), this, [this, id = account.id, current = account.signingKey] {
+      const auto start = current.isEmpty() ? QDir::home().filePath(QStringLiteral(".ssh")) : QFileInfo(current).absolutePath();
+      const auto path = QFileDialog::getOpenFileName(this, tr("SSH signing key"), start);
+      if (!path.isEmpty()) controller_->setAccountSigningKey(id, path);
+    });
+    auto* follow = menu->addAction(tr("Follow Git configuration"), this, [this, id = account.id] {
+      controller_->setAccountSigningKey(id, {});
+    });
+    follow->setCheckable(true);
+    follow->setChecked(account.signingKey.isEmpty());
   }
   accountMenu_->addAction(tr("Manage accounts…"), this, &MainWindow::showAccountsDialog);
   accountMenu_->addAction(tr("Gitea / GitLab accounts and repositories…"), this, &MainWindow::showForgeDialog);

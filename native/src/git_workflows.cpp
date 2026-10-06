@@ -112,7 +112,8 @@ void GitService::performAction(const QString& root, const RepositoryAction actio
     execute({QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"), ref});
     return ref;
   };
-  const auto environment = identityEnvironment(account);
+  auto environment = identityEnvironment(account);
+  addSigningConfiguration(environment, account);
   switch (action) {
     case RepositoryAction::createTag:
     case RepositoryAction::deleteTag: {

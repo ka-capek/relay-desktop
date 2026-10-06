@@ -296,6 +296,7 @@ void RelayController::synchronizeAccounts() {
                              : tones.at(static_cast<qsizetype>(account.githubId % tones.size()));
           account.authSource = QStringLiteral("github-cli");
           account.tokenSource = authenticatedAccount.tokenSource;
+          account.signingKey = previous ? previous->signingKey : QString{};
           account.active = authenticatedAccount.active;
           accounts.push_back(std::move(account));
         }
@@ -311,7 +312,10 @@ void RelayController::synchronizeAccounts() {
         // User edits made while account discovery was running take precedence
         // over the metadata snapshot captured at the start of the request.
         for (auto& refreshed : result.accounts) {
-          if (const auto* current = account(refreshed.id)) refreshed.email = current->email;
+          if (const auto* current = account(refreshed.id)) {
+            refreshed.email = current->email;
+            refreshed.signingKey = current->signingKey;
+          }
         }
         state_.accounts = std::move(result.accounts);
         state_.activeAccountId = std::move(result.activeAccountId);
@@ -483,6 +487,32 @@ void RelayController::setAccountEmail(const QString& accountId, const QString& r
     publishState();
   } catch (const std::exception& error) {
     emit operationFailed(QStringLiteral("account-email"), QString::fromUtf8(error.what()));
+  }
+}
+
+void RelayController::setAccountSigningKey(const QString& accountId, const QString& keyPath) {
+  auto iterator = std::find_if(state_.accounts.begin(), state_.accounts.end(),
+                               [&accountId](const auto& account) { return account.id == accountId; });
+  if (iterator == state_.accounts.end()) {
+    emit operationFailed(QStringLiteral("account-signing"), QStringLiteral("Account not found."));
+    return;
+  }
+  const auto path = keyPath.trimmed();
+  if (!path.isEmpty()) {
+    const QFileInfo key(path);
+    if (!key.isAbsolute() || !key.isFile() || path.contains(u'\n') || path.contains(u'\r')) {
+      emit operationFailed(QStringLiteral("account-signing"), tr("Choose an existing SSH key file."));
+      return;
+    }
+  }
+  const auto previous = iterator->signingKey;
+  iterator->signingKey = path.isEmpty() ? QString{} : QDir::cleanPath(path);
+  try {
+    persistState();
+    publishState();
+  } catch (const std::exception& error) {
+    iterator->signingKey = previous;
+    emit operationFailed(QStringLiteral("account-signing"), QString::fromUtf8(error.what()));
   }
 }
 

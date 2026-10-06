@@ -5,6 +5,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QProcessEnvironment>
+#include <QScopeGuard>
+#include <QStandardPaths>
 #include <QSet>
 #include <QTemporaryDir>
 #include <QTest>
@@ -516,6 +518,66 @@ class GitServiceTest final : public QObject {
 
     QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.fetchOrigin(root.path()));
     QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.pushOrigin(root.path()));
+  }
+
+  void signsCommitsWithTheAccountSshKey() {
+    const auto keygen = QStandardPaths::findExecutable(QStringLiteral("ssh-keygen"));
+    if (keygen.isEmpty()) QSKIP("ssh-keygen is not available.");
+    QTemporaryDir root;
+    // The developer's own Git configuration may already sign every commit.
+    const auto previousGlobal = qgetenv("GIT_CONFIG_GLOBAL");
+    const auto previousNoSystem = qgetenv("GIT_CONFIG_NOSYSTEM");
+    qputenv("GIT_CONFIG_GLOBAL", root.filePath(QStringLiteral("empty-gitconfig")).toUtf8());
+    qputenv("GIT_CONFIG_NOSYSTEM", "1");
+    const auto restoreConfig = qScopeGuard([&] {
+      if (previousGlobal.isNull()) qunsetenv("GIT_CONFIG_GLOBAL"); else qputenv("GIT_CONFIG_GLOBAL", previousGlobal);
+      if (previousNoSystem.isNull()) qunsetenv("GIT_CONFIG_NOSYSTEM"); else qputenv("GIT_CONFIG_NOSYSTEM", previousNoSystem);
+    });
+    const auto repository = root.filePath(QStringLiteral("repository"));
+    QVERIFY(QDir().mkpath(repository));
+    initRepository(repository);
+    const auto key = root.filePath(QStringLiteral("signing"));
+    relay::ProcessRequest generate{keygen, {QStringLiteral("-q"), QStringLiteral("-t"), QStringLiteral("ed25519"),
+                                            QStringLiteral("-N"), QString{}, QStringLiteral("-f"), key}};
+    static_cast<void>(relay::ProcessRunner::run(generate));
+    QVERIFY(QFileInfo::exists(key));
+
+    relay::Account account;
+    account.name = QStringLiteral("Signer");
+    account.email = QStringLiteral("signer@example.test");
+    relay::GitService service;
+    writeFile(QDir(repository).filePath(QStringLiteral("unsigned.txt")), QByteArrayLiteral("plain\n"));
+    service.commitFiles(repository, {QStringLiteral("unsigned.txt")}, QStringLiteral("Unsigned"), {}, account);
+    QVERIFY(!service.readCommitDetail(repository, runGit(repository, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")})).isSigned);
+
+    account.signingKey = key;
+    writeFile(QDir(repository).filePath(QStringLiteral("signed.txt")), QByteArrayLiteral("signed\n"));
+    service.commitFiles(repository, {QStringLiteral("signed.txt")}, QStringLiteral("Signed"), {}, account);
+    auto head = runGit(repository, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    QVERIFY(service.readCommitDetail(repository, head).isSigned);
+    QVERIFY(runGit(repository, {QStringLiteral("cat-file"), QStringLiteral("commit"), head}).contains(QStringLiteral("BEGIN SSH SIGNATURE")));
+    // Commit-producing repository actions sign the same way.
+    service.performAction(repository, relay::RepositoryAction::amendMessage, QStringLiteral("Signed again"), {head}, account);
+    head = runGit(repository, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    QVERIFY(service.readCommitDetail(repository, head).isSigned);
+
+    // Configuration already passed through GIT_CONFIG_* is kept, not replaced.
+    const auto previousCount = qgetenv("GIT_CONFIG_COUNT");
+    const auto previousKey = qgetenv("GIT_CONFIG_KEY_0");
+    const auto previousValue = qgetenv("GIT_CONFIG_VALUE_0");
+    qputenv("GIT_CONFIG_COUNT", "1");
+    qputenv("GIT_CONFIG_KEY_0", "relay.test");
+    qputenv("GIT_CONFIG_VALUE_0", "kept");
+    const auto restore = qScopeGuard([&] {
+      if (previousCount.isNull()) qunsetenv("GIT_CONFIG_COUNT"); else qputenv("GIT_CONFIG_COUNT", previousCount);
+      if (previousKey.isNull()) qunsetenv("GIT_CONFIG_KEY_0"); else qputenv("GIT_CONFIG_KEY_0", previousKey);
+      if (previousValue.isNull()) qunsetenv("GIT_CONFIG_VALUE_0"); else qputenv("GIT_CONFIG_VALUE_0", previousValue);
+    });
+    QProcessEnvironment environment;
+    relay::GitService::addSigningConfiguration(environment, account);
+    QCOMPARE(environment.value(QStringLiteral("GIT_CONFIG_COUNT")), QStringLiteral("4"));
+    QVERIFY(!environment.contains(QStringLiteral("GIT_CONFIG_KEY_0")));
+    QCOMPARE(environment.value(QStringLiteral("GIT_CONFIG_KEY_3")), QStringLiteral("commit.gpgsign"));
   }
 
   void searchesWholeHistoryByMessageAuthorAndHash() {

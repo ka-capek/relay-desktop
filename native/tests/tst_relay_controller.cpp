@@ -487,6 +487,40 @@ esac
              QStringLiteral("Personal Identity|personal@example.test|Personal Identity|personal@example.test"));
   }
 
+  void signingKeyIsValidatedAndPersisted() {
+    QTemporaryDir root;
+    const auto config = controllerConfig(root);
+    relay::Account account;
+    account.id = QStringLiteral("github-1");
+    account.githubId = 1;
+    account.handle = QStringLiteral("fixture");
+    account.email = QStringLiteral("fixture@example.test");
+    relay::AppState state;
+    state.accounts = {account};
+    state.activeAccountId = account.id;
+    seedState(config, state);
+    const auto key = root.filePath(QStringLiteral("id_signing"));
+    writeFile(key, "not a real key, only a path\n");
+
+    relay::RelayController controller(config);
+    controller.start();
+    QSignalSpy failures(&controller, &relay::RelayController::operationFailed);
+    controller.setAccountSigningKey(account.id, QStringLiteral("relative/key"));
+    controller.setAccountSigningKey(account.id, root.filePath(QStringLiteral("missing")));
+    QCOMPARE(failures.size(), 2);
+    QVERIFY(controller.state().accounts.first().signingKey.isEmpty());
+
+    controller.setAccountSigningKey(account.id, key);
+    QCOMPARE(controller.state().accounts.first().signingKey, QDir::cleanPath(key));
+    const auto stored = relay::appStateFromJson(relay::RelayStore(config.storeFile).read());
+    QCOMPARE(stored.accounts.first().signingKey, QDir::cleanPath(key));
+
+    controller.setAccountSigningKey(account.id, {});
+    QVERIFY(controller.state().accounts.first().signingKey.isEmpty());
+    QVERIFY(!relay::RelayStore(config.storeFile).read().value(QStringLiteral("accounts")).toArray()
+                 .first().toObject().contains(QStringLiteral("signingKey")));
+  }
+
   void divergedPullAsksAndThenMerges() {
     QTemporaryDir root;
     QVERIFY(root.isValid());
