@@ -221,6 +221,9 @@ struct HistoryCache {
   static constexpr qsizetype capacity = 4;
   std::mutex mutex;
   QList<Window> windows;  // most recent first
+  // First-commit dates by repository root and HEAD commit.
+  static constexpr qsizetype firstCommitCapacity = 512;
+  QHash<QString, std::optional<QDateTime>> firstCommits;
 };
 
 GitService::GitService(QString resourcesPath, QString sourceRoot)
@@ -407,13 +410,29 @@ std::optional<QDateTime> GitService::latestCommitDate(const QString& root) const
 }
 
 std::optional<QDateTime> GitService::firstCommitDate(const QString& root) const {
-  auto dates = nonEmptyLines(runGitOrEmpty(
-      root, {QStringLiteral("log"), QStringLiteral("--max-parents=0"),
-             QStringLiteral("--format=%cI")}));
-  for (auto& date : dates) date = date.trimmed();
-  dates.removeAll(QString{});
-  dates.sort();
-  return dates.isEmpty() ? std::nullopt : optionalGitDate(dates.constFirst());
+  // Finding root commits walks the whole history (about a second on an
+  // 80,000-commit repository), and every refresh asks again. The answer only
+  // changes when HEAD does, so remember it per HEAD commit.
+  const auto head = runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"),
+                                         QStringLiteral("--quiet"), QStringLiteral("HEAD")});
+  if (head.isEmpty()) return std::nullopt;
+  const auto key = root + u'\n' + head;
+  {
+    const std::scoped_lock lock(historyCache_->mutex);
+    if (const auto found = historyCache_->firstCommits.constFind(key); found != historyCache_->firstCommits.cend())
+      return *found;
+  }
+  // Compare instants, not ISO strings, which sort wrongly across time zones.
+  std::optional<QDateTime> earliest;
+  for (const auto& line : nonEmptyLines(runGitOrEmpty(
+           root, {QStringLiteral("log"), QStringLiteral("--max-parents=0"), QStringLiteral("--format=%cI")}))) {
+    const auto date = optionalGitDate(line.trimmed());
+    if (date && (!earliest || *date < *earliest)) earliest = date;
+  }
+  const std::scoped_lock lock(historyCache_->mutex);
+  if (historyCache_->firstCommits.size() >= HistoryCache::firstCommitCapacity) historyCache_->firstCommits.clear();
+  historyCache_->firstCommits.insert(key, earliest);
+  return earliest;
 }
 
 Repository GitService::readRepository(const QString& repositoryPath) const {
