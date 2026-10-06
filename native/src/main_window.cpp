@@ -1015,8 +1015,11 @@ void MainWindow::applyRepository(const Repository& repository) {
     for (const auto& branch : repository.branches)
       branchPicker_->addItem(branch, QStringLiteral("refs/heads/") + branch);
     if (!repository.branches.contains(repository.branch)) branchPicker_->addItem(repository.branch, QStringLiteral("refs/heads/") + repository.branch);
+    // A remote branch with a local namesake would only switch to that local
+    // branch, which is already listed above.
     for (const auto& branch : repository.remoteBranches)
-      branchPicker_->addItem(tr("Remote · %1").arg(branch), QStringLiteral("refs/remotes/") + branch);
+      if (!repository.branches.contains(branch.mid(branch.indexOf(u'/') + 1)))
+        branchPicker_->addItem(tr("Remote · %1").arg(branch), QStringLiteral("refs/remotes/") + branch);
     branchPicker_->setCurrentIndex(branchPicker_->findData(QStringLiteral("refs/heads/") + repository.branch));
   }
   const auto* previousFile = changedFileModel_->fileAt(changedFileList_->currentIndex().row());

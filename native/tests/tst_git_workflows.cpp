@@ -424,6 +424,10 @@ class GitWorkflowsTest final : public QObject {
     service.performAction(root, RepositoryAction::checkoutRemote, QStringLiteral("origin/remote-topic"));
     QCOMPARE(service.readRepository(root).branch, QStringLiteral("remote-topic"));
     QVERIFY(service.readRepository(root).hasUpstream);
+    // origin/main has a local namesake: checking it out switches to local main.
+    git(root, {QStringLiteral("update-ref"), QStringLiteral("refs/remotes/origin/main"), QStringLiteral("refs/heads/main")});
+    service.performAction(root, RepositoryAction::checkoutRemote, QStringLiteral("origin/main"));
+    QCOMPARE(service.readRepository(root).branch, QStringLiteral("main"));
   }
 
   void controllerPublishesConflictAfterGitFailure() {
