@@ -42,31 +42,28 @@ preview installers. What CI cannot prove is listed here.
 
 ### Not covered by the implementation
 
-- **History paging** uses `--skip`, which Git resolves by walking, so a very
-  deep history gets slower the further the user scrolls.
-- **History search** filters only the commits already loaded.
+- **History paging** reads windows of 2,000 or 5,000 commits; each further
+  window still costs one Git walk with `--skip`.
+- **History search** returns at most 200 matches.
 - **Merge commits** are always compared against the first parent.
 - **SSH identities** cover the transport only. Relay does not create keys, add
   them to an agent, edit `~/.ssh/config`, or handle passphrases, by design.
-- **Remote branch with a local namesake.** Picking `origin/<name>` when a local
-  `<name>` exists fails with Git's "already exists" error instead of switching
-  to the local branch.
 
 ## Distribution packaging
 
-**Problem:** Releases are unsigned previews that need Git and the GitHub CLI
-installed separately. The strict packaging path in
-`native/packaging/README.md` bundles both and verifies the stage, but has not
-produced a release.
+**Problem:** Releases are unsigned previews. Windows installers bundle Git for
+Windows and the GitHub CLI, macOS installers bundle the GitHub CLI, through
+`native/tools/fetch_runtimes.py`. macOS still needs Git from the Xcode Command
+Line Tools or Homebrew, and the strict packaging path in
+`native/packaging/README.md`, which verifies the whole stage, has not produced
+a release.
 
 ### Work
 
-- Provision `runtime/` for both platforms with recorded corresponding-source
-  URIs.
+- Decide whether macOS should bundle a Git build (none is published as a
+  relocatable binary; it would have to be built and its source offered).
 - Build both installers with strict packaging from the official Qt
-  distribution.
-- Decide per tool whether to bundle Git and gh or keep them external; the
-  startup check already explains what to install when they are missing.
+  distribution, using `fetch_runtimes.py --output runtime`.
 - Record installer sizes and startup measurements in
   `docs/native-measurements.md`.
 - Developer ID signing and notarization on macOS, Authenticode on Windows, once
@@ -77,34 +74,3 @@ produced a release.
 - A first run on a clean machine works with no manual tool installation, or
   explains exactly what to install and recovers without a restart.
 - Installer sizes are recorded.
-
-## Icon generator
-
-**Problem:** `build/icon.icns`, `build/icon.ico`, and `build/icon.png` are
-generated from `build/icon.svg` and `build/icon-small.svg`. The generator ran
-inside Electron and was removed with it, so the masters can no longer be
-re-exported from this repository.
-
-### Work
-
-- Add a generator that does not depend on Electron, for example a small Qt
-  tool built by CMake using QtSvg.
-- Use `icon-small.svg` for 48px and below and `icon.svg` above that.
-- Put every Retina slot at its true pixel size in the `.icns`.
-- Keep the output byte-stable across runs.
-
-### Acceptance criteria
-
-- One documented command regenerates all three files.
-- Regenerating without editing the masters produces no Git diff.
-
-## Persist pane widths
-
-**Problem:** The sidebar, changes, and history panes resize through splitters,
-but their widths reset on every launch.
-
-### Work
-
-- Save and restore splitter state.
-- Keep the existing minimum sizes so a pane cannot be dragged shut.
-- Provide a keyboard-accessible reset to default.
