@@ -7,6 +7,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <memory>
 #include <optional>
 
 namespace relay {
@@ -31,7 +32,8 @@ class GitService final {
   [[nodiscard]] HistoryPage readHistoryPage(const QString& repositoryPath, int skip = 0,
                                             int limit = 50,
                                             const QString& anchor = {}, bool allBranches = false,
-                                            const QString& reference = {}) const;
+                                            const QString& reference = {},
+                                            bool topological = true) const;
   [[nodiscard]] CommitDetail readCommitDetail(const QString& repositoryPath,
                                               const QString& requestedHash) const;
   [[nodiscard]] QString readCommitFileDiff(const QString& repositoryPath,
@@ -96,6 +98,9 @@ class GitService final {
 
   QString resourcesPath_;
   QString sourceRoot_;
+  // Recent history windows, shared by copies of this service. Guarded by its
+  // own mutex because pages are read from worker threads.
+  std::shared_ptr<struct HistoryCache> historyCache_;
 };
 
 }  // namespace relay

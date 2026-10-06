@@ -578,7 +578,8 @@ void RelayController::requestHistory(const int skip, const int limit, const QStr
                         [git, operationGate, repositoryPath, skip, limit, anchor, graph, reference] {
                           invokeGate(operationGate, QStringLiteral("history"), repositoryPath);
                           return git->readHistoryPage(repositoryPath, skip, limit, anchor, (graph && reference.isEmpty()) || reference == QStringLiteral("*"),
-                                                      reference == QStringLiteral("*") ? QString{} : reference);
+                                                      reference == QStringLiteral("*") ? QString{} : reference,
+                                                      graph);
                         },
                         [this, generation, repositoryPath](HistoryPage page) {
                           if (generation != historyGeneration_ || !currentRepository_ ||

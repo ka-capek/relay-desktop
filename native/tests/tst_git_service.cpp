@@ -518,6 +518,40 @@ class GitServiceTest final : public QObject {
     QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.pushOrigin(root.path()));
   }
 
+  void pagesAcrossCachedHistoryWindowsWithoutGapsOrRepeats() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    // 2,100 commits crosses the date-order window of 2,000.
+    QByteArray stream;
+    for (int index = 1; index <= 2100; ++index) {
+      const auto message = QByteArray("commit ") + QByteArray::number(index);
+      stream += "commit refs/heads/main\nmark :" + QByteArray::number(index) +
+                "\ncommitter Fixture <fixture@example.test> " + QByteArray::number(1700000000 + index) +
+                " +0000\ndata " + QByteArray::number(message.size()) + "\n" + message + "\n";
+      if (index > 1) stream += "from :" + QByteArray::number(index - 1) + "\n";
+      stream += "\n";
+    }
+    relay::ProcessRequest import{QStringLiteral("git"), {QStringLiteral("-C"), root.path(), QStringLiteral("fast-import"), QStringLiteral("--quiet")}};
+    import.standardInput = stream;
+    static_cast<void>(relay::ProcessRunner::run(import));
+    runGit(root.path(), {QStringLiteral("reset"), QStringLiteral("-q"), QStringLiteral("--hard"), QStringLiteral("main")});
+    const auto expected = runGit(root.path(), {QStringLiteral("rev-list"), QStringLiteral("HEAD")}).split(u'\n');
+    QCOMPARE(expected.size(), 2100);
+
+    relay::GitService service;
+    for (const bool topological : {false, true}) {
+      QStringList seen;
+      auto page = service.readHistoryPage(root.path(), 0, 200, {}, false, {}, topological);
+      for (const auto& commit : page.commits) seen.append(commit.fullHash);
+      while (!page.endOfHistory) {
+        page = service.readHistoryPage(root.path(), static_cast<int>(seen.size()), 200, page.anchor, false, {}, topological);
+        QVERIFY(!page.commits.isEmpty());
+        for (const auto& commit : page.commits) seen.append(commit.fullHash);
+      }
+      QCOMPARE(seen, expected);
+    }
+  }
+
   void pagesAnchoredHistoryAndDescribesRootMergeAndDeletion() {
     QTemporaryDir root;
     QVERIFY(root.isValid());

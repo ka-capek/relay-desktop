@@ -12,6 +12,7 @@
 #include <QRegularExpression>
 
 #include <algorithm>
+#include <mutex>
 #include <limits>
 #include <utility>
 
@@ -200,11 +201,34 @@ QString defaultResourcesPath() {
 
 }  // namespace
 
+// Topological order makes Git walk the whole history before printing the
+// first commit unless the repository has a commit-graph file: on an 80,000
+// commit repository that is over a second for 50 commits and barely more for
+// 5,000. Reading a large window once and paging from memory keeps scrolling
+// to one such walk per window instead of one per page.
+struct HistoryCache {
+  struct Window {
+    QString key;
+    QString head;
+    int start{};
+    QList<HistoryCommit> commits;
+    bool complete{};
+  };
+  // A topological walk costs about the same for 5,000 commits as for 50;
+  // date order streams, so its window only needs to save process launches.
+  static constexpr int topologicalWindow = 5000;
+  static constexpr int dateWindow = 2000;
+  static constexpr qsizetype capacity = 4;
+  std::mutex mutex;
+  QList<Window> windows;  // most recent first
+};
+
 GitService::GitService(QString resourcesPath, QString sourceRoot)
     : resourcesPath_(resourcesPath.isEmpty() ? defaultResourcesPath()
                                              : QDir::cleanPath(std::move(resourcesPath))),
       sourceRoot_(sourceRoot.isEmpty() ? defaultSourceRoot()
-                                       : QDir::cleanPath(std::move(sourceRoot))) {}
+                                       : QDir::cleanPath(std::move(sourceRoot))),
+      historyCache_(std::make_shared<HistoryCache>()) {}
 
 QString GitService::gitExecutable() const {
 #ifdef Q_OS_WIN
@@ -521,15 +545,41 @@ QString GitService::assertCommitInRepository(const QString& repositoryPath,
 }
 
 HistoryPage GitService::readHistoryPage(const QString& repositoryPath, const int skip,
-                                        const int limit, const QString& requestedAnchor, const bool allBranches, const QString& reference) const {
+                                        const int limit, const QString& requestedAnchor, const bool allBranches, const QString& reference,
+                                        const bool topological) const {
+  const auto boundedSkip = std::max(0, skip);
+  const auto boundedLimit = std::clamp(limit == 0 ? 50 : limit, 1, historyBatchLimit);
+  // Several tips need topological order for a coherent graph; one branch in
+  // plain date order streams without walking the whole history.
+  const auto keyFor = [&](const QString& anchor) {
+    const bool topo = topological || anchor.contains(u'|');
+    return repositoryPath + u'\n' + anchor + (topo ? QStringLiteral("\ntopo") : QStringLiteral("\ndate"));
+  };
+  const auto slice = [&](const HistoryCache::Window& window, const QString& anchor) {
+    const auto offset = boundedSkip - window.start;
+    auto commits = window.commits.mid(offset, boundedLimit);
+    const bool end = window.complete && offset + boundedLimit >= window.commits.size();
+    return HistoryPage{std::move(commits), window.head, anchor, end};
+  };
+  // Later pages of a snapshot come from memory without starting Git. A first
+  // page (no snapshot yet) always reads fresh, so ref decorations reflect the
+  // repository as it is now.
+  if (!requestedAnchor.isEmpty()) {
+    const auto key = keyFor(requestedAnchor);
+    const std::scoped_lock lock(historyCache_->mutex);
+    for (const auto& window : std::as_const(historyCache_->windows)) {
+      if (window.key != key || boundedSkip < window.start) continue;
+      const auto offset = boundedSkip - window.start;
+      if (offset + boundedLimit <= window.commits.size() || window.complete) return slice(window, requestedAnchor);
+    }
+  }
+
   const auto root = runGit(repositoryPath,
                            {QStringLiteral("rev-parse"), QStringLiteral("--show-toplevel")});
   const auto head =
       runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
   if (head.isEmpty() && !allBranches && reference.isEmpty()) return {{}, {}, {}, true};
 
-  const auto boundedSkip = std::max(0, skip);
-  const auto boundedLimit = std::clamp(limit == 0 ? 50 : limit, 1, historyBatchLimit);
   QStringList tips;
   if (!requestedAnchor.isEmpty()) {
     tips = allBranches ? requestedAnchor.split(u'|', Qt::SkipEmptyParts) : QStringList{requestedAnchor};
@@ -554,14 +604,25 @@ HistoryPage GitService::readHistoryPage(const QString& repositoryPath, const int
   } else tips.append(head);
   if (tips.isEmpty()) return {{}, head, {}, true};
   const auto anchor = tips.join(u'|');
-  QStringList arguments{QStringLiteral("log"), QStringLiteral("--topo-order"),
-      QStringLiteral("--skip=%1").arg(boundedSkip), QStringLiteral("-n"), QString::number(boundedLimit),
-      QStringLiteral("--pretty=format:%H%x1f%h%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%aI%x1f%D%x1e")};
-  arguments.append(QStringLiteral("--stdin"));
+  const bool topo = topological || tips.size() > 1;
+  const auto key = keyFor(anchor);
+  const auto size = std::max(boundedLimit, topo ? HistoryCache::topologicalWindow : HistoryCache::dateWindow);
+  QStringList arguments{QStringLiteral("log")};
+  if (topo) arguments.append(QStringLiteral("--topo-order"));
+  arguments.append({QStringLiteral("--skip=%1").arg(boundedSkip), QStringLiteral("-n"), QString::number(size),
+      QStringLiteral("--pretty=format:%H%x1f%h%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%aI%x1f%D%x1e"),
+      QStringLiteral("--stdin")});
   const auto logText = runGit(root, arguments, {}, false, true, (tips.join(u'\n') + u'\n').toUtf8());
-  auto commits = parseHistoryPage(logText);
-  const auto endOfHistory = commits.size() < boundedLimit;
-  return {std::move(commits), head, anchor, endOfHistory};
+  HistoryCache::Window window{key, head, boundedSkip, parseHistoryPage(logText), false};
+  window.complete = window.commits.size() < size;
+  auto page = slice(window, anchor);
+  const std::scoped_lock lock(historyCache_->mutex);
+  historyCache_->windows.removeIf([&](const HistoryCache::Window& existing) {
+    return existing.key == key && existing.start == window.start;
+  });
+  historyCache_->windows.prepend(std::move(window));
+  while (historyCache_->windows.size() > HistoryCache::capacity) historyCache_->windows.removeLast();
+  return page;
 }
 
 CommitDetail GitService::readCommitDetail(const QString& repositoryPath,
