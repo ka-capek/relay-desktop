@@ -67,6 +67,56 @@ class MainWindowTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void paneWidthsSurviveRestartAndReset() {
+    QTemporaryDir temporary;
+    relay::RelayControllerConfig config;
+    config.storeFile = temporary.filePath(QStringLiteral("profile/relay-data.json"));
+    config.synchronizeAccountsOnStart = false;
+    QList<int> chosen;
+    {
+      relay::RelayController controller(config);
+      relay::MainWindow window(&controller);
+      window.resize(1250, 820);
+      window.show();
+      controller.start();
+      auto* workspace = window.findChild<QSplitter*>(QStringLiteral("workspaceSplitter"));
+      QVERIFY(workspace);
+      const auto total = workspace->sizes().value(0) + workspace->sizes().value(1);
+      workspace->setSizes({420, total - 420});
+      chosen = workspace->sizes();
+      window.close();
+    }
+    const auto stored = relay::RelayStore(config.storeFile).read()
+        .value(QStringLiteral("preferences")).toObject().value(QStringLiteral("layout")).toObject();
+    QVERIFY(stored.value(QStringLiteral("splitters")).toObject().contains(QStringLiteral("workspaceSplitter")));
+    QVERIFY(!stored.value(QStringLiteral("window")).toString().isEmpty());
+    // The offscreen platform's small virtual screen clamps a restored window,
+    // which would shrink the panes; check the splitters at the same size.
+    auto json = relay::RelayStore(config.storeFile).read();
+    auto preferences = json.value(QStringLiteral("preferences")).toObject();
+    auto layout = preferences.value(QStringLiteral("layout")).toObject();
+    layout.remove(QStringLiteral("window"));
+    preferences.insert(QStringLiteral("layout"), layout);
+    json.insert(QStringLiteral("preferences"), preferences);
+    relay::RelayStore(config.storeFile).write(json);
+
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.resize(1250, 820);
+    window.show();
+    controller.start();
+    auto* workspace = window.findChild<QSplitter*>(QStringLiteral("workspaceSplitter"));
+    QTRY_COMPARE(workspace->sizes().value(0), chosen.value(0));
+    // A settings change does not discard the saved layout.
+    controller.setPreferences(controller.state().preferences);
+    QCOMPARE(controller.state().preferences.layout, layout);
+
+    auto* reset = window.findChild<QAction*>(QStringLiteral("resetLayoutAction"));
+    QVERIFY(reset);
+    reset->trigger();
+    QVERIFY(workspace->sizes().value(0) < chosen.value(0));
+  }
+
   void browsesAllRemoteBranchesWithoutCheckout() {
     QTemporaryDir temporary;
     createRepository(temporary.path());

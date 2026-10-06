@@ -64,6 +64,9 @@ class RelayController final : public QObject {
   void start();
   void checkRuntimes();
   void setPreferences(relay::Preferences preferences);
+  // Saves window layout without publishing state: it changes nothing the
+  // views render, and a failed save is cosmetic.
+  void saveLayout(const QJsonObject& layout);
   void synchronizeAccounts();
   void connectAccount();
   void cancelAccountConnection();

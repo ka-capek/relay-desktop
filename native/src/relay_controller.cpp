@@ -174,6 +174,8 @@ void RelayController::setPreferences(Preferences preferences) {
   if (!themeError.isEmpty()) { emit operationFailed(QStringLiteral("settings"), themeError); return; }
   if (!theme::presetIds().contains(preferences.themeId)) preferences.themeId = QStringLiteral("light");
   preferences.diffFontSize = qBound(10, preferences.diffFontSize, 24);
+  // Layout is saved separately and is not part of a settings change.
+  preferences.layout = state_.preferences.layout;
   const auto previous = state_.preferences;
   state_.preferences = preferences;
   try {
@@ -183,6 +185,14 @@ void RelayController::setPreferences(Preferences preferences) {
     state_.preferences = previous;
     emit operationFailed(QStringLiteral("settings"), QString::fromUtf8(error.what()));
   }
+}
+
+void RelayController::saveLayout(const QJsonObject& layout) {
+  if (state_.preferences.layout == layout) return;
+  const auto previous = state_.preferences.layout;
+  state_.preferences.layout = layout;
+  try { persistState(); }
+  catch (const std::exception&) { state_.preferences.layout = previous; }
 }
 
 void RelayController::persistState() {

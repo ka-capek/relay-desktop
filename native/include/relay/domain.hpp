@@ -165,6 +165,9 @@ struct Preferences {
   bool graphHistory{};
   QString themeId{QStringLiteral("light")};
   QJsonObject customTheme;
+  // Window geometry and splitter states, saved by the window itself. Only
+  // RelayController::saveLayout() changes it.
+  QJsonObject layout;
 };
 
 struct AppState {

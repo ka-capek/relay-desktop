@@ -36,6 +36,7 @@
 #include <QScrollBar>
 #include <QShortcut>
 #include <QSignalBlocker>
+#include <QCloseEvent>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStandardPaths>
@@ -96,8 +97,54 @@ MainWindow::MainWindow(RelayController* controller, QWidget* parent)
   noticeTimer_ = new QTimer(this);
   noticeTimer_->setSingleShot(true);
   connect(noticeTimer_, &QTimer::timeout, this, &MainWindow::updateStatus);
+  // Save pane widths shortly after a drag ends rather than on every step.
+  layoutTimer_ = new QTimer(this);
+  layoutTimer_->setSingleShot(true);
+  layoutTimer_->setInterval(500);
+  connect(layoutTimer_, &QTimer::timeout, this, &MainWindow::saveLayout);
+  for (auto* splitter : findChildren<QSplitter*>()) {
+    if (splitter->objectName().isEmpty()) continue;
+    splitters_.append(splitter);
+    connect(splitter, &QSplitter::splitterMoved, layoutTimer_, qOverload<>(&QTimer::start));
+  }
+  // The sizes set while building the shell are what Reset Layout restores.
+  defaultLayout_ = captureLayout();
+  // Quit from the menu does not close the window first.
+  connect(qApp, &QCoreApplication::aboutToQuit, this, &MainWindow::saveLayout);
   connectController();
   theme::apply(*qApp);
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+  saveLayout();
+  QMainWindow::closeEvent(event);
+}
+
+QJsonObject MainWindow::captureLayout() const {
+  QJsonObject splitters;
+  for (const auto* splitter : splitters_)
+    splitters.insert(splitter->objectName(), QString::fromLatin1(splitter->saveState().toBase64()));
+  return {{QStringLiteral("window"), QString::fromLatin1(saveGeometry().toBase64())},
+          {QStringLiteral("splitters"), splitters}};
+}
+
+void MainWindow::restoreLayout(const QJsonObject& layout, const bool includeWindow) {
+  // restoreGeometry() and restoreState() reject malformed data themselves,
+  // so a damaged or foreign value leaves the default layout in place.
+  if (includeWindow) {
+    const auto window = layout.value(QStringLiteral("window")).toString();
+    if (!window.isEmpty()) restoreGeometry(QByteArray::fromBase64(window.toLatin1()));
+  }
+  const auto splitters = layout.value(QStringLiteral("splitters")).toObject();
+  for (auto* splitter : splitters_) {
+    const auto state = splitters.value(splitter->objectName()).toString();
+    if (!state.isEmpty()) splitter->restoreState(QByteArray::fromBase64(state.toLatin1()));
+  }
+}
+
+void MainWindow::saveLayout() {
+  layoutTimer_->stop();
+  if (layoutRestored_) controller_->saveLayout(captureLayout());
 }
 
 bool MainWindow::event(QEvent* event) {
@@ -209,6 +256,12 @@ void MainWindow::buildMenus() {
   view->addAction(tr("Toggle Full Screen"), QKeySequence::FullScreen, this, [this] {
     isFullScreen() ? showNormal() : showFullScreen();
   });
+  view->addSeparator();
+  auto* resetLayout = view->addAction(tr("Reset Layout"), this, [this] {
+    restoreLayout(defaultLayout_, false);
+    saveLayout();
+  });
+  resetLayout->setObjectName(QStringLiteral("resetLayoutAction"));
 
   auto* window = menuBar()->addMenu(tr("&Window"));
   window->addAction(tr("Minimize"), QKeySequence(tr("Ctrl+M")), this, &QWidget::showMinimized);
@@ -305,6 +358,7 @@ void MainWindow::buildShell() {
   layout->addWidget(conflictButton_);
 
   auto* workspace = new QSplitter(Qt::Horizontal, root);
+  workspace->setObjectName(QStringLiteral("workspaceSplitter"));
   workspace->setChildrenCollapsible(false);
   workspace->setHandleWidth(7);
   workspace->addWidget(buildSidebar(workspace));
@@ -901,6 +955,11 @@ void MainWindow::connectController() {
 }
 
 void MainWindow::applyState(const AppState& state) {
+  if (!layoutRestored_) {
+    // The first state is the stored one.
+    restoreLayout(state.preferences.layout, true);
+    layoutRestored_ = true;
+  }
   QString newlyConnected;
   if (accountConnectionPending_) {
     const auto iterator = std::find_if(
