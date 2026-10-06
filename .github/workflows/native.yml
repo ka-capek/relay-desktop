@@ -2,6 +2,11 @@ name: Native desktop validation
 
 on:
   workflow_dispatch:
+  # A version tag builds, tests and packages both platforms, then the
+  # release job publishes the installers as a prerelease.
+  push:
+    tags:
+      - 'v*'
   pull_request:
     paths:
       - 'native/**'
@@ -169,3 +174,45 @@ jobs:
             build-native/screenshots/
             build-native/preview-installers/*.log
           if-no-files-found: ignore
+
+  release:
+    name: Publish prerelease
+    needs: native
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches the project version
+        id: version
+        shell: bash
+        run: |
+          version=$(sed -n 's/^  VERSION \(.*\)$/\1/p' CMakeLists.txt)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match CMakeLists.txt version $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Relay-Native-*-installers
+          path: release
+          merge-multiple: true
+      - name: Create the prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd release
+          dmg="Relay-Native-$VERSION-arm64.dmg"
+          exe="Relay-Native-Setup-$VERSION-x64.exe"
+          for file in "$dmg" "$exe"; do
+            [ -f "$file" ] || { echo "Missing installer $file" >&2; ls -l >&2; exit 1; }
+          done
+          sha256sum "$dmg" "$exe" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" "$dmg" "$exe" SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease \
+            --title "Relay $VERSION" --generate-notes
