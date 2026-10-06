@@ -85,7 +85,7 @@ python3 native/tools/measure_release.py \
 ```
 
 Repeat for `repository-open`, `large-diff`, and `long-history`, on macOS and
-Windows, using the same fixtures for Electron and native Relay. macOS records
+Windows, using the same fixtures on both. macOS records
 `footprint` physical footprint and dirty memory. Windows records private bytes
 and working set through PowerShell. The JSON also records apparent/allocated
 installed size, artifact bytes and SHA-256, process details, machine/OS, UTC

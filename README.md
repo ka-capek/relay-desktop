@@ -1,34 +1,27 @@
 # Relay
 
 Relay is a small GitHub Desktop-style client focused on easy multi-account
-switching. Relay 0.5.0 is the shipping Electron client for Apple silicon Macs
-and 64-bit Windows. A C++26/Qt 6 native successor now lives alongside it under
-`native/`; the Electron client remains the parity specification until the
-native release passes its cross-platform stop/go gate.
+switching. It is a native C++26/Qt 6 application for Apple Silicon Macs and
+64-bit Windows.
+
+The earlier Electron client (Relay 0.5.0) is no longer maintained and has been
+removed from this repository. The native client uses the same data folder, so
+accounts, repositories and settings carry over with no new sign-in.
 
 ## Download
 
-Native preview: [**Relay 0.5.2 — C++ rewrite, installers and SSH identities**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.5.2)
-is a prerelease of the C++26/Qt client. Its Windows setup and macOS DMG require
-external Git >=2.35.0 and GitHub CLI >=2.98.0. They are unsigned (macOS uses
-ad-hoc signing), are not notarized, and do not bundle Git/gh. Real multi-account OAuth,
-private clone/fetch/push and publication still need installed-platform
-verification. Relay 0.5.0 remains the stable Electron release.
+[**Relay 0.5.3**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.5.3)
+is a prerelease. Its Windows setup and macOS DMG require external Git >=2.35.0
+and GitHub CLI >=2.98.0. They are unsigned (macOS uses ad-hoc signing), are not
+notarized, and do not bundle Git/gh. Real multi-account OAuth, private
+clone/fetch/push and publication still need installed-platform verification.
 
-Download the ready-to-use installers from the
-[latest GitHub release](https://github.com/ka-capek/relay-desktop/releases/latest):
+On macOS, right-click Relay Native in Applications and choose **Open** the
+first time; Windows SmartScreen may also ask for confirmation.
 
-- Windows 64-bit: `Relay-Setup-0.5.0-x64.exe`
-- macOS Apple Silicon: `Relay-0.5.0-arm64.dmg`
+## Installers and upgrades
 
-The builds are currently unsigned. On macOS, right-click Relay in Applications
-and choose **Open** the first time; Windows SmartScreen may also ask for
-confirmation. The macOS app is ad-hoc signed during packaging, which is what
-stops Apple Silicon reporting it as damaged.
-
-## Native installers and upgrades (0.5.2 onward)
-
-Native prereleases provide a Windows **Relay-Native-Setup-<version>-x64.exe**
+Prereleases provide a Windows **Relay-Native-Setup-<version>-x64.exe**
 and an Apple Silicon **Relay-Native-<version>-arm64.dmg**. These are unsigned
 preview distributions with external Git and GitHub CLI, as described above.
 
@@ -47,28 +40,16 @@ Electron `Relay.app`. No uninstall is needed. Account settings, CLI credentials
 and repositories live outside the application and are preserved on both systems.
 There is no background update download: run each new installer yourself.
 
-## Prerequisites
-
-- Node.js `>=22.13.0` (development only)
-- Git and the official GitHub CLI when running from source
-
-## Quick Start
-
-```bash
-npm install
-npm run desktop:open
-```
-
-## Install the native client on Apple Silicon
+## Install from source on Apple Silicon
 
 On macOS 14 or newer, download and run the installer:
 
 ```bash
-curl -fL https://raw.githubusercontent.com/ka-capek/relay-desktop/codex/native-completion/native/tools/install-macos.sh -o /tmp/relay-install-macos.sh
+curl -fL https://raw.githubusercontent.com/ka-capek/relay-desktop/main/native/tools/install-macos.sh -o /tmp/relay-install-macos.sh
 bash /tmp/relay-install-macos.sh
 ```
 
-It prepares Homebrew dependencies, downloads the current native branch, builds
+It prepares Homebrew dependencies, downloads `main`, builds
 with LLVM 20 and Qt 6.11.1, deploys Qt, verifies a local signature and startup,
 and installs `~/Applications/Relay Native.app`. It opens the app on completion;
 use `--no-open` to skip that. Homebrew may request your macOS password. If Xcode
@@ -84,7 +65,7 @@ This is a local source build, not a notarized distribution.
 To install an existing checkout, run `bash native/tools/install-macos.sh --source "$PWD"`; `--qt-dir /path/to/Qt/6.11.1/macos` reuses an existing SDK.
 `--skip-deps` is available when the required Homebrew tools are already present.
 
-## Install the native client on Windows x64
+## Install from source on Windows x64
 
 From an existing checkout, run in x64 PowerShell:
 
@@ -108,10 +89,10 @@ Repository files and account settings are not modified by installation.
 Omit `-NoOpen` to launch after installation. `-Source` selects another checkout;
 `-InstallDirectory` selects a separate application directory. Keep Git and gh
 installed: they are external dependencies. This is an unsigned local source
-build, not the published Electron installer. The new Windows installer still
-needs its own native CI run; see the [completion record](docs/native-completion-2026-09-14.md).
+build, not a signed release. See the
+[completion record](docs/native-completion-2026-09-14.md) for verification status.
 
-## Native first-run setup
+## First-run setup
 
 Relay checks Git and GitHub CLI on startup without signing in. Missing or old
 tools produce a persistent banner with installation guidance. Choose **Check
@@ -123,7 +104,7 @@ Windows also checks the standard Git and GitHub CLI installation directories
 when an already-running app has an old PATH. A custom installation directory
 must already be on the app's PATH; otherwise restart after updating PATH.
 
-## Native sync, diff sizing and SSH selection
+## Sync, diff sizing and SSH selection
 
 Use the arrow beside the toolbar sync button to choose **Fetch origin**,
 **Pull origin** or **Push origin** directly. Pull fetches first and then
@@ -143,7 +124,7 @@ For GitHub, use a remote such as git@github.com:owner/repo.git and a profile
 with host github.com and user git. Clone, fetch, pull and push use that key;
 HTTPS remotes continue to use the selected GitHub OAuth account.
 
-## Native branches and ordinary Git operations
+## Branches and ordinary Git operations
 
 The current-branch picker lists local and fetched remote-tracking branches.
 Selecting a remote branch checks it out as a local tracking branch. In History,
@@ -164,7 +145,7 @@ oldest to newest in displayed history order (up to 200). A conflicting series
 can be continued, skipped, or aborted as one operation. Merge commits use their
 first-parent changes. Force push and deleting remote branches remain CLI tasks.
 
-## Native Gitea, Forgejo and GitLab accounts
+## Gitea, Forgejo and GitLab accounts
 
 Open the account menu → **Gitea / GitLab accounts and repositories…**.
 Choose the server type and HTTPS server address (GitLab.com or a self-hosted
@@ -191,7 +172,7 @@ The Linux development harness uses an injected test vault; no plaintext
 credential fallback is provided. Real account login and private operations
 still need installed-platform testing against your own server.
 
-## Native themes and branch graph
+## Themes and branch graph
 
 Open Settings (`⌘,` on macOS) → **Appearance** to choose **Light**, **Dark**,
 **Catppuccin Latte**, or **Catppuccin Mocha**. Save applies the theme immediately
@@ -231,7 +212,7 @@ with darker Latte status/graph colors for readability. Chevron icons come from
 [Lucide](https://github.com/lucide-icons/lucide). Their licenses are included in
 the application resources.
 
-## Native C++26 development
+## Building from source
 
 The native client requires CMake 3.30+, Ninja, and the pinned Qt 6.11.1 with
 Core, Gui, Widgets, Network, Svg, Concurrent, and Test. Qt is dynamically
@@ -257,8 +238,8 @@ LLVM 20 installed under `%ProgramFiles%/LLVM`, and the Qt MSVC 2022 x64 build.
 directory when changing compilers. Build artifacts stay under ignored
 `build-native/` directories.
 
-The native client deliberately reuses Electron's public metadata and GitHub CLI
-locations, including `relay-data.json` and the sibling `github-cli/` directory.
+Relay keeps the public metadata and GitHub CLI locations used since 0.5.0,
+including `relay-data.json` and the sibling `github-cli/` directory.
 Startup still clears the selected repository, credentials remain in `gh`'s OS
 credential store, and the C++ presentation layer never receives a token.
 
@@ -267,9 +248,8 @@ Measurements and the exact commands used to collect them are recorded in
 
 The [current native implementation and verification status](docs/native-completion-2026-09-14.md)
 records the source changes, independent reviews and remaining release gates.
-The native successor is not yet a verified replacement release.
 
-Native development builds include application-menu **Settings**, multi-account
+Development builds include application-menu **Settings**, multi-account
 management and repository bindings, configurable diff text size and local Git
 identity. History defaults to a normal commit list; Settings can switch to an
 all-branch graph. Both modes share commit details and text/image previews.
@@ -287,16 +267,6 @@ installer passed for commit `ca05c2b` in [run 34118316989](https://github.com/ka
 The latest local changes extend that workflow to validate the Windows source
 installer and retain downloadable source-build artifacts for both platforms.
 Those additions require a new CI run; earlier results do not validate them.
-
-## Desktop builds
-
-Release installers bundle their own Git and GitHub CLI runtimes. Those
-third-party binaries are intentionally excluded from Git history; local release
-packaging expects them under `runtime/git` and `runtime/gh`.
-
-- `npm run desktop:mac` builds an Apple silicon DMG.
-- `npm run desktop:windows` builds a Windows x64 installer.
-- `npm run desktop:release` builds both.
 
 ## GitHub sign-in
 
@@ -336,9 +306,8 @@ hash, and open the commit on GitHub when `origin` is a GitHub remote.
 
 ## Non-GitHub hosts over SSH
 
-Relay's accounts are GitHub.com identities. For any other Git host, add an
-**SSH identity** under **Repository account settings** and bind it to a
-repository, or choose one while cloning an SSH URL.
+For any Git host, add an **SSH identity** and select it for a repository from
+the account menu, or choose one while cloning an SSH URL.
 
 If your SSH agent and `~/.ssh/config` already work, you need none of this;
 Relay changes nothing by default. An identity is only useful when the default

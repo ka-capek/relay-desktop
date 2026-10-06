@@ -11,7 +11,7 @@
 
 namespace relay {
 
-// Native port of electron/git-service.cjs. The methods are synchronous because
+// Git operations run as child processes. The methods are synchronous because
 // a repository read is a composition of several child processes; callers must
 // invoke them from a worker thread (or wrap them in QtConcurrent) rather than
 // block the GUI thread.

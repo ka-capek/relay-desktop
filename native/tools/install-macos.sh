@@ -15,7 +15,7 @@ Install Relay Native on an Apple Silicon Mac (macOS 14 or newer).
 Usage: bash install-macos.sh [--no-open] [--source DIRECTORY]
                             [--qt-dir DIRECTORY] [--skip-deps]
 
-By default, downloads codex/native-completion from ka-capek/relay-desktop,
+By default, downloads main from ka-capek/relay-desktop,
 installs build dependencies through Homebrew, builds with Qt 6.11.1, and
 installs ~/Applications/Relay Native.app. Existing apps are backed up.
 
@@ -116,9 +116,9 @@ fi
 qt_dir=$(cd "$qt_dir" && pwd -P)
 [ -x "$qt_dir/bin/macdeployqt" ] || fail 'The Qt SDK must contain macdeployqt.'
 if [ -z "$source_dir" ]; then
-  info 'Downloading Relay source (codex/native-completion).'
+  info 'Downloading Relay source (main).'
   source_dir="$work/source"
-  git clone --depth 1 --branch codex/native-completion \
+  git clone --depth 1 --branch main \
     https://github.com/ka-capek/relay-desktop.git "$source_dir"
 fi
 source_dir=$(cd "$source_dir" && pwd -P)
