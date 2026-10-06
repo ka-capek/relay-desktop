@@ -17,6 +17,20 @@ class GitHubApiTest final : public QObject {
     QVERIFY_THROWS_EXCEPTION(std::runtime_error, relay::GitHubApi::newRepositoryPayload(QStringLiteral("valid"), QString(351, u'x'), false));
   }
 
+  void repositoryCreationFailuresUseRelayMessages() {
+    const auto handle = QStringLiteral("octo");
+    const auto name = QStringLiteral("example");
+    for (const auto status : {500, 502, 503}) {
+      const auto message = relay::GitHubApi::repositoryCreationError(status, handle, name);
+      QVERIFY(message.contains(QStringLiteral("Creation may have succeeded")));
+      QVERIFY(message.contains(QStringLiteral("https://github.com/octo/example")));
+    }
+    QCOMPARE(relay::GitHubApi::repositoryCreationError(401, handle, name), QStringLiteral("Sign in again before publishing."));
+    QVERIFY(relay::GitHubApi::repositoryCreationError(422, handle, name).contains(QStringLiteral("already exist")));
+    QVERIFY(relay::GitHubApi::repositoryCreationError(404, handle, name).contains(QStringLiteral("(404)")));
+    QVERIFY(!relay::GitHubApi::repositoryCreationError(404, handle, name).contains(QStringLiteral("may have succeeded")));
+  }
+
   void alwaysOffersNoreplyAndVerifiedEmails() {
     relay::Account account;
     account.githubId = 42;

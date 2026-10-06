@@ -487,6 +487,48 @@ esac
              QStringLiteral("Personal Identity|personal@example.test|Personal Identity|personal@example.test"));
   }
 
+  void invalidPublicationLeavesTheRepositoryUnbound() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const auto path = root.filePath(QStringLiteral("local folder"));
+    QVERIFY(QDir().mkpath(path));
+    initRepository(path);
+    writeFile(QDir(path).filePath(QStringLiteral("file.txt")), QByteArrayLiteral("initial\n"));
+    runGit(path, {QStringLiteral("add"), QStringLiteral(".")});
+    runGit(path, {QStringLiteral("-c"), QStringLiteral("user.name=Fixture"), QStringLiteral("-c"),
+                  QStringLiteral("user.email=fixture@example.test"), QStringLiteral("commit"),
+                  QStringLiteral("-qm"), QStringLiteral("initial")});
+
+    const auto config = controllerConfig(root);
+    relay::Account account;
+    account.id = QStringLiteral("github-1");
+    account.githubId = 1;
+    account.handle = QStringLiteral("fixture");
+    account.email = QStringLiteral("fixture@example.test");
+    account.authSource = QStringLiteral("github-cli");
+    relay::AppState state;
+    state.accounts = {account};
+    state.activeAccountId = account.id;
+    seedState(config, state);
+
+    relay::RelayController controller(config);
+    controller.start();
+    QSignalSpy changed(&controller, &relay::RelayController::currentRepositoryChanged);
+    QSignalSpy failures(&controller, &relay::RelayController::operationFailed);
+    controller.openRepository(path);
+    QVERIFY(changed.wait(5000));
+    QVERIFY(controller.state().repositoryAccounts.isEmpty());
+
+    // The dialog's default is the local folder name, which here has a space.
+    failures.clear();
+    controller.publishRepository(QStringLiteral("local folder"), {}, true, account.id);
+    QCOMPARE(failures.size(), 1);
+    QCOMPARE(failures.last().at(0).toString(), QStringLiteral("publish-repository"));
+    QVERIFY(controller.state().repositoryAccounts.isEmpty());
+    QVERIFY(relay::RelayStore(config.storeFile).read().value(QStringLiteral("repositoryAccounts"))
+                .toObject().isEmpty());
+  }
+
   void supersededAccountRepositoryFailureIsIgnored() {
     QTemporaryDir root;
     QVERIFY(root.isValid());

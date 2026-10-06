@@ -141,6 +141,18 @@ QJsonObject GitHubApi::newRepositoryPayload(const QString& name, const QString& 
           {QStringLiteral("private"), isPrivate}, {QStringLiteral("auto_init"), false}};
 }
 
+QString GitHubApi::repositoryCreationError(const int status, const QString& handle, const QString& name) {
+  if (status >= 500)
+    return QStringLiteral("GitHub reported a server error (%1). Creation may have succeeded. Check https://github.com/%2/%3 before retrying.")
+        .arg(status).arg(handle, name);
+  switch (status) {
+    case 401: return QStringLiteral("Sign in again before publishing.");
+    case 403: return QStringLiteral("GitHub refused to create the repository. Check that this account may create repositories, then try again.");
+    case 422: return QStringLiteral("GitHub did not accept the repository. A repository with that name may already exist on this account.");
+    default: return QStringLiteral("GitHub could not create the repository (%1).").arg(status);
+  }
+}
+
 QString GitHubApi::createRepository(const QString& token, const QString& handle, const QString& name,
                                     const QString& description, const bool isPrivate) const {
   const auto payload = newRepositoryPayload(name, description, isPrivate);
@@ -154,7 +166,7 @@ QString GitHubApi::createRepository(const QString& token, const QString& handle,
         .arg(handle, name, QString::fromUtf8(failure.what())).toStdString());
   }
   if (response.status != 201)
-    throw std::runtime_error(githubError(response.status, response.body, QStringLiteral("Sign in again before publishing.")).toStdString());
+    throw std::runtime_error(repositoryCreationError(response.status, handle, name).toStdString());
   if (!response.body.isObject())
     throw std::runtime_error("The repository was created but GitHub returned an unexpected response. Check your repositories on GitHub before retrying.");
   const auto remote = response.body.object().value(QStringLiteral("clone_url")).toString();

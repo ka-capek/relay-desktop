@@ -23,6 +23,10 @@ class GitHubApi final {
 
   [[nodiscard]] QString createRepository(const QString& token, const QString& handle,
       const QString& name, const QString& description, bool isPrivate) const;
+  // Relay's own message for a repository-creation response other than 201.
+  // A server error may arrive after GitHub created the repository.
+  [[nodiscard]] static QString repositoryCreationError(int status, const QString& handle,
+                                                       const QString& name);
   [[nodiscard]] static QJsonObject newRepositoryPayload(const QString& name,
       const QString& description, bool isPrivate);
   static QString noreplyAddress(const Account& account);

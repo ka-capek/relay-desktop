@@ -197,6 +197,10 @@ class GitServiceTest final : public QObject {
     QVERIFY(github.contains("username=$(echo injected)"));
     QVERIFY(!ask(QByteArrayLiteral("protocol=https\nhost=example.test\n\n")).contains("test-token"));
     QVERIFY(!ask(QByteArrayLiteral("protocol=http\nhost=github.com\n\n")).contains("test-token"));
+    // Git passes the host in the URL's own case.
+    QVERIFY(ask(QByteArrayLiteral("protocol=https\nhost=GitHub.com\n\n")).contains("password=test-token"));
+    QVERIFY(!ask(QByteArrayLiteral("protocol=https\nhost=github.com.example.test\n\n")).contains("test-token"));
+    QVERIFY(!ask(QByteArrayLiteral("protocol=https\nhost=notgithub.com\n\n")).contains("test-token"));
   }
 
   void fetchesAllOriginBranchesFromSingleBranchClone() {

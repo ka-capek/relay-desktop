@@ -899,6 +899,13 @@ void RelayController::publishRepository(const QString& name, const QString& desc
     emit operationFailed(QStringLiteral("publish-repository"), tr("Select a GitHub account and create an initial commit in a repository without an origin remote."));
     return;
   }
+  // Reject an invalid name or description before pinning the repository to
+  // this account, so a publish that never reaches GitHub leaves no binding.
+  try { static_cast<void>(GitHubApi::newRepositoryPayload(name, description, isPrivate)); }
+  catch (const std::exception& failure) {
+    emit operationFailed(QStringLiteral("publish-repository"), QString::fromUtf8(failure.what()));
+    return;
+  }
   const auto identity = *selected;
   const auto path = currentRepository_->path;
   state_.repositoryAccounts.insert(path, identity.id);

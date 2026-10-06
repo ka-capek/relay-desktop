@@ -852,11 +852,14 @@ void GitService::commitFiles(const QString& repositoryPath, const QStringList& f
 QString GitService::githubCredentialHelper() {
   // Git may rewrite a URL or follow a redirect. Gate credentials on the host
   // Git actually asks for, and keep all account values out of shell source.
+  // Git passes the host with the URL's own case, so match it case-insensitively
+  // in plain shell, which behaves the same in Git for Windows' sh.
   return QStringLiteral(
       "!f() { [ \"$1\" = get ] || return 0; protocol=; host=; while IFS='=' read -r key value; do "
       "case \"$key\" in protocol) protocol=$value;; host) host=$value;; esac; done; "
-      "if [ \"$protocol\" = https ] && [ \"$host\" = github.com ]; then "
-      "printf '%s\\n' \"username=$RELAY_GIT_USERNAME\" \"password=$RELAY_GIT_TOKEN\"; fi; }; f");
+      "[ \"$protocol\" = https ] || return 0; "
+      "case \"$host\" in [Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm]) "
+      "printf '%s\\n' \"username=$RELAY_GIT_USERNAME\" \"password=$RELAY_GIT_TOKEN\";; esac; }; f");
 }
 
 void GitService::fetchOrigin(const QString& repositoryPath, const QString& token,
