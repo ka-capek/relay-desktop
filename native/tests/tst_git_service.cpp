@@ -520,6 +520,25 @@ class GitServiceTest final : public QObject {
     QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.pushOrigin(root.path()));
   }
 
+  void oversizedDiffIsAPreviewMessageNotAnError() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    const auto path = QDir(root.path()).filePath(QStringLiteral("large.txt"));
+    writeFile(path, QByteArrayLiteral("small\n"));
+    commitAll(root.path(), QStringLiteral("Small file"));
+    QByteArray large;
+    const QByteArray line(79, 'x');
+    while (large.size() < 25 * 1024 * 1024) large += line + '\n';
+    writeFile(path, large);
+    relay::GitService service;
+    QCOMPARE(service.getFileDiff(root.path(), QStringLiteral("large.txt")),
+             QStringLiteral("Diff is too large to preview (limit: 20 MiB)."));
+    commitAll(root.path(), QStringLiteral("Large file"));
+    const auto head = runGit(root.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    QCOMPARE(service.readCommitFileDiff(root.path(), head, QStringLiteral("large.txt")),
+             QStringLiteral("Diff is too large to preview (limit: 20 MiB)."));
+  }
+
   void signsCommitsWithTheAccountSshKey() {
     const auto keygen = QStandardPaths::findExecutable(QStringLiteral("ssh-keygen"));
     if (keygen.isEmpty()) QSKIP("ssh-keygen is not available.");

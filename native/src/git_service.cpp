@@ -20,6 +20,10 @@ namespace relay {
 namespace {
 
 constexpr qsizetype maximumGitOutputBytes = 20 * 1024 * 1024;
+
+QString diffTooLargeMessage() {
+  return QStringLiteral("Diff is too large to preview (limit: 20 MiB).");
+}
 constexpr qsizetype maximumUntrackedStatBytes = 2 * 1024 * 1024;
 
 struct RepositoryIdentity {
@@ -809,7 +813,12 @@ QString GitService::readCommitFileDiff(const QString& repositoryPath,
   }
   arguments.push_back(QStringLiteral("--"));
   arguments.append(paths);
-  return runGit(root, arguments, {}, true);
+  try {
+    return runGit(root, arguments, {}, true);
+  } catch (const ProcessError& error) {
+    if (error.isOutputLimit()) return diffTooLargeMessage();
+    throw;
+  }
 }
 
 QString GitService::getFileDiff(const QString& repositoryPath, const QString& filePath) const {
@@ -849,7 +858,13 @@ QString GitService::getFileDiff(const QString& repositoryPath, const QString& fi
                         head.isEmpty() ? QStringLiteral("--cached") : QStringLiteral("HEAD"),
                         QStringLiteral("--no-ext-diff"), QStringLiteral("--unified=3"),
                         QStringLiteral("--"), filePath};
-  return runGit(repositoryPath, arguments, {}, true);
+  try {
+    return runGit(repositoryPath, arguments, {}, true);
+  } catch (const ProcessError& error) {
+    // Shown in place of the diff, like the untracked-file limit above.
+    if (error.isOutputLimit()) return diffTooLargeMessage();
+    throw;
+  }
 }
 
 FilePreview GitService::readFilePreview(const QString& root, const QString& path, const QString& commit) const {

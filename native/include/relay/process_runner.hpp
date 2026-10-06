@@ -39,6 +39,9 @@ class ProcessError final : public std::runtime_error {
 
   [[nodiscard]] const QString& qMessage() const noexcept;
   [[nodiscard]] const ProcessResult& result() const noexcept;
+  // The process was stopped because its output passed the request's limit.
+  [[nodiscard]] bool isOutputLimit() const noexcept;
+  static QString outputLimitMessage();
 
  private:
   QString message_;
