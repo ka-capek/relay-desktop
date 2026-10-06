@@ -16,7 +16,9 @@
 #include <QDesktopServices>
 #include <QDialogButtonBox>
 #include <QEvent>
+#include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -36,6 +38,7 @@
 #include <QScrollBar>
 #include <QShortcut>
 #include <QSignalBlocker>
+#include <QCloseEvent>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStandardPaths>
@@ -96,8 +99,54 @@ MainWindow::MainWindow(RelayController* controller, QWidget* parent)
   noticeTimer_ = new QTimer(this);
   noticeTimer_->setSingleShot(true);
   connect(noticeTimer_, &QTimer::timeout, this, &MainWindow::updateStatus);
+  // Save pane widths shortly after a drag ends rather than on every step.
+  layoutTimer_ = new QTimer(this);
+  layoutTimer_->setSingleShot(true);
+  layoutTimer_->setInterval(500);
+  connect(layoutTimer_, &QTimer::timeout, this, &MainWindow::saveLayout);
+  for (auto* splitter : findChildren<QSplitter*>()) {
+    if (splitter->objectName().isEmpty()) continue;
+    splitters_.append(splitter);
+    connect(splitter, &QSplitter::splitterMoved, layoutTimer_, qOverload<>(&QTimer::start));
+  }
+  // The sizes set while building the shell are what Reset Layout restores.
+  defaultLayout_ = captureLayout();
+  // Quit from the menu does not close the window first.
+  connect(qApp, &QCoreApplication::aboutToQuit, this, &MainWindow::saveLayout);
   connectController();
   theme::apply(*qApp);
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+  saveLayout();
+  QMainWindow::closeEvent(event);
+}
+
+QJsonObject MainWindow::captureLayout() const {
+  QJsonObject splitters;
+  for (const auto* splitter : splitters_)
+    splitters.insert(splitter->objectName(), QString::fromLatin1(splitter->saveState().toBase64()));
+  return {{QStringLiteral("window"), QString::fromLatin1(saveGeometry().toBase64())},
+          {QStringLiteral("splitters"), splitters}};
+}
+
+void MainWindow::restoreLayout(const QJsonObject& layout, const bool includeWindow) {
+  // restoreGeometry() and restoreState() reject malformed data themselves,
+  // so a damaged or foreign value leaves the default layout in place.
+  if (includeWindow) {
+    const auto window = layout.value(QStringLiteral("window")).toString();
+    if (!window.isEmpty()) restoreGeometry(QByteArray::fromBase64(window.toLatin1()));
+  }
+  const auto splitters = layout.value(QStringLiteral("splitters")).toObject();
+  for (auto* splitter : splitters_) {
+    const auto state = splitters.value(splitter->objectName()).toString();
+    if (!state.isEmpty()) splitter->restoreState(QByteArray::fromBase64(state.toLatin1()));
+  }
+}
+
+void MainWindow::saveLayout() {
+  layoutTimer_->stop();
+  if (layoutRestored_) controller_->saveLayout(captureLayout());
 }
 
 bool MainWindow::event(QEvent* event) {
@@ -209,6 +258,12 @@ void MainWindow::buildMenus() {
   view->addAction(tr("Toggle Full Screen"), QKeySequence::FullScreen, this, [this] {
     isFullScreen() ? showNormal() : showFullScreen();
   });
+  view->addSeparator();
+  auto* resetLayout = view->addAction(tr("Reset Layout"), this, [this] {
+    restoreLayout(defaultLayout_, false);
+    saveLayout();
+  });
+  resetLayout->setObjectName(QStringLiteral("resetLayoutAction"));
 
   auto* window = menuBar()->addMenu(tr("&Window"));
   window->addAction(tr("Minimize"), QKeySequence(tr("Ctrl+M")), this, &QWidget::showMinimized);
@@ -305,6 +360,7 @@ void MainWindow::buildShell() {
   layout->addWidget(conflictButton_);
 
   auto* workspace = new QSplitter(Qt::Horizontal, root);
+  workspace->setObjectName(QStringLiteral("workspaceSplitter"));
   workspace->setChildrenCollapsible(false);
   workspace->setHandleWidth(7);
   workspace->addWidget(buildSidebar(workspace));
@@ -579,9 +635,9 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   auto* leftLayout = new QVBoxLayout(left);
   leftLayout->setContentsMargins(0, 0, 0, 0);
   historySearch_ = new QLineEdit(left);
-  historySearch_->setPlaceholderText(tr("Search loaded history"));
+  historySearch_->setPlaceholderText(tr("Search history"));
   historySearch_->setClearButtonEnabled(true);
-  historySearch_->setAccessibleName(tr("Search loaded commits"));
+  historySearch_->setAccessibleName(tr("Search commits"));
   auto* historyTools = new QHBoxLayout;
   historyTools->setContentsMargins(8, 6, 8, 6);
   historyMode_ = new QComboBox(left);
@@ -696,6 +752,27 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
 
   connect(historyModel_, &QAbstractItemModel::modelAboutToBeReset, this, &MainWindow::clearCommitDetail);
   connect(historySearch_, &QLineEdit::textChanged, historyModel_, &HistoryCommitListModel::setSearch);
+  // Loaded commits filter as you type; once typing pauses, Git searches the
+  // rest of the history if it is not all loaded.
+  historySearchTimer_ = new QTimer(this);
+  historySearchTimer_->setSingleShot(true);
+  historySearchTimer_->setInterval(400);
+  connect(historySearch_, &QLineEdit::textChanged, historySearchTimer_, qOverload<>(&QTimer::start));
+  connect(historySearchTimer_, &QTimer::timeout, this, [this] {
+    if (!repository_) return;
+    const auto query = historySearch_->text().trimmed();
+    const auto reference = historyBranch_->currentData().toString();
+    if (query.isEmpty()) {
+      if (historyModel_->showingSearchResults()) {
+        historyModel_->clear();
+        clearCommitDetail();
+        controller_->requestHistory(0, 50, {}, reference);
+      }
+      return;
+    }
+    if (historyModel_->endOfHistory() && !historyModel_->showingSearchResults()) return;
+    controller_->searchHistory(query, reference);
+  });
   connect(historyList_->selectionModel(), &QItemSelectionModel::currentChanged, this, [this](const QModelIndex& index) {
     clearCommitDetail();
     if (const auto* commit = historyModel_->commitAt(index.row())) controller_->requestCommitDetail(commit->fullHash);
@@ -732,6 +809,24 @@ void MainWindow::connectController() {
   });
   connect(controller_, &RelayController::busyChanged, this, [this](const QString& operation, bool busy) {
     if (operation == QStringLiteral("runtime-check")) runtimeRetry_->setEnabled(!busy);
+  });
+  connect(controller_, &RelayController::pullDiverged, this, [this](const QString& path, const QString& upstream) {
+    if (!repository_ || repository_->path != path) return;
+    const auto shortName = upstream.mid(QStringLiteral("refs/remotes/").size());
+    QMessageBox box(QMessageBox::Question, tr("Pull origin"),
+        tr("%1 and %2 both have new commits, so a fast-forward is not possible.")
+            .arg(repository_->branch, shortName), QMessageBox::Cancel, this);
+    box.setObjectName(QStringLiteral("pullDivergedDialog"));
+    box.setInformativeText(tr("Merge creates a merge commit. Rebase replays your local commits on top of %1 "
+                              "and is only possible while they have not been pushed.").arg(shortName));
+    auto* merge = box.addButton(tr("Merge"), QMessageBox::AcceptRole);
+    merge->setObjectName(QStringLiteral("pullMergeButton"));
+    auto* rebase = box.addButton(tr("Rebase"), QMessageBox::AcceptRole);
+    rebase->setObjectName(QStringLiteral("pullRebaseButton"));
+    box.setDefaultButton(merge);
+    box.exec();
+    if (box.clickedButton() == merge) controller_->executeRepositoryAction(RepositoryAction::mergeBranch, upstream);
+    else if (box.clickedButton() == rebase) controller_->executeRepositoryAction(RepositoryAction::rebaseBranch, upstream);
   });
   connect(controller_, &RelayController::commitCreated, this, [this](const QString& path) {
     commitDrafts_.remove(path);
@@ -785,9 +880,18 @@ void MainWindow::connectController() {
   connect(controller_, &RelayController::historyReady, this,
           [this](const QString& repositoryPath, const HistoryPage& page) {
             if (!repository_ || repository_->path != repositoryPath) return;
-            if (historyModel_->anchor().isEmpty() || historyModel_->anchor() != page.anchor)
+            if (historyModel_->anchor().isEmpty() || historyModel_->anchor() != page.anchor) {
               historyModel_->resetPage(page);
-            else static_cast<void>(historyModel_->appendPage(page));
+              // A reload replaces search results; search the new history again.
+              if (!historySearch_->text().trimmed().isEmpty() && !page.endOfHistory) historySearchTimer_->start();
+            } else static_cast<void>(historyModel_->appendPage(page));
+          });
+  connect(controller_, &RelayController::historySearchReady, this,
+          [this](const QString& repositoryPath, const QString& query, const QList<HistoryCommit>& commits, const bool truncated) {
+            if (!repository_ || repository_->path != repositoryPath || query != historySearch_->text().trimmed()) return;
+            historyModel_->showSearchResults(commits);
+            clearCommitDetail();
+            if (truncated) showNotice(tr("Showing the newest %1 matching commits.").arg(commits.size()));
           });
   connect(controller_, &RelayController::commitDetailReady, this,
           [this](const QString& repositoryPath, const CommitDetail& detail) {
@@ -798,7 +902,8 @@ void MainWindow::connectController() {
             historyTitle_->setText(detail.title);
             historyMetadata_->setText(tr("%1 <%2> · committed by %3 <%4> · %5")
                 .arg(detail.author, detail.authorEmail, detail.committer, detail.committerEmail,
-                     QLocale().toString(detail.committerDate.toLocalTime(), QLocale::ShortFormat)));
+                     QLocale().toString(detail.committerDate.toLocalTime(), QLocale::ShortFormat))
+                + (detail.isSigned ? tr(" · Signed") : QString{}));
             historyBody_->setText(detail.body);
             commitFileModel_->setFiles(detail.files);
             copyHashButton_->setEnabled(true);
@@ -901,6 +1006,11 @@ void MainWindow::connectController() {
 }
 
 void MainWindow::applyState(const AppState& state) {
+  if (!layoutRestored_) {
+    // The first state is the stored one.
+    restoreLayout(state.preferences.layout, true);
+    layoutRestored_ = true;
+  }
   QString newlyConnected;
   if (accountConnectionPending_) {
     const auto iterator = std::find_if(
@@ -920,7 +1030,7 @@ void MainWindow::applyState(const AppState& state) {
   { const QSignalBlocker blocker(historyMode_); historyMode_->setCurrentIndex(state.preferences.graphHistory ? 1 : 0); }
   historyModel_->setGraphEnabled(state.preferences.graphHistory);
   historySearch_->setPlaceholderText(state.preferences.graphHistory
-      ? tr("Filter commits (hides graph)") : tr("Search loaded history"));
+      ? tr("Search history (hides graph)") : tr("Search history"));
   if (historyModeChanged) {
     updateHistoryBranches();
     historyModel_->clear();
@@ -1015,8 +1125,11 @@ void MainWindow::applyRepository(const Repository& repository) {
     for (const auto& branch : repository.branches)
       branchPicker_->addItem(branch, QStringLiteral("refs/heads/") + branch);
     if (!repository.branches.contains(repository.branch)) branchPicker_->addItem(repository.branch, QStringLiteral("refs/heads/") + repository.branch);
+    // A remote branch with a local namesake would only switch to that local
+    // branch, which is already listed above.
     for (const auto& branch : repository.remoteBranches)
-      branchPicker_->addItem(tr("Remote · %1").arg(branch), QStringLiteral("refs/remotes/") + branch);
+      if (!repository.branches.contains(branch.mid(branch.indexOf(u'/') + 1)))
+        branchPicker_->addItem(tr("Remote · %1").arg(branch), QStringLiteral("refs/remotes/") + branch);
     branchPicker_->setCurrentIndex(branchPicker_->findData(QStringLiteral("refs/heads/") + repository.branch));
   }
   const auto* previousFile = changedFileModel_->fileAt(changedFileList_->currentIndex().row());
@@ -1073,6 +1186,24 @@ void MainWindow::rebuildAccountMenu() {
   for (const auto& account : appState_.accounts) {
     emails->addAction(QStringLiteral("@%1 — %2").arg(account.handle, account.email), this,
                       [this, id = account.id] { showAccountEmailDialog(id); });
+  }
+  auto* signing = accountMenu_->addMenu(tr("Commit signing"));
+  signing->setObjectName(QStringLiteral("commitSigningMenu"));
+  signing->setEnabled(!appState_.accounts.isEmpty());
+  for (const auto& account : appState_.accounts) {
+    auto* menu = signing->addMenu(account.signingKey.isEmpty()
+        ? tr("@%1 — Git configuration").arg(account.handle)
+        : tr("@%1 — %2").arg(account.handle, QFileInfo(account.signingKey).fileName()));
+    menu->addAction(tr("Sign with SSH key…"), this, [this, id = account.id, current = account.signingKey] {
+      const auto start = current.isEmpty() ? QDir::home().filePath(QStringLiteral(".ssh")) : QFileInfo(current).absolutePath();
+      const auto path = QFileDialog::getOpenFileName(this, tr("SSH signing key"), start);
+      if (!path.isEmpty()) controller_->setAccountSigningKey(id, path);
+    });
+    auto* follow = menu->addAction(tr("Follow Git configuration"), this, [this, id = account.id] {
+      controller_->setAccountSigningKey(id, {});
+    });
+    follow->setCheckable(true);
+    follow->setChecked(account.signingKey.isEmpty());
   }
   accountMenu_->addAction(tr("Manage accounts…"), this, &MainWindow::showAccountsDialog);
   accountMenu_->addAction(tr("Gitea / GitLab accounts and repositories…"), this, &MainWindow::showForgeDialog);
@@ -1349,7 +1480,8 @@ void MainWindow::updateHistoryBranchActions() {
 }
 
 void MainWindow::requestNextHistoryPage() {
-  if (!repository_ || historyModel_->endOfHistory() || busyOperations_.contains(QStringLiteral("history"))) return;
+  if (!repository_ || historyModel_->endOfHistory() || historyModel_->showingSearchResults() ||
+      busyOperations_.contains(QStringLiteral("history"))) return;
   controller_->requestHistory(static_cast<int>(historyModel_->commits().size()), 50,
                               historyModel_->anchor(), historyBranch_->currentData().toString());
 }

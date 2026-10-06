@@ -27,6 +27,12 @@ ProcessError::ProcessError(QString message, ProcessResult result)
     : std::runtime_error(message.toStdString()), message_(std::move(message)), result_(std::move(result)) {}
 
 const QString& ProcessError::qMessage() const noexcept { return message_; }
+
+QString ProcessError::outputLimitMessage() {
+  return QStringLiteral("Process output exceeded the limit. Narrow the requested diff or history.");
+}
+
+bool ProcessError::isOutputLimit() const noexcept { return message_ == outputLimitMessage(); }
 const ProcessResult& ProcessError::result() const noexcept { return result_; }
 
 ProcessResult ProcessRunner::run(const ProcessRequest& request) {
@@ -63,7 +69,7 @@ ProcessResult ProcessRunner::run(const ProcessRequest& request) {
     if (output.size() > available || error.size() > available - output.size()) {
       process.kill();
       process.waitForFinished(2000);
-      throw ProcessError(QStringLiteral("Process output exceeded the limit. Narrow the requested diff or history."));
+      throw ProcessError(ProcessError::outputLimitMessage());
     }
     result.standardOutput.append(output);
     result.standardError.append(error);

@@ -40,12 +40,12 @@ function(_relay_require_file description path)
   endif()
 endfunction()
 
+# Git LFS stays: Git runs it for any repository that uses LFS, and Git for
+# Windows' system configuration marks that filter as required.
 function(_relay_install_trimmed_git source destination)
   install(DIRECTORY "${source}/" DESTINATION "${destination}" USE_SOURCE_PERMISSIONS
     PATTERN ".DS_Store" EXCLUDE
     PATTERN "*.pdb" EXCLUDE
-    PATTERN "git-lfs" EXCLUDE
-    PATTERN "git-lfs.exe" EXCLUDE
     PATTERN "git-credential-manager*" EXCLUDE
     PATTERN "libexec/git-core/*.dll" EXCLUDE
     PATTERN "libexec/git-core/*.deps.json" EXCLUDE

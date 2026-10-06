@@ -32,6 +32,9 @@ struct Account {
   QString authSource{QStringLiteral("github-cli")};
   QString tokenSource{QStringLiteral("credential store")};
   bool active{};
+  // Path to an SSH key that signs this account's commits. Empty follows the
+  // user's Git configuration. Never key contents.
+  QString signingKey;
 };
 
 struct RepositorySummary {
@@ -44,6 +47,7 @@ struct RepositorySummary {
   std::optional<QDateTime> addedAt;
   std::optional<QDateTime> latestCommit;
   std::optional<QDateTime> firstCommit;
+  bool operator==(const RepositorySummary&) const = default;
 };
 
 struct SshProfile {
@@ -62,6 +66,7 @@ enum class SortDirection { ascending, descending };
 struct RepositoryOrder {
   RepositoryOrderMode mode{RepositoryOrderMode::manual};
   SortDirection direction{SortDirection::ascending};
+  bool operator==(const RepositoryOrder&) const = default;
 };
 
 struct ChangedFile {
@@ -119,6 +124,8 @@ struct CommitDetail {
   QList<ChangedFile> files;
   qsizetype added{};
   qsizetype removed{};
+  // The commit carries a GPG, SSH or X.509 signature. Not verified.
+  bool isSigned{};
 };
 
 enum class RepositoryAction {
@@ -165,6 +172,9 @@ struct Preferences {
   bool graphHistory{};
   QString themeId{QStringLiteral("light")};
   QJsonObject customTheme;
+  // Window geometry and splitter states, saved by the window itself. Only
+  // RelayController::saveLayout() changes it.
+  QJsonObject layout;
 };
 
 struct AppState {
@@ -238,6 +248,7 @@ QJsonObject mergeAppStateIntoJson(const AppState& state, QJsonObject base = {});
 
 Q_DECLARE_METATYPE(relay::Repository)
 Q_DECLARE_METATYPE(relay::HistoryPage)
+Q_DECLARE_METATYPE(relay::HistoryCommit)
 Q_DECLARE_METATYPE(relay::CommitDetail)
 
 Q_DECLARE_METATYPE(relay::FilePreview)

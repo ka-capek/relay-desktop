@@ -492,6 +492,12 @@ removed, so an older Relay can still read the file.
 An SSH profile holds a host, an optional user and port, and an optional *path*
 to a private key. It never holds key contents or a passphrase.
 
+An account may carry `signingKey`, the absolute path of an SSH key that signs
+its commits; it is preserved by account synchronization and omitted when
+empty. `preferences.layout` holds the window geometry and splitter states
+(base64 from Qt). Only `RelayController::saveLayout()` changes it, without
+publishing state, so a settings change never overwrites it.
+
 Do not put secrets into this store. If a new field is sensitive, it does not
 belong here.
 
@@ -765,12 +771,25 @@ history.
 - `readHistoryPage()` returns one batch. Paging is anchored to an explicit
   commit resolved on the first page, not to `HEAD`, so a `HEAD` that moves
   while the user scrolls cannot make later pages skip or repeat commits. It
-  reports `endOfHistory` rather than imposing a cap.
+  reports `endOfHistory` rather than imposing a cap. Git is asked for a
+  window of 5,000 commits (topological order: the graph and several tips) or
+  2,000 (date order: the plain list of one branch), and later pages of the
+  same snapshot are served from that window in memory without starting Git.
+  Without a commit-graph file, `--topo-order` walks the whole history before
+  printing anything, so one walk per window instead of per page is what makes
+  long histories scroll. A first page (no snapshot) always reads fresh.
+- `searchHistory()` searches the same scope as the history view by message
+  (including the body), author name or email, and hash prefix,
+  case-insensitively and literally. Git ANDs `--grep` with `--author`, so they
+  are separate walks merged newest first; at most 200 results. The UI filters
+  loaded commits as the user types and runs this when typing pauses and more
+  history exists.
 - `readCommitDetail()` returns full and short hashes, subject and body,
   separate author and committer identities, parents, decorations, and the
   changed files with their add/modify/delete state and line counts. A merge is
   compared against its **first parent**; a root commit has no parent and is
-  compared against the empty tree, so its files read as added.
+  compared against the empty tree, so its files read as added. `isSigned`
+  reports a signature header without verifying it.
 - `readCommitFileDiff()` returns one file's diff against that same parent.
 
 Commit hashes and file paths are untrusted even when they come from Relay's
@@ -790,6 +809,13 @@ Commit behavior is intentionally file-selective:
 
 Do not silently commit every working-tree change.
 
+An account with a `signingKey` (a path to an SSH key, account menu → Commit
+signing) signs its commits, including merges, reverts, cherry-picks, rebases
+and amends. `GitService::addSigningConfiguration()` appends `gpg.format=ssh`,
+`user.signingkey` and `commit.gpgsign=true` through `GIT_CONFIG_*` after any
+entries already in the inherited environment. Without a key, Git's own
+configuration decides.
+
 ### 12.6 Fetch, pull and push
 
 - Fetch runs `git fetch origin --prune`.
@@ -799,7 +825,10 @@ Do not silently commit every working-tree change.
 - Push requires a named local branch.
 - The main sync button suggests fetch or push from the last known state; its
   menu offers Fetch, Pull and Push directly. Pull fetches, then fast-forwards
-  the origin upstream and refuses divergent history.
+  the origin upstream. When both sides have commits it changes nothing and
+  emits `pullDiverged`; the window asks whether to merge or rebase, and the
+  answer runs the existing merge or rebase action (identity check,
+  unpublished-only rebase, conflict dialog).
 
 ### 12.7 Clone
 
@@ -826,8 +855,10 @@ remote-tracking branches other than symbolic `HEAD` refs.
 - A local branch: `GitService::switchBranch()` verifies `refs/heads/<name>` and
   runs `git switch --no-guess <name>`.
 - A remote branch: `RepositoryAction::checkoutRemote` runs
-  `git switch --create <name> --track refs/remotes/<remote>/<name>`. If a local
-  branch of that name already exists, Git refuses and the error is shown.
+  `git switch --create <name> --track refs/remotes/<remote>/<name>`, or, when
+  a local `<name>` exists, `git switch --no-guess <name>` without changing its
+  upstream. The current-branch picker leaves out remote branches with a local
+  namesake; the history scope still lists them.
 
 Remote branches are what the last fetch recorded. **Fetch all origin branches**
 fetches the full heads refspec for single-branch clones. Names starting with
@@ -935,9 +966,24 @@ because its frameworks carry Homebrew-specific transitive library paths.
 Release/measurement builds must use the pinned official Qt distribution and
 reject staged dependencies under `/opt/homebrew` or `/usr/local`.
 
-There is no icon generator in the repository. The previous one ran inside
-Electron and was removed with it. Edit `build/icon*.svg` only together with a
-replacement generator that rewrites `icon.icns`, `icon.ico` and `icon.png`.
+After editing `build/icon.svg` or `build/icon-small.svg`, regenerate the icons:
+
+```bash
+cmake --build --preset <preset> --target icons
+```
+
+`native/tools/icon_generator.cpp` renders 48px and below from the small
+master, writes every `.icns` slot (including @2x) at its true pixel size, and
+is byte-stable. QtSvg does not implement `feDropShadow`, so `icon.svg` spells
+the shadow out as the primitives it is defined by; keep it that way.
+
+Bundled runtimes for installers or a development `runtime/`:
+
+```bash
+python native/tools/fetch_runtimes.py --platform win-x64 --output runtime
+```
+
+Versions and SHA-256 digests are pinned in `native/packaging/runtimes.json`.
 
 ## 17. Testing and Verification Strategy
 
@@ -1082,15 +1128,18 @@ location without an uninstall. CI verifies the DMG and launches its copied app.
 2. Update the version mentioned in README's Download section and section 3.
 3. Merge to `main` through a pull request and wait for the native CI run on
    both platforms to pass.
-4. Download the `Relay-Native-macos-debug-installers` and
-   `Relay-Native-windows-debug-installers` artifacts from that run (or the
-   matching release presets if configured).
-5. Install each on a real machine and smoke-test: startup, Git/gh check,
-   sign-in, a clone, a commit, fetch/pull/push.
-6. Compute SHA-256 hashes.
-7. Tag `v<version>` on the merged commit and create a GitHub release marked as
-   a prerelease, uploading the installers as release assets, not Git blobs.
-8. Verify asset names, sizes, and the GitHub-reported digest.
+4. Push the tag: `git tag v<version> && git push origin v<version>`. The
+   workflow builds and tests both platforms again, checks the tag matches
+   `CMakeLists.txt`, and publishes a prerelease with the DMG, the Windows
+   setup and `SHA256SUMS.txt`.
+5. Install each installer on a real machine and smoke-test: startup, Git/gh
+   check, sign-in, a clone, a commit, fetch/pull/push.
+6. Edit the generated release notes if needed.
+
+Installers bundle the GitHub CLI on both platforms and Git for Windows on
+Windows (`native/tools/fetch_runtimes.py`). macOS has no official
+relocatable Git build; Git comes from the Xcode Command Line Tools or
+Homebrew there.
 
 Builds are not Developer ID signed, notarized, or Authenticode signed. Ad-hoc
 signing stops Apple Silicon from calling the app damaged but is not
@@ -1163,22 +1212,19 @@ Do not swallow errors that make an operation look successful.
 - GitHub OAuth is GitHub.com only. Gitea/Forgejo/GitLab accounts are for API
   discovery; their Git transport is SSH or existing Git credentials.
 - No force push and no remote branch deletion (left to the CLI by the owner).
-- Pull only fast-forwards; divergent branches need an explicit merge or rebase.
 - Rebase is limited to unpublished commits; published commits cannot be
   undone or amended here.
-- Picking a remote branch whose name already exists locally fails with Git's
-  error rather than switching to the local branch.
-- History paging uses `--skip`, so very deep history gets slower as the user
-  scrolls. History search filters only loaded commits. Merges compare against
-  the first parent.
+- History beyond a cached window still uses `--skip`, so very deep history
+  costs one Git walk per 2,000 or 5,000 commits. History search returns at most
+  200 matches. Merges compare against the first parent.
 - Ahead/behind is approximate when upstream information is incomplete.
-- Commit signing is not supported.
+- Commit signing uses SSH keys per account; GPG signing is only whatever the
+  user's Git configuration does. Signatures are shown, not verified.
 - SSH identities cover the transport only. Relay does not create keys, edit
   `~/.ssh/config`, or handle passphrases.
 - Scanning and recents are capped at 5,000 repositories.
-- Releases use external Git and gh; strict bundled packaging is not used yet,
-  and `runtime/` is not downloaded by a repository script.
-- There is no icon generator (section 16).
+- macOS installers bundle gh but not Git. The strict CPack pipeline is not
+  used for releases yet.
 - Real OAuth, private repositories, forge servers and OS credential stores are
   not covered by automated tests.
 - Builds are not distribution-signed. There is no auto-update, crash reporting,

@@ -12,6 +12,7 @@
 #include <QRegularExpression>
 
 #include <algorithm>
+#include <mutex>
 #include <limits>
 #include <utility>
 
@@ -19,6 +20,10 @@ namespace relay {
 namespace {
 
 constexpr qsizetype maximumGitOutputBytes = 20 * 1024 * 1024;
+
+QString diffTooLargeMessage() {
+  return QStringLiteral("Diff is too large to preview (limit: 20 MiB).");
+}
 constexpr qsizetype maximumUntrackedStatBytes = 2 * 1024 * 1024;
 
 struct RepositoryIdentity {
@@ -200,11 +205,37 @@ QString defaultResourcesPath() {
 
 }  // namespace
 
+// Topological order makes Git walk the whole history before printing the
+// first commit unless the repository has a commit-graph file: on an 80,000
+// commit repository that is over a second for 50 commits and barely more for
+// 5,000. Reading a large window once and paging from memory keeps scrolling
+// to one such walk per window instead of one per page.
+struct HistoryCache {
+  struct Window {
+    QString key;
+    QString head;
+    int start{};
+    QList<HistoryCommit> commits;
+    bool complete{};
+  };
+  // A topological walk costs about the same for 5,000 commits as for 50;
+  // date order streams, so its window only needs to save process launches.
+  static constexpr int topologicalWindow = 5000;
+  static constexpr int dateWindow = 2000;
+  static constexpr qsizetype capacity = 4;
+  std::mutex mutex;
+  QList<Window> windows;  // most recent first
+  // First-commit dates by repository root and HEAD commit.
+  static constexpr qsizetype firstCommitCapacity = 512;
+  QHash<QString, std::optional<QDateTime>> firstCommits;
+};
+
 GitService::GitService(QString resourcesPath, QString sourceRoot)
     : resourcesPath_(resourcesPath.isEmpty() ? defaultResourcesPath()
                                              : QDir::cleanPath(std::move(resourcesPath))),
       sourceRoot_(sourceRoot.isEmpty() ? defaultSourceRoot()
-                                       : QDir::cleanPath(std::move(sourceRoot))) {}
+                                       : QDir::cleanPath(std::move(sourceRoot))),
+      historyCache_(std::make_shared<HistoryCache>()) {}
 
 QString GitService::gitExecutable() const {
 #ifdef Q_OS_WIN
@@ -383,13 +414,29 @@ std::optional<QDateTime> GitService::latestCommitDate(const QString& root) const
 }
 
 std::optional<QDateTime> GitService::firstCommitDate(const QString& root) const {
-  auto dates = nonEmptyLines(runGitOrEmpty(
-      root, {QStringLiteral("log"), QStringLiteral("--max-parents=0"),
-             QStringLiteral("--format=%cI")}));
-  for (auto& date : dates) date = date.trimmed();
-  dates.removeAll(QString{});
-  dates.sort();
-  return dates.isEmpty() ? std::nullopt : optionalGitDate(dates.constFirst());
+  // Finding root commits walks the whole history (about a second on an
+  // 80,000-commit repository), and every refresh asks again. The answer only
+  // changes when HEAD does, so remember it per HEAD commit.
+  const auto head = runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"),
+                                         QStringLiteral("--quiet"), QStringLiteral("HEAD")});
+  if (head.isEmpty()) return std::nullopt;
+  const auto key = root + u'\n' + head;
+  {
+    const std::scoped_lock lock(historyCache_->mutex);
+    if (const auto found = historyCache_->firstCommits.constFind(key); found != historyCache_->firstCommits.cend())
+      return *found;
+  }
+  // Compare instants, not ISO strings, which sort wrongly across time zones.
+  std::optional<QDateTime> earliest;
+  for (const auto& line : nonEmptyLines(runGitOrEmpty(
+           root, {QStringLiteral("log"), QStringLiteral("--max-parents=0"), QStringLiteral("--format=%cI")}))) {
+    const auto date = optionalGitDate(line.trimmed());
+    if (date && (!earliest || *date < *earliest)) earliest = date;
+  }
+  const std::scoped_lock lock(historyCache_->mutex);
+  if (historyCache_->firstCommits.size() >= HistoryCache::firstCommitCapacity) historyCache_->firstCommits.clear();
+  historyCache_->firstCommits.insert(key, earliest);
+  return earliest;
 }
 
 Repository GitService::readRepository(const QString& repositoryPath) const {
@@ -521,15 +568,41 @@ QString GitService::assertCommitInRepository(const QString& repositoryPath,
 }
 
 HistoryPage GitService::readHistoryPage(const QString& repositoryPath, const int skip,
-                                        const int limit, const QString& requestedAnchor, const bool allBranches, const QString& reference) const {
+                                        const int limit, const QString& requestedAnchor, const bool allBranches, const QString& reference,
+                                        const bool topological) const {
+  const auto boundedSkip = std::max(0, skip);
+  const auto boundedLimit = std::clamp(limit == 0 ? 50 : limit, 1, historyBatchLimit);
+  // Several tips need topological order for a coherent graph; one branch in
+  // plain date order streams without walking the whole history.
+  const auto keyFor = [&](const QString& anchor) {
+    const bool topo = topological || anchor.contains(u'|');
+    return repositoryPath + u'\n' + anchor + (topo ? QStringLiteral("\ntopo") : QStringLiteral("\ndate"));
+  };
+  const auto slice = [&](const HistoryCache::Window& window, const QString& anchor) {
+    const auto offset = boundedSkip - window.start;
+    auto commits = window.commits.mid(offset, boundedLimit);
+    const bool end = window.complete && offset + boundedLimit >= window.commits.size();
+    return HistoryPage{std::move(commits), window.head, anchor, end};
+  };
+  // Later pages of a snapshot come from memory without starting Git. A first
+  // page (no snapshot yet) always reads fresh, so ref decorations reflect the
+  // repository as it is now.
+  if (!requestedAnchor.isEmpty()) {
+    const auto key = keyFor(requestedAnchor);
+    const std::scoped_lock lock(historyCache_->mutex);
+    for (const auto& window : std::as_const(historyCache_->windows)) {
+      if (window.key != key || boundedSkip < window.start) continue;
+      const auto offset = boundedSkip - window.start;
+      if (offset + boundedLimit <= window.commits.size() || window.complete) return slice(window, requestedAnchor);
+    }
+  }
+
   const auto root = runGit(repositoryPath,
                            {QStringLiteral("rev-parse"), QStringLiteral("--show-toplevel")});
   const auto head =
       runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
   if (head.isEmpty() && !allBranches && reference.isEmpty()) return {{}, {}, {}, true};
 
-  const auto boundedSkip = std::max(0, skip);
-  const auto boundedLimit = std::clamp(limit == 0 ? 50 : limit, 1, historyBatchLimit);
   QStringList tips;
   if (!requestedAnchor.isEmpty()) {
     tips = allBranches ? requestedAnchor.split(u'|', Qt::SkipEmptyParts) : QStringList{requestedAnchor};
@@ -554,14 +627,82 @@ HistoryPage GitService::readHistoryPage(const QString& repositoryPath, const int
   } else tips.append(head);
   if (tips.isEmpty()) return {{}, head, {}, true};
   const auto anchor = tips.join(u'|');
-  QStringList arguments{QStringLiteral("log"), QStringLiteral("--topo-order"),
-      QStringLiteral("--skip=%1").arg(boundedSkip), QStringLiteral("-n"), QString::number(boundedLimit),
-      QStringLiteral("--pretty=format:%H%x1f%h%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%aI%x1f%D%x1e")};
-  arguments.append(QStringLiteral("--stdin"));
+  const bool topo = topological || tips.size() > 1;
+  const auto key = keyFor(anchor);
+  const auto size = std::max(boundedLimit, topo ? HistoryCache::topologicalWindow : HistoryCache::dateWindow);
+  QStringList arguments{QStringLiteral("log")};
+  if (topo) arguments.append(QStringLiteral("--topo-order"));
+  arguments.append({QStringLiteral("--skip=%1").arg(boundedSkip), QStringLiteral("-n"), QString::number(size),
+      QStringLiteral("--pretty=format:%H%x1f%h%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%aI%x1f%D%x1e"),
+      QStringLiteral("--stdin")});
   const auto logText = runGit(root, arguments, {}, false, true, (tips.join(u'\n') + u'\n').toUtf8());
-  auto commits = parseHistoryPage(logText);
-  const auto endOfHistory = commits.size() < boundedLimit;
-  return {std::move(commits), head, anchor, endOfHistory};
+  HistoryCache::Window window{key, head, boundedSkip, parseHistoryPage(logText), false};
+  window.complete = window.commits.size() < size;
+  auto page = slice(window, anchor);
+  const std::scoped_lock lock(historyCache_->mutex);
+  historyCache_->windows.removeIf([&](const HistoryCache::Window& existing) {
+    return existing.key == key && existing.start == window.start;
+  });
+  historyCache_->windows.prepend(std::move(window));
+  while (historyCache_->windows.size() > HistoryCache::capacity) historyCache_->windows.removeLast();
+  return page;
+}
+
+GitService::SearchResult GitService::searchHistory(const QString& repositoryPath, const QString& query,
+                                                  const bool allBranches, const QString& reference,
+                                                  const int limit) const {
+  const auto needle = query.trimmed();
+  if (needle.isEmpty()) return {};
+  const auto bounded = std::clamp(limit, 1, 1000);
+  const auto root = runGit(repositoryPath,
+                           {QStringLiteral("rev-parse"), QStringLiteral("--show-toplevel")});
+  QStringList scope;
+  if (!reference.isEmpty()) {
+    if (!reference.startsWith(QStringLiteral("refs/heads/")) &&
+        !reference.startsWith(QStringLiteral("refs/remotes/")))
+      throw ProcessError(QStringLiteral("Choose an existing local or remote branch."));
+    static_cast<void>(runGit(root, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"), reference}));
+    scope.append(reference);
+  } else if (allBranches) {
+    scope = {QStringLiteral("--branches"), QStringLiteral("--remotes")};
+    if (!runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), QStringLiteral("--quiet"), QStringLiteral("HEAD")}).isEmpty())
+      scope.append(QStringLiteral("HEAD"));
+  } else {
+    if (runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), QStringLiteral("--quiet"), QStringLiteral("HEAD")}).isEmpty())
+      return {};
+    scope.append(QStringLiteral("HEAD"));
+  }
+  const auto format = QStringLiteral("--pretty=format:%H%x1f%h%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%aI%x1f%D%x1e");
+  // Git ANDs --grep with --author, so message and author matches are two
+  // walks merged here. One more than the limit tells whether to truncate.
+  const auto walk = [&](const QString& filter) {
+    QStringList arguments{QStringLiteral("log"), QStringLiteral("--regexp-ignore-case"), QStringLiteral("--fixed-strings"),
+                          filter + needle, QStringLiteral("-n"), QString::number(bounded + 1), format};
+    arguments.append(scope);
+    arguments.append(QStringLiteral("--"));
+    return parseHistoryPage(runGit(root, arguments, {}, false, false));
+  };
+  QList<HistoryCommit> matches = walk(QStringLiteral("--grep="));
+  matches.append(walk(QStringLiteral("--author=")));
+  static const QRegularExpression hashPrefix(QStringLiteral("^[0-9a-fA-F]{4,64}$"));
+  if (hashPrefix.match(needle).hasMatch()) {
+    const auto hash = runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
+                                           needle + QStringLiteral("^{commit}")});
+    if (!hash.isEmpty())
+      matches.append(parseHistoryPage(runGit(root, {QStringLiteral("log"), QStringLiteral("-n"), QStringLiteral("1"), format, hash, QStringLiteral("--")})));
+  }
+  std::stable_sort(matches.begin(), matches.end(), [](const HistoryCommit& left, const HistoryCommit& right) {
+    return left.date > right.date;
+  });
+  QSet<QString> seen;
+  SearchResult result;
+  for (auto& commit : matches) {
+    if (seen.contains(commit.fullHash)) continue;
+    seen.insert(commit.fullHash);
+    if (result.commits.size() == bounded) { result.truncated = true; break; }
+    result.commits.append(std::move(commit));
+  }
+  return result;
 }
 
 CommitDetail GitService::readCommitDetail(const QString& repositoryPath,
@@ -610,6 +751,13 @@ CommitDetail GitService::readCommitDetail(const QString& repositoryPath,
     totalRemoved += record.removed;
   }
 
+  // The raw commit header shows a signature without asking GPG or SSH to
+  // verify it, which would need the user's keyring and trust settings.
+  const auto header = runGitOrEmpty(root, {QStringLiteral("cat-file"), QStringLiteral("commit"), fullHash});
+  const auto headerEnd = header.indexOf(QStringLiteral("\n\n"));
+  const auto headers = header.left(headerEnd < 0 ? header.size() : headerEnd);
+  const bool isSigned = headers.contains(QStringLiteral("\ngpgsig ")) || headers.contains(QStringLiteral("\ngpgsig-sha256 "));
+
   return {fullHash,
           fieldAt(fields, 1),
           fieldAt(fields, 3),
@@ -626,7 +774,8 @@ CommitDetail GitService::readCommitDetail(const QString& repositoryPath,
           parents.size() > 1,
           std::move(files),
           totalAdded,
-          totalRemoved};
+          totalRemoved,
+          isSigned};
 }
 
 QString GitService::readCommitFileDiff(const QString& repositoryPath,
@@ -664,7 +813,12 @@ QString GitService::readCommitFileDiff(const QString& repositoryPath,
   }
   arguments.push_back(QStringLiteral("--"));
   arguments.append(paths);
-  return runGit(root, arguments, {}, true);
+  try {
+    return runGit(root, arguments, {}, true);
+  } catch (const ProcessError& error) {
+    if (error.isOutputLimit()) return diffTooLargeMessage();
+    throw;
+  }
 }
 
 QString GitService::getFileDiff(const QString& repositoryPath, const QString& filePath) const {
@@ -704,7 +858,13 @@ QString GitService::getFileDiff(const QString& repositoryPath, const QString& fi
                         head.isEmpty() ? QStringLiteral("--cached") : QStringLiteral("HEAD"),
                         QStringLiteral("--no-ext-diff"), QStringLiteral("--unified=3"),
                         QStringLiteral("--"), filePath};
-  return runGit(repositoryPath, arguments, {}, true);
+  try {
+    return runGit(repositoryPath, arguments, {}, true);
+  } catch (const ProcessError& error) {
+    // Shown in place of the diff, like the untracked-file limit above.
+    if (error.isOutputLimit()) return diffTooLargeMessage();
+    throw;
+  }
 }
 
 FilePreview GitService::readFilePreview(const QString& root, const QString& path, const QString& commit) const {
@@ -846,7 +1006,26 @@ void GitService::commitFiles(const QString& repositoryPath, const QStringList& f
   environment.insert(QStringLiteral("GIT_AUTHOR_EMAIL"), account.email);
   environment.insert(QStringLiteral("GIT_COMMITTER_NAME"), account.name);
   environment.insert(QStringLiteral("GIT_COMMITTER_EMAIL"), account.email);
+  addSigningConfiguration(environment, account);
   static_cast<void>(runGit(repositoryPath, arguments, environment));
+}
+
+void GitService::addSigningConfiguration(QProcessEnvironment& environment, const Account& account) {
+  if (account.signingKey.isEmpty()) return;
+  bool ok = false;
+  auto index = QProcessEnvironment::systemEnvironment().value(QStringLiteral("GIT_CONFIG_COUNT")).toInt(&ok);
+  if (!ok || index < 0) index = 0;
+  const QList<QPair<QString, QString>> settings{
+      {QStringLiteral("gpg.format"), QStringLiteral("ssh")},
+      {QStringLiteral("user.signingkey"), account.signingKey},
+      {QStringLiteral("commit.gpgsign"), QStringLiteral("true")},
+  };
+  for (const auto& [key, value] : settings) {
+    environment.insert(QStringLiteral("GIT_CONFIG_KEY_%1").arg(index), key);
+    environment.insert(QStringLiteral("GIT_CONFIG_VALUE_%1").arg(index), value);
+    ++index;
+  }
+  environment.insert(QStringLiteral("GIT_CONFIG_COUNT"), QString::number(index));
 }
 
 QString GitService::githubCredentialHelper() {
@@ -968,19 +1147,33 @@ void GitService::createBranch(const QString& repositoryPath, const QString& bran
   static_cast<void>(runGit(repositoryPath, arguments));
 }
 
-void GitService::pullOrigin(const QString& repositoryPath, const QString& token,
-                            const QString& handle, const QString& sshCommand) const {
+QString GitService::pullOrigin(const QString& repositoryPath, const QString& token,
+                               const QString& handle, const QString& sshCommand) const {
   const auto upstream = runGitOrEmpty(repositoryPath, {QStringLiteral("rev-parse"),
       QStringLiteral("--abbrev-ref"), QStringLiteral("--symbolic-full-name"), QStringLiteral("@{upstream}")});
   if (!upstream.startsWith(QStringLiteral("origin/")))
     throw ProcessError(QStringLiteral("Select a branch tracking origin before pulling."));
   fetchOrigin(repositoryPath, token, handle, sshCommand);
+  const auto isAncestor = [&](const QString& ancestor, const QString& descendant) {
+    try {
+      static_cast<void>(runGit(repositoryPath, {QStringLiteral("merge-base"), QStringLiteral("--is-ancestor"),
+          ancestor, descendant}));
+      return true;
+    } catch (const ProcessError&) {
+      return false;
+    }
+  };
+  // Nothing to pull when origin has nothing this branch lacks.
+  if (isAncestor(QStringLiteral("@{upstream}"), QStringLiteral("HEAD"))) return {};
+  if (!isAncestor(QStringLiteral("HEAD"), QStringLiteral("@{upstream}")))
+    return QStringLiteral("refs/remotes/") + upstream;
   try {
     static_cast<void>(runGit(repositoryPath, {QStringLiteral("merge"), QStringLiteral("--ff-only"),
         QStringLiteral("--no-edit"), QStringLiteral("@{upstream}")}));
   } catch (const ProcessError& error) {
-    throw ProcessError(QStringLiteral("Could not fast-forward this branch. Commit or stash conflicting local changes, or merge diverged branches before pulling. %1").arg(error.qMessage()));
+    throw ProcessError(QStringLiteral("Could not fast-forward this branch. Commit or stash conflicting local changes before pulling. %1").arg(error.qMessage()));
   }
+  return {};
 }
 
 }  // namespace relay

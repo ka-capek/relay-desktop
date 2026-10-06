@@ -112,7 +112,8 @@ void GitService::performAction(const QString& root, const RepositoryAction actio
     execute({QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"), ref});
     return ref;
   };
-  const auto environment = identityEnvironment(account);
+  auto environment = identityEnvironment(account);
+  addSigningConfiguration(environment, account);
   switch (action) {
     case RepositoryAction::createTag:
     case RepositoryAction::deleteTag: {
@@ -164,6 +165,13 @@ void GitService::performAction(const QString& root, const RepositoryAction actio
       readOperationState(state);
       if (!state.remoteBranches.contains(target)) throw ProcessError(QStringLiteral("Choose an existing remote branch."));
       const auto name = target.mid(target.indexOf(u'/') + 1);
+      // A local branch of the same name is what the user is switching to, as
+      // with Git's own guess. Its upstream is left as the user configured it.
+      if (!runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
+                                QStringLiteral("refs/heads/") + name}).isEmpty()) {
+        execute({QStringLiteral("switch"), QStringLiteral("--no-guess"), name});
+        break;
+      }
       execute({QStringLiteral("switch"), QStringLiteral("--create"), name, QStringLiteral("--track"),
                QStringLiteral("refs/remotes/") + target});
       break;

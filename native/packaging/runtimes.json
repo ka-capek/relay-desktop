@@ -1,0 +1,34 @@
+{
+  "gh": {
+    "version": "2.98.0",
+    "license": "MIT",
+    "source": "https://github.com/cli/cli/archive/refs/tags/v2.98.0.tar.gz",
+    "platforms": {
+      "win-x64": {
+        "url": "https://github.com/cli/cli/releases/download/v2.98.0/gh_2.98.0_windows_amd64.zip",
+        "sha256": "c28c7b3b584967a05b74d9eaf7481bff24ddc34930bf2d6e442c148236561eb1",
+        "executable": "bin/gh.exe",
+        "licenseFile": "LICENSE"
+      },
+      "mac-arm64": {
+        "url": "https://github.com/cli/cli/releases/download/v2.98.0/gh_2.98.0_macOS_arm64.zip",
+        "sha256": "8cfb027cc5310675f2b830eac8f9865c1155a45ffcf9757f699fdd5a22046ca4",
+        "executable": "gh_2.98.0_macOS_arm64/bin/gh",
+        "licenseFile": "gh_2.98.0_macOS_arm64/LICENSE"
+      }
+    }
+  },
+  "git": {
+    "version": "2.52.0.windows.1",
+    "license": "GPL-2.0-only, with the MSYS2 and MinGW components listed in its LICENSE.txt",
+    "source": "https://github.com/git-for-windows/git/releases/tag/v2.52.0.windows.1",
+    "platforms": {
+      "win-x64": {
+        "url": "https://github.com/git-for-windows/git/releases/download/v2.52.0.windows.1/PortableGit-2.52.0-64-bit.7z.exe",
+        "sha256": "1dc4046dcfb138f62aa04a46b5529adc8abed5033b2af29bb60b66872a836cf8",
+        "executable": "cmd/git.exe",
+        "licenseFile": "LICENSE.txt"
+      }
+    }
+  }
+}

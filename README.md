@@ -11,10 +11,11 @@ accounts, repositories and settings carry over with no new sign-in.
 ## Download
 
 [**Relay 0.5.3**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.5.3)
-is a prerelease. Its Windows setup and macOS DMG require external Git >=2.35.0
-and GitHub CLI >=2.98.0. They are unsigned (macOS uses ad-hoc signing), are not
-notarized, and do not bundle Git/gh. Real multi-account OAuth, private
-clone/fetch/push and publication still need installed-platform verification.
+is a prerelease. The Windows setup includes Git for Windows and the GitHub CLI;
+the macOS DMG includes the GitHub CLI and uses the Git from the Xcode Command
+Line Tools or Homebrew. The installers are unsigned (macOS uses ad-hoc
+signing) and not notarized. Real multi-account OAuth, private clone/fetch/push
+and publication still need installed-platform verification.
 
 On macOS, right-click Relay Native in Applications and choose **Open** the
 first time; Windows SmartScreen may also ask for confirmation.
@@ -22,8 +23,10 @@ first time; Windows SmartScreen may also ask for confirmation.
 ## Installers and upgrades
 
 Prereleases provide a Windows **Relay-Native-Setup-<version>-x64.exe**
-and an Apple Silicon **Relay-Native-<version>-arm64.dmg**. These are unsigned
-preview distributions with external Git and GitHub CLI, as described above.
+and an Apple Silicon **Relay-Native-<version>-arm64.dmg**, with a
+`SHA256SUMS.txt`. These are unsigned preview distributions with the bundled
+tools described above. Pushing a `v<version>` tag builds, tests and publishes
+them from CI.
 
 On Windows, the wizard lets you choose the install folder and optionally add a
 desktop shortcut. Subsequent installers remember that folder and update the
@@ -127,7 +130,9 @@ HTTPS remotes continue to use the selected GitHub OAuth account.
 ## Branches and ordinary Git operations
 
 The current-branch picker lists local and fetched remote-tracking branches.
-Selecting a remote branch checks it out as a local tracking branch. In History,
+Selecting a remote branch checks it out as a local tracking branch; remote
+branches that already have a local branch of the same name are not listed
+again. In History,
 use the branch selector to browse a local branch, a remote branch, or all
 branches together without changing the working tree. **Check out branch** is
 an explicit action; **New branch from here** starts a branch at the selected
@@ -214,6 +219,7 @@ the application resources.
 
 ## Building from source
 
+
 The native client requires CMake 3.30+, Ninja, and the pinned Qt 6.11.1 with
 Core, Gui, Widgets, Network, Svg, Concurrent, and Test. Qt is dynamically
 linked. The presets use upstream LLVM 20 `clang++` for C++26 (the default
@@ -268,6 +274,9 @@ The latest local changes extend that workflow to validate the Windows source
 installer and retain downloadable source-build artifacts for both platforms.
 Those additions require a new CI run; earlier results do not validate them.
 
+To regenerate the application icons after editing `build/icon.svg` or
+`build/icon-small.svg`, run `cmake --build --preset <preset> --target icons`.
+
 ## GitHub sign-in
 
 Relay uses the official GitHub CLI browser/device OAuth flow. The CLI stores each
@@ -294,15 +303,22 @@ in the sidebar as recent shortcuts until the user chooses one.
 - Order the sidebar manually with drag-and-drop, or sort it by the date a
   repository was added, by name, or by its latest commit. In manual mode the
   grip on each row can also be focused and moved with the arrow keys.
+- Pane widths and the window size are remembered; **View → Reset Layout**
+  restores the defaults.
+- When a pull finds that both your branch and origin have new commits, Relay
+  asks whether to merge or to rebase your unpublished commits.
+- Each account can sign its commits with its own SSH key (account menu →
+  **Commit signing**). Commit details show when a commit is signed.
 
 ## History
 
 The **History** tab loads the branch's commits progressively as you scroll,
 with no fixed limit. Selecting a commit shows its full message, its author and
 committer, its parents, any branch or tag decorations, the files it changed,
-and the diff for any of them. A merge is shown against its first parent. You
-can search the loaded commits by message, author, email, or hash, copy the full
-hash, and open the commit on GitHub when `origin` is a GitHub remote.
+and the diff for any of them. A merge is shown against its first parent. Search
+covers the whole history, not only what is loaded: message (including the
+body), author, email, or hash. You can copy the full hash and open the commit
+on GitHub when `origin` is a GitHub remote.
 
 ## Non-GitHub hosts over SSH
 

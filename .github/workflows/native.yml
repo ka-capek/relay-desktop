@@ -2,6 +2,11 @@ name: Native desktop validation
 
 on:
   workflow_dispatch:
+  # A version tag builds, tests and packages both platforms, then the
+  # release job publishes the installers as a prerelease.
+  push:
+    tags:
+      - 'v*'
   pull_request:
     paths:
       - 'native/**'
@@ -100,13 +105,20 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           RELAY_SCREENSHOT_DIR: ${{ github.workspace }}/build-native/screenshots
         run: ctest --preset ${{ matrix.target }} --timeout 60
+      # Pinned versions and SHA-256 digests live in native/packaging/runtimes.json.
+      - name: Fetch bundled Git and GitHub CLI
+        shell: bash
+        run: |
+          platform=$([ "$RUNNER_OS" = Windows ] && echo win-x64 || echo mac-arm64)
+          python native/tools/fetch_runtimes.py --platform "$platform" --output "$RUNNER_TEMP/relay-runtimes"
       - name: Validate Apple Silicon installer
         if: runner.os == 'macOS'
         env:
           HOMEBREW_NO_AUTO_UPDATE: '1'
         shell: bash
         run: |
-          bash native/tools/install-macos.sh --source "$GITHUB_WORKSPACE" --qt-dir "$QT_ROOT_DIR" --no-open
+          bash native/tools/install-macos.sh --source "$GITHUB_WORKSPACE" --qt-dir "$QT_ROOT_DIR" --runtimes "$RUNNER_TEMP/relay-runtimes" --no-open
+          "$HOME/Applications/Relay Native.app/Contents/Resources/gh/gh" --version
           /usr/bin/open -W "$HOME/Applications/Relay Native.app" --args --smoke-test
           ditto -c -k --sequesterRsrc --keepParent "$HOME/Applications/Relay Native.app" build-native/Relay-Native-macos-arm64.zip
       - name: Validate Windows source installer
@@ -114,8 +126,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          ./native/tools/install-windows.ps1 -Source $PWD -QtDir $env:QT_ROOT_DIR -NoOpen
-          "app_dir=$env:LOCALAPPDATA/Programs/Relay Native" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          ./native/tools/install-windows.ps1 -Source $PWD -QtDir $env:QT_ROOT_DIR -Runtimes "$env:RUNNER_TEMP/relay-runtimes" -NoOpen
+          $app = "$env:LOCALAPPDATA/Programs/Relay Native"
+          # The bundled tools must work on their own, from the installed location.
+          & "$app/resources/gh/gh.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled gh failed' }
+          & "$app/resources/git/cmd/git.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled git failed' }
+          & "$app/resources/git/cmd/git.exe" ls-remote https://github.com/ka-capek/relay-desktop.git HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled git could not reach GitHub over HTTPS' }
+          "app_dir=$app" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
       - name: Package and verify macOS preview DMG
         if: runner.os == 'macOS'
         shell: bash
@@ -169,3 +189,45 @@ jobs:
             build-native/screenshots/
             build-native/preview-installers/*.log
           if-no-files-found: ignore
+
+  release:
+    name: Publish prerelease
+    needs: native
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches the project version
+        id: version
+        shell: bash
+        run: |
+          version=$(sed -n 's/^  VERSION \(.*\)$/\1/p' CMakeLists.txt)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match CMakeLists.txt version $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Relay-Native-*-installers
+          path: release
+          merge-multiple: true
+      - name: Create the prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd release
+          dmg="Relay-Native-$VERSION-arm64.dmg"
+          exe="Relay-Native-Setup-$VERSION-x64.exe"
+          for file in "$dmg" "$exe"; do
+            [ -f "$file" ] || { echo "Missing installer $file" >&2; ls -l >&2; exit 1; }
+          done
+          sha256sum "$dmg" "$exe" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" "$dmg" "$exe" SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease \
+            --title "Relay $VERSION" --generate-notes

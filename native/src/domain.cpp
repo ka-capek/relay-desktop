@@ -79,6 +79,7 @@ Account accountFromJson(const QJsonObject& object) {
   account.authSource = object.value(QStringLiteral("authSource")).toString(QStringLiteral("github-cli"));
   account.tokenSource = object.value(QStringLiteral("tokenSource")).toString(QStringLiteral("credential store"));
   account.active = object.value(QStringLiteral("active")).toBool();
+  account.signingKey = object.value(QStringLiteral("signingKey")).toString();
   return account;
 }
 
@@ -96,6 +97,7 @@ QJsonObject accountToJson(const Account& account) {
       {QStringLiteral("tokenSource"), account.tokenSource},
       {QStringLiteral("active"), account.active},
   };
+  if (!account.signingKey.isEmpty()) object.insert(QStringLiteral("signingKey"), account.signingKey);
   bool numeric{};
   const auto rawId = account.githubIdText.isEmpty() ? QString::number(account.githubId) : account.githubIdText;
   const auto number = rawId.toLongLong(&numeric);
@@ -196,6 +198,7 @@ AppState appStateFromJson(const QJsonObject& object) {
   state.preferences.graphHistory = preferences.value(QStringLiteral("graphHistory")).toBool();
   state.preferences.themeId = preferences.value(QStringLiteral("themeId")).toString(QStringLiteral("light"));
   state.preferences.customTheme = preferences.value(QStringLiteral("customTheme")).toObject();
+  state.preferences.layout = preferences.value(QStringLiteral("layout")).toObject();
   return state;
 }
 
@@ -237,6 +240,7 @@ QJsonObject mergeAppStateIntoJson(const AppState& state, QJsonObject base) {
   preferences.insert(QStringLiteral("graphHistory"), state.preferences.graphHistory);
   preferences.insert(QStringLiteral("themeId"), state.preferences.themeId);
   preferences.insert(QStringLiteral("customTheme"), state.preferences.customTheme);
+  preferences.insert(QStringLiteral("layout"), state.preferences.layout);
   base.insert(QStringLiteral("preferences"), preferences);
   return base;
 }

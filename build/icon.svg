@@ -5,7 +5,16 @@
       <stop offset="1" stop-color="#103d2d"/>
     </linearGradient>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="20" stdDeviation="24" flood-color="#082218" flood-opacity=".28"/>
+      <!-- feDropShadow dx="0" dy="20" stdDeviation="24", written out as the
+           primitives it is defined by, which Qt's SVG renderer supports. -->
+      <feGaussianBlur in="SourceAlpha" stdDeviation="24"/>
+      <feOffset dx="0" dy="20" result="offsetBlur"/>
+      <feFlood flood-color="#082218" flood-opacity=".28"/>
+      <feComposite in2="offsetBlur" operator="in"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
     </filter>
   </defs>
   <rect x="46" y="46" width="932" height="932" rx="222" fill="url(#bg)" filter="url(#shadow)"/>

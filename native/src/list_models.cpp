@@ -218,9 +218,42 @@ QHash<int, QByteArray> RepositoryListModel::roleNames() const {
 }
 
 void RepositoryListModel::setRepositories(QList<RepositorySummary> repositories) {
-  beginResetModel();
-  repositories_ = std::move(repositories);
+  if (repositories_ == repositories) return;
+  replaceContents([&] { repositories_ = std::move(repositories); });
+}
+
+void RepositoryListModel::replaceContents(const std::function<void()>& change) {
+  // Every state refresh passes the whole list. A reset would scroll the
+  // sidebar back to the top and drop its selection, so rows that keep their
+  // order are updated in place and only a different order resets the view.
+  const auto rowPaths = [this] {
+    QStringList paths;
+    paths.reserve(visibleIndices_.size());
+    for (const int index : std::as_const(visibleIndices_)) paths.append(repositories_.at(index).path);
+    return paths;
+  };
+  const auto before = rowPaths();
+  auto previousRepositories = repositories_;
+  auto previousOrder = order_;
+  auto previousManualOrder = manualOrder_;
+  auto previousVisible = visibleIndices_;
+  change();
   rebuildVisible();
+  if (rowPaths() == before) {
+    if (!visibleIndices_.isEmpty()) emit dataChanged(index(0), index(rowCount() - 1));
+    return;
+  }
+  // Restore, then apply the change inside a reset so views never observe
+  // rows that moved without notification.
+  std::swap(repositories_, previousRepositories);
+  std::swap(order_, previousOrder);
+  std::swap(manualOrder_, previousManualOrder);
+  std::swap(visibleIndices_, previousVisible);
+  beginResetModel();
+  std::swap(repositories_, previousRepositories);
+  std::swap(order_, previousOrder);
+  std::swap(manualOrder_, previousManualOrder);
+  std::swap(visibleIndices_, previousVisible);
   endResetModel();
 }
 
@@ -236,11 +269,11 @@ void RepositoryListModel::setFilter(QString filter) {
 }
 
 void RepositoryListModel::setOrder(RepositoryOrder order, QStringList manualOrder) {
-  beginResetModel();
-  order_ = order;
-  manualOrder_ = std::move(manualOrder);
-  rebuildVisible();
-  endResetModel();
+  if (order_ == order && manualOrder_ == manualOrder) return;
+  replaceContents([&] {
+    order_ = order;
+    manualOrder_ = std::move(manualOrder);
+  });
 }
 
 void RepositoryListModel::setOrder(RepositoryOrder order) {
@@ -567,6 +600,7 @@ void HistoryCommitListModel::resetHistory(QList<HistoryCommit> commits, QString 
   graphColors_.clear();
   visibleIndices_.clear();
   hashes_.clear();
+  searchResults_ = false;
   anchor_ = std::move(anchor);
   endOfHistory_ = endOfHistory;
   hashes_.reserve(commits.size());
@@ -632,6 +666,16 @@ void HistoryCommitListModel::setSearch(QString search) {
   rebuildVisible();
   endResetModel();
 }
+
+void HistoryCommitListModel::showSearchResults(QList<HistoryCommit> commits) {
+  resetHistory(std::move(commits), {}, true);
+  beginResetModel();
+  searchResults_ = true;
+  rebuildVisible();
+  endResetModel();
+}
+
+bool HistoryCommitListModel::showingSearchResults() const noexcept { return searchResults_; }
 
 void HistoryCommitListModel::setGraphEnabled(bool enabled) {
   if (graphEnabled_ == enabled) return;
@@ -717,7 +761,7 @@ const QString& HistoryCommitListModel::anchor() const noexcept { return anchor_;
 bool HistoryCommitListModel::endOfHistory() const noexcept { return endOfHistory_; }
 
 bool HistoryCommitListModel::matchesSearch(const HistoryCommit& commit) const {
-  if (search_.isEmpty()) return true;
+  if (search_.isEmpty() || searchResults_) return true;
   const QString searchable = commit.title + QChar{u' '} + commit.author + QChar{u' '} +
                              commit.email + QChar{u' '} + commit.fullHash;
   return searchable.contains(search_, Qt::CaseInsensitive);

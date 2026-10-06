@@ -174,6 +174,8 @@ void RelayController::setPreferences(Preferences preferences) {
   if (!themeError.isEmpty()) { emit operationFailed(QStringLiteral("settings"), themeError); return; }
   if (!theme::presetIds().contains(preferences.themeId)) preferences.themeId = QStringLiteral("light");
   preferences.diffFontSize = qBound(10, preferences.diffFontSize, 24);
+  // Layout is saved separately and is not part of a settings change.
+  preferences.layout = state_.preferences.layout;
   const auto previous = state_.preferences;
   state_.preferences = preferences;
   try {
@@ -183,6 +185,14 @@ void RelayController::setPreferences(Preferences preferences) {
     state_.preferences = previous;
     emit operationFailed(QStringLiteral("settings"), QString::fromUtf8(error.what()));
   }
+}
+
+void RelayController::saveLayout(const QJsonObject& layout) {
+  if (state_.preferences.layout == layout) return;
+  const auto previous = state_.preferences.layout;
+  state_.preferences.layout = layout;
+  try { persistState(); }
+  catch (const std::exception&) { state_.preferences.layout = previous; }
 }
 
 void RelayController::persistState() {
@@ -286,6 +296,7 @@ void RelayController::synchronizeAccounts() {
                              : tones.at(static_cast<qsizetype>(account.githubId % tones.size()));
           account.authSource = QStringLiteral("github-cli");
           account.tokenSource = authenticatedAccount.tokenSource;
+          account.signingKey = previous ? previous->signingKey : QString{};
           account.active = authenticatedAccount.active;
           accounts.push_back(std::move(account));
         }
@@ -301,7 +312,10 @@ void RelayController::synchronizeAccounts() {
         // User edits made while account discovery was running take precedence
         // over the metadata snapshot captured at the start of the request.
         for (auto& refreshed : result.accounts) {
-          if (const auto* current = account(refreshed.id)) refreshed.email = current->email;
+          if (const auto* current = account(refreshed.id)) {
+            refreshed.email = current->email;
+            refreshed.signingKey = current->signingKey;
+          }
         }
         state_.accounts = std::move(result.accounts);
         state_.activeAccountId = std::move(result.activeAccountId);
@@ -476,6 +490,32 @@ void RelayController::setAccountEmail(const QString& accountId, const QString& r
   }
 }
 
+void RelayController::setAccountSigningKey(const QString& accountId, const QString& keyPath) {
+  auto iterator = std::find_if(state_.accounts.begin(), state_.accounts.end(),
+                               [&accountId](const auto& account) { return account.id == accountId; });
+  if (iterator == state_.accounts.end()) {
+    emit operationFailed(QStringLiteral("account-signing"), QStringLiteral("Account not found."));
+    return;
+  }
+  const auto path = keyPath.trimmed();
+  if (!path.isEmpty()) {
+    const QFileInfo key(path);
+    if (!key.isAbsolute() || !key.isFile() || path.contains(u'\n') || path.contains(u'\r')) {
+      emit operationFailed(QStringLiteral("account-signing"), tr("Choose an existing SSH key file."));
+      return;
+    }
+  }
+  const auto previous = iterator->signingKey;
+  iterator->signingKey = path.isEmpty() ? QString{} : QDir::cleanPath(path);
+  try {
+    persistState();
+    publishState();
+  } catch (const std::exception& error) {
+    iterator->signingKey = previous;
+    emit operationFailed(QStringLiteral("account-signing"), QString::fromUtf8(error.what()));
+  }
+}
+
 void RelayController::invalidateRepositoryRequests() {
   ++diffGeneration_;
   ++historyGeneration_;
@@ -568,7 +608,8 @@ void RelayController::requestHistory(const int skip, const int limit, const QStr
                         [git, operationGate, repositoryPath, skip, limit, anchor, graph, reference] {
                           invokeGate(operationGate, QStringLiteral("history"), repositoryPath);
                           return git->readHistoryPage(repositoryPath, skip, limit, anchor, (graph && reference.isEmpty()) || reference == QStringLiteral("*"),
-                                                      reference == QStringLiteral("*") ? QString{} : reference);
+                                                      reference == QStringLiteral("*") ? QString{} : reference,
+                                                      graph);
                         },
                         [this, generation, repositoryPath](HistoryPage page) {
                           if (generation != historyGeneration_ || !currentRepository_ ||
@@ -576,6 +617,21 @@ void RelayController::requestHistory(const int skip, const int limit, const QStr
                             return;
                           emit historyReady(repositoryPath, std::move(page));
                         }, [this, generation] { return generation == historyGeneration_; });
+}
+
+void RelayController::searchHistory(const QString& query, const QString& reference) {
+  if (!currentRepository_ || query.trimmed().isEmpty()) return;
+  const auto repositoryPath = currentRepository_->path;
+  const auto generation = ++searchGeneration_;
+  const auto git = git_;
+  const bool all = (state_.preferences.graphHistory && reference.isEmpty()) || reference == QStringLiteral("*");
+  const auto scope = reference == QStringLiteral("*") ? QString{} : reference;
+  runAsync<GitService::SearchResult>(QStringLiteral("history-search"),
+      [git, repositoryPath, query, all, scope] { return git->searchHistory(repositoryPath, query, all, scope); },
+      [this, generation, repositoryPath, query](GitService::SearchResult result) {
+        if (generation != searchGeneration_ || !currentRepository_ || currentRepository_->path != repositoryPath) return;
+        emit historySearchReady(repositoryPath, query, std::move(result.commits), result.truncated);
+      }, [this, generation] { return generation == searchGeneration_; });
 }
 
 void RelayController::requestCommitDetail(const QString& hash) {
@@ -726,7 +782,8 @@ void RelayController::pullOrigin(const QString& accountId) {
   const auto auth = auth_;
   const auto ssh = ssh_;
   const auto operationGate = config_.operationGate;
-  runAsync<Repository>(QStringLiteral("pull"),
+  struct Result { Repository repository; QString diverged; };
+  runAsync<Result>(QStringLiteral("pull"),
                        [git, auth, ssh, operationGate, repositoryPath, selectedAccount, profile] {
                          invokeGate(operationGate, QStringLiteral("pull"), repositoryPath);
                          const auto remote = git->originRemoteUrl(repositoryPath);
@@ -735,18 +792,19 @@ void RelayController::pullOrigin(const QString& accountId) {
                                                 : QString{};
                          const auto command = profile ? ssh->commandForRemote(*profile, remote)
                                                       : QString{};
-                         git->pullOrigin(repositoryPath, token,
+                         const auto diverged = git->pullOrigin(repositoryPath, token,
                                           selectedAccount ? selectedAccount->handle : QString{},
                                           command);
-                         return git->readRepository(repositoryPath);
+                         return Result{git->readRepository(repositoryPath), diverged};
                        },
-                       [this, generation, repositoryPath](Repository repository) {
+                       [this, generation, repositoryPath](Result result) {
                          if (generation != repositoryGeneration_ || !currentRepository_ ||
                              currentRepository_->path != repositoryPath)
                            return;
-                         currentRepository_ = std::make_unique<Repository>(repository);
-                         emit currentRepositoryChanged(repository);
-                         rememberRepository(repository);
+                         currentRepository_ = std::make_unique<Repository>(result.repository);
+                         emit currentRepositoryChanged(result.repository);
+                         rememberRepository(result.repository);
+                         if (!result.diverged.isEmpty()) emit pullDiverged(repositoryPath, result.diverged);
                        });
 }
 

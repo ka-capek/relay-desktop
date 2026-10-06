@@ -18,6 +18,8 @@ class QListView;
 class QMenu;
 class QPlainTextEdit;
 class QPushButton;
+class QCloseEvent;
+class QSplitter;
 class QStackedWidget;
 class QTabWidget;
 class QToolButton;
@@ -40,6 +42,7 @@ class MainWindow final : public QMainWindow {
 
  protected:
   bool event(QEvent* event) override;
+  void closeEvent(QCloseEvent* event) override;
 
  private:
   void buildMenus();
@@ -56,6 +59,9 @@ class MainWindow final : public QMainWindow {
   QWidget* buildHistoryPage(QWidget* parent);
   void connectController();
   void applyState(const AppState& state);
+  [[nodiscard]] QJsonObject captureLayout() const;
+  void restoreLayout(const QJsonObject& layout, bool includeWindow);
+  void saveLayout();
   void applyRepository(const Repository& repository);
   void rebuildAccountMenu();
   void updateSyncAction();
@@ -142,6 +148,11 @@ class MainWindow final : public QMainWindow {
   QList<QAction*> workflowActions_;
   QPushButton* conflictButton_{};
   QTimer* noticeTimer_{};
+  QTimer* layoutTimer_{};
+  QTimer* historySearchTimer_{};
+  QList<QSplitter*> splitters_;
+  QJsonObject defaultLayout_;
+  bool layoutRestored_{};
   QDialog* loginDialog_{};
   QWidget* runtimeBanner_{};
   QLabel* runtimeMessage_{};

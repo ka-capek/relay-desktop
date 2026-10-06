@@ -125,5 +125,18 @@ install(TARGETS relay_native
   RUNTIME DESTINATION .
 )
 
+# Regenerates build/icon.png, icon.ico and icon.icns from the SVG masters:
+#   cmake --build --preset <preset> --target icons
+# Not part of the normal build or the installed application.
+qt_add_executable(relay_icon_generator MANUAL_FINALIZATION tools/icon_generator.cpp)
+set_target_properties(relay_icon_generator PROPERTIES EXCLUDE_FROM_ALL TRUE MACOSX_BUNDLE FALSE WIN32_EXECUTABLE FALSE)
+target_link_libraries(relay_icon_generator PRIVATE Qt6::Gui Qt6::Svg)
+qt_finalize_target(relay_icon_generator)
+add_custom_target(icons
+  COMMAND relay_icon_generator "${PROJECT_SOURCE_DIR}/build"
+  DEPENDS relay_icon_generator
+  COMMENT "Regenerating application icons from build/icon.svg and build/icon-small.svg"
+  VERBATIM)
+
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/RelayPackaging.cmake")
 relay_configure_packaging(TARGET relay_native)

@@ -94,6 +94,8 @@ def main() -> None:
     parser.add_argument("--qt-dir", type=Path)
     parser.add_argument("--install-directory", type=Path)
     parser.add_argument("--no-open", action="store_true")
+    parser.add_argument("--runtimes", type=Path,
+                        help="Bundle Git and GitHub CLI from this fetch_runtimes.py output.")
     args = parser.parse_args()
     if sys.platform != "win32" or platform.machine().upper() != "AMD64":
         parser.error("This installer requires Windows x64.")
@@ -111,9 +113,15 @@ def main() -> None:
     compiler_version = subprocess.check_output([str(compiler), "--version"], text=True)
     if "clang version 20." not in compiler_version:
         parser.error("LLVM 20 is required by the Windows build.")
-    for tool, package in (("git", "Git.Git"), ("gh", "GitHub.cli")):
-        if not shutil.which(tool):
-            parser.error(f"Install {tool}: winget install --id {package} -e; then reopen PowerShell.")
+    runtimes = args.runtimes.resolve(strict=True) if args.runtimes else None
+    if runtimes:
+        for required in ("git/win-x64/cmd/git.exe", "gh/win-x64/gh.exe", "licenses/win-x64/bundled-runtimes.txt"):
+            if not (runtimes / required).is_file():
+                parser.error(f"--runtimes is missing {required}; run native/tools/fetch_runtimes.py first.")
+    else:
+        for tool, package in (("git", "Git.Git"), ("gh", "GitHub.cli")):
+            if not shutil.which(tool):
+                parser.error(f"Install {tool}: winget install --id {package} -e; then reopen PowerShell.")
     require_app_closed()
     cache = Path(os.environ["LOCALAPPDATA"]) / "RelayNativeInstaller"
     cache.mkdir(parents=True, exist_ok=True)
@@ -167,19 +175,27 @@ def main() -> None:
                 shutil.copy2(source / "LICENSE", licenses / "Relay-MIT.txt")
                 for name in ("LGPL-3.0.txt", "GPL-3.0.txt"):
                     shutil.copy2(source / "native/licenses" / name, licenses / name)
+                if runtimes:
+                    # Relay resolves resources/git and resources/gh before PATH.
+                    shutil.copytree(runtimes / "git/win-x64", stage / "resources/git", symlinks=True)
+                    (stage / "resources/gh").mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(runtimes / "gh/win-x64/gh.exe", stage / "resources/gh/gh.exe")
+                    for notice in (runtimes / "licenses/win-x64").iterdir():
+                        shutil.copy2(notice, licenses / notice.name)
                 for directory in ("LICENSES", "sbom"):
                     if (qt / directory).is_dir():
                         shutil.copytree(qt / directory, licenses / f"Qt-{directory}")
                 (licenses / "Qt-source.txt").write_text(
                     "Qt 6.11.1 is dynamically linked, unmodified, under LGPLv3.\n"
                     "Corresponding source: https://download.qt.io/archive/qt/6.11/6.11.1/single/\n"
-                    "Git and GitHub CLI are external dependencies.\n"
+                    + ("Git for Windows and GitHub CLI are bundled; see bundled-runtimes.txt.\n" if runtimes
+                       else "Git and GitHub CLI are external dependencies.\n") +
                     "The Microsoft Visual C++ runtime is redistributed with this local build.\n", encoding="utf-8")
                 duration = smoke_test(stage / "Relay.exe")
                 report = {"qt": "6.11.1", "platform": "windows-x64", "signed": False,
                           "installed_file_bytes": sum(p.stat().st_size for p in stage.rglob("*") if p.is_file()),
                           "smoke_seconds_including_250ms_exit_delay": duration,
-                          "git_bundled": False, "github_cli_bundled": False}
+                          "git_bundled": bool(runtimes), "github_cli_bundled": bool(runtimes)}
                 (stage / "installation.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
                 require_app_closed()
                 backup = install_staged(stage, destination)

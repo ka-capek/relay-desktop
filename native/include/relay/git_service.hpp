@@ -7,6 +7,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <memory>
 #include <optional>
 
 namespace relay {
@@ -20,6 +21,9 @@ class GitService final {
   static constexpr int historyBatchLimit = 200;
 
   explicit GitService(QString resourcesPath = {}, QString sourceRoot = {});
+  // Adds SSH commit signing with the account's key, after any configuration
+  // already passed through GIT_CONFIG_* in the inherited environment.
+  static void addSigningConfiguration(QProcessEnvironment& environment, const Account& account);
 
   [[nodiscard]] QString gitExecutable() const;
   [[nodiscard]] QProcessEnvironment gitProcessEnvironment(
@@ -31,7 +35,18 @@ class GitService final {
   [[nodiscard]] HistoryPage readHistoryPage(const QString& repositoryPath, int skip = 0,
                                             int limit = 50,
                                             const QString& anchor = {}, bool allBranches = false,
-                                            const QString& reference = {}) const;
+                                            const QString& reference = {},
+                                            bool topological = true) const;
+  // Commits in the same scope as readHistoryPage whose message, author name
+  // or email contains `query` (case-insensitive, literal), or whose hash
+  // starts with it. Newest first, at most `limit`; `truncated` reports more.
+  struct SearchResult {
+    QList<HistoryCommit> commits;
+    bool truncated{};
+  };
+  [[nodiscard]] SearchResult searchHistory(const QString& repositoryPath, const QString& query,
+                                           bool allBranches = false, const QString& reference = {},
+                                           int limit = 200) const;
   [[nodiscard]] CommitDetail readCommitDetail(const QString& repositoryPath,
                                               const QString& requestedHash) const;
   [[nodiscard]] QString readCommitFileDiff(const QString& repositoryPath,
@@ -49,8 +64,11 @@ class GitService final {
                    const QString& handle = {}, const QString& sshCommand = {}, bool allBranches = false) const;
   void pushOrigin(const QString& repositoryPath, const QString& token = {},
                   const QString& handle = {}, const QString& sshCommand = {}) const;
-  void pullOrigin(const QString& repositoryPath, const QString& token = {},
-                  const QString& handle = {}, const QString& sshCommand = {}) const;
+  // Fetches, then fast-forwards to the origin upstream. Returns the upstream
+  // ref (refs/remotes/origin/...) when local and origin have diverged and
+  // nothing was changed; an empty string otherwise.
+  [[nodiscard]] QString pullOrigin(const QString& repositoryPath, const QString& token = {},
+                                   const QString& handle = {}, const QString& sshCommand = {}) const;
   void performAction(const QString& repositoryPath, RepositoryAction action,
                      const QString& target = {}, const QStringList& paths = {},
                      const Account& account = {}) const;
@@ -93,6 +111,9 @@ class GitService final {
 
   QString resourcesPath_;
   QString sourceRoot_;
+  // Recent history windows, shared by copies of this service. Guarded by its
+  // own mutex because pages are read from worker threads.
+  std::shared_ptr<struct HistoryCache> historyCache_;
 };
 
 }  // namespace relay

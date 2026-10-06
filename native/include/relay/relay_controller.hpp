@@ -64,6 +64,9 @@ class RelayController final : public QObject {
   void start();
   void checkRuntimes();
   void setPreferences(relay::Preferences preferences);
+  // Saves window layout without publishing state: it changes nothing the
+  // views render, and a failed save is cosmetic.
+  void saveLayout(const QJsonObject& layout);
   void synchronizeAccounts();
   void connectAccount();
   void cancelAccountConnection();
@@ -77,12 +80,17 @@ class RelayController final : public QObject {
   void retryForgeCredentialCleanup();
   void requestAccountEmails(const QString& accountId);
   void setAccountEmail(const QString& accountId, const QString& requestedEmail);
+  // An absolute path to an existing SSH key signs this account's commits;
+  // an empty path follows the user's Git configuration again.
+  void setAccountSigningKey(const QString& accountId, const QString& keyPath);
 
   void openRepository(const QString& repositoryPath);
   void refreshRepository();
   void closeRepository();
   void requestFileDiff(const QString& filePath);
   void requestHistory(int skip = 0, int limit = 50, const QString& anchor = {}, const QString& reference = {});
+  // Searches the whole history in the scope requestHistory would read.
+  void searchHistory(const QString& query, const QString& reference = {});
   void requestCommitDetail(const QString& hash);
   void requestCommitFileDiff(const QString& hash, const QString& filePath);
   void commit(const QStringList& files, const QString& summary, const QString& description,
@@ -118,11 +126,15 @@ class RelayController final : public QObject {
   void currentRepositoryChanged(relay::Repository repository);
   void repositoryClosed();
   void commitCreated(QString repositoryPath);
+  // A pull found local and origin commits on both sides and changed nothing.
+  // upstreamRef is the fetched refs/remotes/origin/... to merge or rebase onto.
+  void pullDiverged(QString repositoryPath, QString upstreamRef);
   void commitUndone(QString repositoryPath, QString summary, QString description);
   void filePreviewReady(QString repositoryPath, QString filePath, relay::FilePreview preview);
   void commitFilePreviewReady(QString repositoryPath, QString hash, QString filePath, relay::FilePreview preview);
   void fileDiffReady(QString repositoryPath, QString filePath, QString diff);
   void historyReady(QString repositoryPath, relay::HistoryPage page);
+  void historySearchReady(QString repositoryPath, QString query, QList<relay::HistoryCommit> commits, bool truncated);
   void commitDetailReady(QString repositoryPath, relay::CommitDetail detail);
   void commitFileDiffReady(QString repositoryPath, QString hash, QString filePath,
                            QString diff);
@@ -222,6 +234,7 @@ class RelayController final : public QObject {
   quint64 repositoryGeneration_{};
   quint64 diffGeneration_{};
   quint64 historyGeneration_{};
+  quint64 searchGeneration_{};
   quint64 detailGeneration_{};
   quint64 commitDiffGeneration_{};
 };

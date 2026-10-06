@@ -5,6 +5,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QProcessEnvironment>
+#include <QScopeGuard>
+#include <QStandardPaths>
 #include <QSet>
 #include <QTemporaryDir>
 #include <QTest>
@@ -281,7 +283,7 @@ class GitServiceTest final : public QObject {
     static_cast<void>(service.cloneRepository(upstream, local));
     writeFile(QDir(upstream).filePath(QStringLiteral("second.txt")), QByteArrayLiteral("second\n"));
     commitAll(upstream, QStringLiteral("Second"));
-    service.pullOrigin(local);
+    QVERIFY(service.pullOrigin(local).isEmpty());
     QCOMPARE(runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}),
              runGit(upstream, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}));
     writeFile(QDir(local).filePath(QStringLiteral("local.txt")), QByteArrayLiteral("local\n"));
@@ -289,9 +291,16 @@ class GitServiceTest final : public QObject {
     const auto head = runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
     writeFile(QDir(upstream).filePath(QStringLiteral("remote.txt")), QByteArrayLiteral("remote\n"));
     commitAll(upstream, QStringLiteral("Remote"));
-    QVERIFY_EXCEPTION_THROWN(service.pullOrigin(local), relay::ProcessError);
+    QCOMPARE(service.pullOrigin(local), QStringLiteral("refs/remotes/origin/main"));
     QCOMPARE(runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), head);
     QVERIFY(QFileInfo::exists(QDir(local).filePath(QStringLiteral("local.txt"))));
+    // Up to date with local commits ahead: nothing to pull, nothing diverged.
+    runGit(local, {QStringLiteral("reset"), QStringLiteral("--hard"), QStringLiteral("origin/main")});
+    writeFile(QDir(local).filePath(QStringLiteral("ahead.txt")), QByteArrayLiteral("ahead\n"));
+    commitAll(local, QStringLiteral("Ahead"));
+    const auto ahead = runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    QVERIFY(service.pullOrigin(local).isEmpty());
+    QCOMPARE(runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), ahead);
   }
 
   void resolvesBundledRuntimeAndEnvironment() {
@@ -509,6 +518,161 @@ class GitServiceTest final : public QObject {
 
     QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.fetchOrigin(root.path()));
     QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.pushOrigin(root.path()));
+  }
+
+  void oversizedDiffIsAPreviewMessageNotAnError() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    const auto path = QDir(root.path()).filePath(QStringLiteral("large.txt"));
+    writeFile(path, QByteArrayLiteral("small\n"));
+    commitAll(root.path(), QStringLiteral("Small file"));
+    QByteArray large;
+    const QByteArray line(79, 'x');
+    while (large.size() < 25 * 1024 * 1024) large += line + '\n';
+    writeFile(path, large);
+    relay::GitService service;
+    QCOMPARE(service.getFileDiff(root.path(), QStringLiteral("large.txt")),
+             QStringLiteral("Diff is too large to preview (limit: 20 MiB)."));
+    commitAll(root.path(), QStringLiteral("Large file"));
+    const auto head = runGit(root.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    QCOMPARE(service.readCommitFileDiff(root.path(), head, QStringLiteral("large.txt")),
+             QStringLiteral("Diff is too large to preview (limit: 20 MiB)."));
+  }
+
+  void signsCommitsWithTheAccountSshKey() {
+    const auto keygen = QStandardPaths::findExecutable(QStringLiteral("ssh-keygen"));
+    if (keygen.isEmpty()) QSKIP("ssh-keygen is not available.");
+    QTemporaryDir root;
+    // The developer's own Git configuration may already sign every commit.
+    const auto previousGlobal = qgetenv("GIT_CONFIG_GLOBAL");
+    const auto previousNoSystem = qgetenv("GIT_CONFIG_NOSYSTEM");
+    qputenv("GIT_CONFIG_GLOBAL", root.filePath(QStringLiteral("empty-gitconfig")).toUtf8());
+    qputenv("GIT_CONFIG_NOSYSTEM", "1");
+    const auto restoreConfig = qScopeGuard([&] {
+      if (previousGlobal.isNull()) qunsetenv("GIT_CONFIG_GLOBAL"); else qputenv("GIT_CONFIG_GLOBAL", previousGlobal);
+      if (previousNoSystem.isNull()) qunsetenv("GIT_CONFIG_NOSYSTEM"); else qputenv("GIT_CONFIG_NOSYSTEM", previousNoSystem);
+    });
+    const auto repository = root.filePath(QStringLiteral("repository"));
+    QVERIFY(QDir().mkpath(repository));
+    initRepository(repository);
+    const auto key = root.filePath(QStringLiteral("signing"));
+    relay::ProcessRequest generate{keygen, {QStringLiteral("-q"), QStringLiteral("-t"), QStringLiteral("ed25519"),
+                                            QStringLiteral("-N"), QString{}, QStringLiteral("-f"), key}};
+    static_cast<void>(relay::ProcessRunner::run(generate));
+    QVERIFY(QFileInfo::exists(key));
+
+    relay::Account account;
+    account.name = QStringLiteral("Signer");
+    account.email = QStringLiteral("signer@example.test");
+    relay::GitService service;
+    writeFile(QDir(repository).filePath(QStringLiteral("unsigned.txt")), QByteArrayLiteral("plain\n"));
+    service.commitFiles(repository, {QStringLiteral("unsigned.txt")}, QStringLiteral("Unsigned"), {}, account);
+    QVERIFY(!service.readCommitDetail(repository, runGit(repository, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")})).isSigned);
+
+    account.signingKey = key;
+    writeFile(QDir(repository).filePath(QStringLiteral("signed.txt")), QByteArrayLiteral("signed\n"));
+    service.commitFiles(repository, {QStringLiteral("signed.txt")}, QStringLiteral("Signed"), {}, account);
+    auto head = runGit(repository, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    QVERIFY(service.readCommitDetail(repository, head).isSigned);
+    QVERIFY(runGit(repository, {QStringLiteral("cat-file"), QStringLiteral("commit"), head}).contains(QStringLiteral("BEGIN SSH SIGNATURE")));
+    // Commit-producing repository actions sign the same way.
+    service.performAction(repository, relay::RepositoryAction::amendMessage, QStringLiteral("Signed again"), {head}, account);
+    head = runGit(repository, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    QVERIFY(service.readCommitDetail(repository, head).isSigned);
+
+    // Configuration already passed through GIT_CONFIG_* is kept, not replaced.
+    const auto previousCount = qgetenv("GIT_CONFIG_COUNT");
+    const auto previousKey = qgetenv("GIT_CONFIG_KEY_0");
+    const auto previousValue = qgetenv("GIT_CONFIG_VALUE_0");
+    qputenv("GIT_CONFIG_COUNT", "1");
+    qputenv("GIT_CONFIG_KEY_0", "relay.test");
+    qputenv("GIT_CONFIG_VALUE_0", "kept");
+    const auto restore = qScopeGuard([&] {
+      if (previousCount.isNull()) qunsetenv("GIT_CONFIG_COUNT"); else qputenv("GIT_CONFIG_COUNT", previousCount);
+      if (previousKey.isNull()) qunsetenv("GIT_CONFIG_KEY_0"); else qputenv("GIT_CONFIG_KEY_0", previousKey);
+      if (previousValue.isNull()) qunsetenv("GIT_CONFIG_VALUE_0"); else qputenv("GIT_CONFIG_VALUE_0", previousValue);
+    });
+    QProcessEnvironment environment;
+    relay::GitService::addSigningConfiguration(environment, account);
+    QCOMPARE(environment.value(QStringLiteral("GIT_CONFIG_COUNT")), QStringLiteral("4"));
+    QVERIFY(!environment.contains(QStringLiteral("GIT_CONFIG_KEY_0")));
+    QCOMPARE(environment.value(QStringLiteral("GIT_CONFIG_KEY_3")), QStringLiteral("commit.gpgsign"));
+  }
+
+  void searchesWholeHistoryByMessageAuthorAndHash() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    const auto commitAs = [&](const QString& name, const QString& email, const QString& subject, const QString& body) {
+      auto environment = gitIdentity();
+      environment.insert(QStringLiteral("GIT_AUTHOR_NAME"), name);
+      environment.insert(QStringLiteral("GIT_AUTHOR_EMAIL"), email);
+      runGit(root.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-q"),
+                           QStringLiteral("-m"), subject, QStringLiteral("-m"), body}, environment);
+      return runGit(root.path(), {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    };
+    const auto first = commitAs(QStringLiteral("Ada"), QStringLiteral("ada@example.com"), QStringLiteral("Initial"), QStringLiteral("Nothing special"));
+    const auto body = commitAs(QStringLiteral("Ada"), QStringLiteral("ada@example.com"), QStringLiteral("Tidy"), QStringLiteral("Fixes the FROBNICATOR"));
+    const auto byLinus = commitAs(QStringLiteral("Linus"), QStringLiteral("linus@example.com"), QStringLiteral("Merge work"), QStringLiteral("x"));
+    for (int index = 0; index < 5; ++index)
+      commitAs(QStringLiteral("Ada"), QStringLiteral("ada@example.com"), QStringLiteral("Repeat %1").arg(index), QStringLiteral("repeat"));
+
+    relay::GitService service;
+    const auto hashes = [](const relay::GitService::SearchResult& result) {
+      QStringList list;
+      for (const auto& commit : result.commits) list.append(commit.fullHash);
+      return list;
+    };
+    // Message body, case-insensitive.
+    QCOMPARE(hashes(service.searchHistory(root.path(), QStringLiteral("frobnicator"))), QStringList{body});
+    // Author name and email; Git would AND --grep with --author.
+    QCOMPARE(hashes(service.searchHistory(root.path(), QStringLiteral("linus"))), QStringList{byLinus});
+    QCOMPARE(hashes(service.searchHistory(root.path(), QStringLiteral("linus@example"))), QStringList{byLinus});
+    // A hash prefix, and characters that would be regular expressions.
+    QCOMPARE(hashes(service.searchHistory(root.path(), first.left(10))), QStringList{first});
+    QVERIFY(service.searchHistory(root.path(), QStringLiteral("Repeat .*")).commits.isEmpty());
+    // Newest first, truncated at the limit.
+    const auto limited = service.searchHistory(root.path(), QStringLiteral("repeat"), false, {}, 3);
+    QCOMPARE(limited.commits.size(), 3);
+    QVERIFY(limited.truncated);
+    QCOMPARE(limited.commits.first().title, QStringLiteral("Repeat 4"));
+    QVERIFY(!service.searchHistory(root.path(), QStringLiteral("repeat")).truncated);
+    QVERIFY(service.searchHistory(root.path(), QStringLiteral("   ")).commits.isEmpty());
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError,
+        static_cast<void>(service.searchHistory(root.path(), QStringLiteral("x"), false, QStringLiteral("--all"))));
+  }
+
+  void pagesAcrossCachedHistoryWindowsWithoutGapsOrRepeats() {
+    QTemporaryDir root;
+    initRepository(root.path());
+    // 2,100 commits crosses the date-order window of 2,000.
+    QByteArray stream;
+    for (int index = 1; index <= 2100; ++index) {
+      const auto message = QByteArray("commit ") + QByteArray::number(index);
+      stream += "commit refs/heads/main\nmark :" + QByteArray::number(index) +
+                "\ncommitter Fixture <fixture@example.test> " + QByteArray::number(1700000000 + index) +
+                " +0000\ndata " + QByteArray::number(message.size()) + "\n" + message + "\n";
+      if (index > 1) stream += "from :" + QByteArray::number(index - 1) + "\n";
+      stream += "\n";
+    }
+    relay::ProcessRequest import{QStringLiteral("git"), {QStringLiteral("-C"), root.path(), QStringLiteral("fast-import"), QStringLiteral("--quiet")}};
+    import.standardInput = stream;
+    static_cast<void>(relay::ProcessRunner::run(import));
+    runGit(root.path(), {QStringLiteral("reset"), QStringLiteral("-q"), QStringLiteral("--hard"), QStringLiteral("main")});
+    const auto expected = runGit(root.path(), {QStringLiteral("rev-list"), QStringLiteral("HEAD")}).split(u'\n');
+    QCOMPARE(expected.size(), 2100);
+
+    relay::GitService service;
+    for (const bool topological : {false, true}) {
+      QStringList seen;
+      auto page = service.readHistoryPage(root.path(), 0, 200, {}, false, {}, topological);
+      for (const auto& commit : page.commits) seen.append(commit.fullHash);
+      while (!page.endOfHistory) {
+        page = service.readHistoryPage(root.path(), static_cast<int>(seen.size()), 200, page.anchor, false, {}, topological);
+        QVERIFY(!page.commits.isEmpty());
+        for (const auto& commit : page.commits) seen.append(commit.fullHash);
+      }
+      QCOMPARE(seen, expected);
+    }
   }
 
   void pagesAnchoredHistoryAndDescribesRootMergeAndDeletion() {

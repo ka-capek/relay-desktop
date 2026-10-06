@@ -70,7 +70,8 @@ notarization on macOS and Authenticode signing on Windows.
 The install step runs `native/tools/verify_staged_release.cmake`. It checks the
 application, Qt platform/image/TLS plugins, Git HTTPS support, templates,
 Windows CA bundle, `gh`, notices, architecture, absence of excluded Git
-Credential Manager/LFS/debug payloads, macOS linkage, and bundle signature.
+Credential Manager/debug payloads (Git LFS is kept, because Git runs it for
+repositories that use LFS), macOS linkage, and bundle signature.
 
 Record each Phase-1 scenario separately after putting the application into the
 specified state:
