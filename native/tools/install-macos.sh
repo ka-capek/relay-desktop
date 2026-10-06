@@ -14,6 +14,7 @@ Install Relay Native on an Apple Silicon Mac (macOS 14 or newer).
 
 Usage: bash install-macos.sh [--no-open] [--source DIRECTORY]
                             [--qt-dir DIRECTORY] [--skip-deps]
+                            [--runtimes DIRECTORY]
 
 By default, downloads main from ka-capek/relay-desktop,
 installs build dependencies through Homebrew, builds with Qt 6.11.1, and
@@ -23,6 +24,7 @@ installs ~/Applications/Relay Native.app. Existing apps are backed up.
 --source DIR    Build this checkout without changing its Git state.
 --qt-dir DIR    Use an existing Qt 6.11.1 macOS SDK.
 --skip-deps     Require preinstalled Homebrew, LLVM 20, Python 3.12, Git and gh.
+--runtimes DIR  Bundle the GitHub CLI from native/tools/fetch_runtimes.py output.
 --help         Show this help without changing anything.
 
 Git/gh remain Homebrew dependencies; Qt is copied into the app. This is a
@@ -33,6 +35,7 @@ fail() { printf '\nError: %s\n' "$*" >&2; exit 1; }
 info() { printf '\n==> %s\n' "$*"; }
 source_dir=''
 qt_dir=''
+runtimes=''
 launch=1
 skip_deps=0
 while [ "$#" -gt 0 ]; do
@@ -40,14 +43,21 @@ while [ "$#" -gt 0 ]; do
     --help|-h) usage; exit 0 ;;
     --no-open) launch=0; shift ;;
     --skip-deps) skip_deps=1; shift ;;
-    --source|--qt-dir)
+    --source|--qt-dir|--runtimes)
       [ "$#" -ge 2 ] && [ -n "$2" ] || fail "$1 needs a directory."
-      if [ "$1" = --source ]; then source_dir="$2"; else qt_dir="$2"; fi
+      case "$1" in
+        --source) source_dir="$2" ;;
+        --qt-dir) qt_dir="$2" ;;
+        *) runtimes="$2" ;;
+      esac
       shift 2 ;;
     *) fail "Unknown option: $1 (use --help)." ;;
   esac
 done
 
+if [ -n "$runtimes" ]; then
+  runtimes=$(cd "$runtimes" 2>/dev/null && pwd -P) || fail '--runtimes must be an existing directory.'
+fi
 [ "$(uname -s)" = Darwin ] || fail 'This installer requires macOS.'
 if [ "$(uname -m)" != arm64 ]; then
   fail 'This installer supports Apple Silicon (M1 and newer), not Intel Macs.'
@@ -155,8 +165,18 @@ cp "$source_dir/native/licenses/GPL-3.0.txt" "$licenses/gpl-3.0.txt"
 cat > "$licenses/Qt-source.txt" <<'NOTICE'
 Qt 6.11.1 is dynamically linked, unmodified, under LGPLv3.
 Corresponding source: https://download.qt.io/archive/qt/6.11/6.11.1/single/
-Git and GitHub CLI are provided by the local Homebrew installation.
+Git is provided by the Xcode Command Line Tools or Homebrew.
 NOTICE
+if [ -n "$runtimes" ]; then
+  # Relay resolves Contents/Resources/gh/gh before PATH. macOS has no official
+  # relocatable Git build, so Git stays external.
+  [ -x "$runtimes/gh/mac-arm64/gh" ] || fail "--runtimes has no gh/mac-arm64/gh; run native/tools/fetch_runtimes.py first."
+  mkdir -p "$app/Contents/Resources/gh"
+  cp "$runtimes/gh/mac-arm64/gh" "$app/Contents/Resources/gh/gh"
+  cp "$runtimes/licenses/mac-arm64/"* "$licenses/"
+else
+  echo 'The GitHub CLI is provided by Homebrew.' >> "$licenses/Qt-source.txt"
+fi
 info 'Deploying Qt and checking the application.'
 "$qt_dir/bin/macdeployqt" "$app" -always-overwrite
 /usr/bin/codesign --force --deep --sign - "$app"
