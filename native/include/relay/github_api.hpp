@@ -21,6 +21,14 @@ class GitHubApi final {
   [[nodiscard]] GitHubRepositoryPage repositories(const QString& token, const QString& handle) const;
   [[nodiscard]] QList<EmailChoice> emailChoices(const Account& account, const QString& token) const;
 
+  [[nodiscard]] QString createRepository(const QString& token, const QString& handle,
+      const QString& name, const QString& description, bool isPrivate) const;
+  // Relay's own message for a repository-creation response other than 201.
+  // A server error may arrive after GitHub created the repository.
+  [[nodiscard]] static QString repositoryCreationError(int status, const QString& handle,
+                                                       const QString& name);
+  [[nodiscard]] static QJsonObject newRepositoryPayload(const QString& name,
+      const QString& description, bool isPrivate);
   static QString noreplyAddress(const Account& account);
   static bool isValidEmail(const QString& email);
   static QList<EmailChoice> emailChoicesFromJson(const Account& account, const QJsonArray& emails);
@@ -33,7 +41,7 @@ class GitHubApi final {
     QByteArray linkHeader;
   };
 
-  [[nodiscard]] Response get(const QUrl& url, const QString& token) const;
+  [[nodiscard]] Response get(const QUrl& url, const QString& token, const QJsonObject& body = {}) const;
 };
 
 }  // namespace relay

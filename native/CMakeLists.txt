@@ -1,4 +1,13 @@
 set(RELAY_NATIVE_SOURCES
+  include/relay/forge_types.hpp
+  include/relay/forge_service.hpp
+  include/relay/credential_store.hpp
+  include/relay/forge_dialog.hpp
+  src/forge_service.cpp
+  src/credential_store.cpp
+  src/forge_controller.cpp
+  src/forge_dialog.cpp
+  src/forge_ui.cpp
   include/relay/domain.hpp
   include/relay/avatar_cache.hpp
   include/relay/app_paths.hpp
@@ -19,6 +28,7 @@ set(RELAY_NATIVE_SOURCES
   include/relay/main_window.hpp
   include/relay/ssh_service.hpp
   include/relay/theme.hpp
+  include/relay/runtime_check.hpp
   src/domain.cpp
   src/avatar_cache.cpp
   src/app_paths.cpp
@@ -27,6 +37,7 @@ set(RELAY_NATIVE_SOURCES
   src/dialogs.cpp
   src/github_api.cpp
   src/github_auth.cpp
+  src/git_workflows.cpp
   src/git_service.cpp
   src/item_delegates.cpp
   src/list_models.cpp
@@ -37,16 +48,16 @@ set(RELAY_NATIVE_SOURCES
   src/repository_order.cpp
   src/relay_application.cpp
   src/main_window.cpp
+  src/workflow_ui.cpp
   src/ssh_service.cpp
   src/theme.cpp
+  src/runtime_check.cpp
 )
 
 qt_add_executable(relay_native
   MACOSX_BUNDLE
   WIN32
   src/main.cpp
-  ${RELAY_NATIVE_SOURCES}
-  resources/resources.qrc
 )
 
 if(APPLE)
@@ -59,7 +70,13 @@ elseif(WIN32)
   target_sources(relay_native PRIVATE resources/relay.rc)
 endif()
 
-add_library(relay_native_core STATIC ${RELAY_NATIVE_SOURCES})
+add_library(relay_native_core STATIC ${RELAY_NATIVE_SOURCES} resources/resources.qrc)
+target_link_libraries(relay_native PRIVATE relay_native_core)
+if(APPLE)
+  target_link_libraries(relay_native_core PUBLIC "-framework Security" "-framework CoreFoundation")
+elseif(WIN32)
+  target_link_libraries(relay_native_core PUBLIC Advapi32)
+endif()
 
 foreach(target IN ITEMS relay_native relay_native_core)
   target_include_directories(${target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

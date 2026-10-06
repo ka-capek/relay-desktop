@@ -79,13 +79,13 @@ specified state:
 python3 native/tools/measure_release.py \
   --scenario idle \
   --stage build-native/stage/Relay.app \
-  --artifact outputs/native-installers/Relay-0.6.0-arm64.dmg \
+  --artifact outputs/native-installers/Relay-0.5.1-arm64.dmg \
   --pid 12345 \
   --output outputs/native-measurements/macos-idle.json
 ```
 
 Repeat for `repository-open`, `large-diff`, and `long-history`, on macOS and
-Windows, using the same fixtures for Electron and native Relay. macOS records
+Windows, using the same fixtures on both. macOS records
 `footprint` physical footprint and dirty memory. Windows records private bytes
 and working set through PowerShell. The JSON also records apparent/allocated
 installed size, artifact bytes and SHA-256, process details, machine/OS, UTC

@@ -20,8 +20,9 @@ struct ProcessRequest {
   QString program;
   QStringList arguments;
   QString workingDirectory;
+  QByteArray standardInput;
   QProcessEnvironment environment{QProcessEnvironment::systemEnvironment()};
-  int timeoutMilliseconds{-1};
+  int timeoutMilliseconds{120000};
   qsizetype maximumOutputBytes{20 * 1024 * 1024};
 };
 

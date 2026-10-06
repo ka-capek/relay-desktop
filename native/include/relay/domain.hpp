@@ -1,7 +1,10 @@
 #pragma once
 
+#include "relay/forge_types.hpp"
+
 #include <QDateTime>
 #include <QHash>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QList>
@@ -71,6 +74,12 @@ struct ChangedFile {
   bool binary{};
 };
 
+struct FilePreview {
+  QString diff;
+  QImage before;
+  QImage after;
+};
+
 struct HistoryItem {
   QString fullHash;
   QString hash;
@@ -112,6 +121,17 @@ struct CommitDetail {
   qsizetype removed{};
 };
 
+enum class RepositoryAction {
+  renameBranch, deleteBranch, checkoutRemote, mergeBranch, rebaseBranch, abortOperation, skipOperation,
+  continueOperation, resolveOurs, resolveTheirs, markResolved, stash,
+  applyStash, dropStash, discardFiles, revertCommit, cherryPick, undoCommit, setOrigin, amendMessage, createTag, deleteTag
+};
+
+struct StashEntry {
+  QString hash;
+  QString description;
+};
+
 struct Repository {
   QString path;
   QString name;
@@ -126,9 +146,30 @@ struct Repository {
   bool hasUpstream{};
   std::optional<QDateTime> latestCommit;
   std::optional<QDateTime> firstCommit;
+  QStringList remoteBranches;
+  QList<StashEntry> stashes;
+  QString pendingOperation;
+  QStringList conflictedFiles;
+  bool hasHead{};
+  QString commitName;
+  QString commitEmail;
+  QString historyRefState;
+  QStringList tags;
+};
+
+struct Preferences {
+  bool refreshOnFocus{true};
+  int diffFontSize{12};
+  QString commitName;
+  QString commitEmail;
+  bool graphHistory{};
+  QString themeId{QStringLiteral("light")};
+  QJsonObject customTheme;
 };
 
 struct AppState {
+  QList<ForgeAccount> forgeAccounts;
+  QStringList forgeCredentialCleanup;
   QList<Account> accounts;
   QString activeAccountId;
   QList<RepositorySummary> repositories;
@@ -137,6 +178,7 @@ struct AppState {
   QStringList manualOrder;
   QList<SshProfile> sshProfiles;
   QHash<QString, QString> repositorySshProfiles;
+  Preferences preferences;
 };
 
 struct GitHubRepository {
@@ -197,3 +239,5 @@ QJsonObject mergeAppStateIntoJson(const AppState& state, QJsonObject base = {});
 Q_DECLARE_METATYPE(relay::Repository)
 Q_DECLARE_METATYPE(relay::HistoryPage)
 Q_DECLARE_METATYPE(relay::CommitDetail)
+
+Q_DECLARE_METATYPE(relay::FilePreview)

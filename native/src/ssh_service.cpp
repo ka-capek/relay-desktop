@@ -80,6 +80,7 @@ QString SshService::commandFor(const SshProfile& profile) const {
   const auto normalized = normalizeProfile(profile);
   if (!normalized) return {};
   QStringList parts{shellQuote(executable())};
+  if (!normalized->user.isEmpty()) parts.append({QStringLiteral("-l"), shellQuote(normalized->user)});
   if (!normalized->identityFile.isEmpty()) {
     parts.append({QStringLiteral("-i"), shellQuote(normalized->identityFile)});
     if (normalized->identitiesOnly) {
@@ -88,6 +89,16 @@ QString SshService::commandFor(const SshProfile& profile) const {
   }
   if (normalized->port) parts.append({QStringLiteral("-p"), QString::number(*normalized->port)});
   return parts.size() == 1 ? QString{} : parts.join(u' ');
+}
+
+QString SshService::commandForRemote(const SshProfile& profile, const QString& remote) const {
+  const auto parsed = parseRemote(remote);
+  if (!parsed) return {};
+  const auto normalized = normalizeProfile(profile);
+  if (!normalized || normalized->host.compare(parsed->host, Qt::CaseInsensitive) != 0) {
+    throw std::runtime_error("The selected SSH identity belongs to another host. Choose an identity matching this remote, or use your SSH agent and configuration.");
+  }
+  return commandFor(*normalized);
 }
 
 SshTestResult SshService::describeResult(const QString& host, const int code, const QString& output) {

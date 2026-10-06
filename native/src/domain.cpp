@@ -162,6 +162,12 @@ QJsonObject sshProfileToJson(const SshProfile& profile) {
 
 AppState appStateFromJson(const QJsonObject& object) {
   AppState state;
+  for (const auto& key : object.value(QStringLiteral("forgeCredentialCleanup")).toArray())
+    if (!key.toString().isEmpty()) state.forgeCredentialCleanup.append(key.toString());
+  for (const auto& value : object.value(QStringLiteral("forgeAccounts")).toArray()) {
+    const auto account = forgeAccountFromJson(value.toObject());
+    if (!account.id.isEmpty()) state.forgeAccounts.append(account);
+  }
   for (const auto& value : object.value(QStringLiteral("accounts")).toArray())
     state.accounts.append(accountFromJson(value.toObject()));
   state.activeAccountId = object.value(QStringLiteral("activeAccountId")).toString();
@@ -182,10 +188,22 @@ AppState appStateFromJson(const QJsonObject& object) {
   for (const auto& value : object.value(QStringLiteral("sshProfiles")).toArray())
     state.sshProfiles.append(sshProfileFromJson(value.toObject()));
   state.repositorySshProfiles = parseBindings(object.value(QStringLiteral("repositorySshProfiles")).toObject());
+  const auto preferences = object.value(QStringLiteral("preferences")).toObject();
+  state.preferences.refreshOnFocus = preferences.value(QStringLiteral("refreshOnFocus")).toBool(true);
+  state.preferences.diffFontSize = qBound(10, preferences.value(QStringLiteral("diffFontSize")).toInt(12), 24);
+  state.preferences.commitName = preferences.value(QStringLiteral("commitName")).toString();
+  state.preferences.commitEmail = preferences.value(QStringLiteral("commitEmail")).toString();
+  state.preferences.graphHistory = preferences.value(QStringLiteral("graphHistory")).toBool();
+  state.preferences.themeId = preferences.value(QStringLiteral("themeId")).toString(QStringLiteral("light"));
+  state.preferences.customTheme = preferences.value(QStringLiteral("customTheme")).toObject();
   return state;
 }
 
 QJsonObject mergeAppStateIntoJson(const AppState& state, QJsonObject base) {
+  base.insert(QStringLiteral("forgeCredentialCleanup"), QJsonArray::fromStringList(state.forgeCredentialCleanup));
+  QJsonArray forgeAccounts;
+  for (const auto& account : state.forgeAccounts) forgeAccounts.append(forgeAccountToJson(account));
+  base.insert(QStringLiteral("forgeAccounts"), forgeAccounts);
   QJsonArray accounts;
   for (const auto& account : state.accounts) accounts.append(accountToJson(account));
   QJsonArray repositories;
@@ -211,6 +229,15 @@ QJsonObject mergeAppStateIntoJson(const AppState& state, QJsonObject base) {
   base.insert(QStringLiteral("manualOrder"), manualOrder);
   base.insert(QStringLiteral("sshProfiles"), profiles);
   base.insert(QStringLiteral("repositorySshProfiles"), bindings(state.repositorySshProfiles));
+  auto preferences = base.value(QStringLiteral("preferences")).toObject();
+  preferences.insert(QStringLiteral("refreshOnFocus"), state.preferences.refreshOnFocus);
+  preferences.insert(QStringLiteral("diffFontSize"), state.preferences.diffFontSize);
+  preferences.insert(QStringLiteral("commitName"), state.preferences.commitName);
+  preferences.insert(QStringLiteral("commitEmail"), state.preferences.commitEmail);
+  preferences.insert(QStringLiteral("graphHistory"), state.preferences.graphHistory);
+  preferences.insert(QStringLiteral("themeId"), state.preferences.themeId);
+  preferences.insert(QStringLiteral("customTheme"), state.preferences.customTheme);
+  base.insert(QStringLiteral("preferences"), preferences);
   return base;
 }
 

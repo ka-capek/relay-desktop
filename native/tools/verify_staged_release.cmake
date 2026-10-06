@@ -35,11 +35,14 @@ if(RELAY_VERIFY_BUNDLED_RUNTIMES)
   _relay_assert_file("GitHub CLI's MIT license" "${_resources}/licenses/GitHub-CLI-MIT.txt")
 endif()
 
-file(GLOB_RECURSE _excluded_payload LIST_DIRECTORIES TRUE
-  "${_resources}/*git-lfs*"
-  "${_resources}/*git-credential-manager*"
-  "${_resources}/*.pdb"
-  "${_resources}/*.dSYM")
+file(GLOB_RECURSE _resource_entries LIST_DIRECTORIES TRUE "${_resources}/*")
+set(_excluded_payload)
+foreach(entry IN LISTS _resource_entries)
+  get_filename_component(_entry_name "${entry}" NAME)
+  if(_entry_name MATCHES "git-lfs|git-credential-manager|\\.pdb$|\\.dSYM$")
+    list(APPEND _excluded_payload "${entry}")
+  endif()
+endforeach()
 if(_excluded_payload)
   list(JOIN _excluded_payload "\n  " _excluded_list)
   message(FATAL_ERROR "Excluded debug/GCM/LFS payload leaked into the staged release:\n  ${_excluded_list}")
@@ -79,9 +82,19 @@ if(RELAY_VERIFY_PLATFORM STREQUAL "mac-arm64")
       if(NOT _otool_result EQUAL 0)
         message(FATAL_ERROR "otool failed for ${candidate}: ${_otool_error}")
       endif()
+      # otool prints the inspected file's absolute path as an unindented
+      # header. Check dependency records only: the stage itself may be inside
+      # the source/build tree, and universal binaries have multiple headers.
+      string(REPLACE "\n" ";" _dependency_lines "${_dependencies}")
+      set(_dependency_records "")
+      foreach(line IN LISTS _dependency_lines)
+        if(line MATCHES "^[ \t]+")
+          string(APPEND _dependency_records "${line}\n")
+        endif()
+      endforeach()
       foreach(forbidden_prefix IN ITEMS
           "/opt/homebrew" "/usr/local" "${RELAY_VERIFY_SOURCE_DIR}" "${RELAY_VERIFY_BINARY_DIR}")
-        string(FIND "${_dependencies}" "${forbidden_prefix}" _forbidden_position)
+        string(FIND "${_dependency_records}" "${forbidden_prefix}" _forbidden_position)
         if(NOT forbidden_prefix STREQUAL "" AND NOT _forbidden_position EQUAL -1)
           message(FATAL_ERROR
             "Staged Mach-O depends on a non-relocatable local path '${forbidden_prefix}':\n"

@@ -1,11 +1,34 @@
 #include "relay/ssh_service.hpp"
 
 #include <QTest>
+#include <stdexcept>
 
 class SshServiceTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void transportUsesTheUserChosenInTheProfile() {
+    relay::SshProfile profile;
+    profile.host = QStringLiteral("example.test");
+    profile.user = QStringLiteral("deploy");
+    relay::SshService service;
+    QVERIFY(service.commandFor(profile).contains(QStringLiteral("-l 'deploy'")));
+  }
+
+  void selectedIdentitySupportsGithubSshButNeverAnotherHost() {
+    relay::SshProfile profile;
+    profile.host = QStringLiteral("github.com");
+    profile.user = QStringLiteral("git");
+    profile.identityFile = QStringLiteral("/keys/work key");
+    relay::SshService service;
+    const auto command = service.commandFor(profile);
+    QVERIFY(command.contains(QStringLiteral("-i '/keys/work key'")));
+    QCOMPARE(service.commandForRemote(profile, QStringLiteral("git@github.com:a/b.git")), command);
+    QCOMPARE(service.commandForRemote(profile, QStringLiteral("ssh://git@GITHUB.COM/a/b.git")), command);
+    QVERIFY(service.commandForRemote(profile, QStringLiteral("https://github.com/a/b.git")).isEmpty());
+    QVERIFY_THROWS_EXCEPTION(std::runtime_error, service.commandForRemote(profile, QStringLiteral("git@other.example:a/b.git")));
+  }
+
   void parsesRemoteForms() {
     const auto explicitRemote = relay::SshService::parseRemote(QStringLiteral("ssh://git@example.com:2222/team/repo.git"));
     QVERIFY(explicitRemote);

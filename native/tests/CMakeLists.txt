@@ -1,11 +1,43 @@
 find_package(Qt6 ${RELAY_QT_MIN_VERSION} EXACT REQUIRED COMPONENTS Test)
 
-foreach(test_name IN ITEMS app_paths avatar_cache dialogs diff_model domain git_service github_api github_auth list_models main_window process_runner relay_controller relay_store repository_discovery repository_order ssh_service theme)
+foreach(test_name IN ITEMS forge_integration forge_service app_paths avatar_cache dialogs diff_model domain git_service git_workflows github_api github_auth list_models main_window process_runner relay_controller relay_store repository_discovery repository_order runtime_check ssh_service theme)
   qt_add_executable(tst_${test_name} tst_${test_name}.cpp)
+  # Console entry points keep QtTest diagnostics visible to CTest on Windows.
+  set_target_properties(tst_${test_name} PROPERTIES WIN32_EXECUTABLE FALSE)
   target_link_libraries(tst_${test_name} PRIVATE relay_native_core Qt6::Test)
   target_compile_definitions(tst_${test_name} PRIVATE QT_NO_CAST_FROM_ASCII QT_NO_CAST_TO_ASCII)
-  add_test(NAME ${test_name} COMMAND tst_${test_name})
+  add_test(NAME ${test_name} COMMAND tst_${test_name}
+    -o -,txt -o "${CMAKE_CURRENT_BINARY_DIR}/${test_name}.txt,txt")
 endforeach()
+
+# Git for Windows process startup makes this multi-repository integration suite
+# substantially slower than the individual unit/UI suites.
+set_tests_properties(git_workflows PROPERTIES TIMEOUT 180)
+if(WIN32)
+  # Run 36154921968 passed the new branch/cherry-pick cases, then exhausted
+  # suite limits near the final fixtures. Git process startup dominates here.
+  set_tests_properties(git_service PROPERTIES TIMEOUT 180)
+  set_tests_properties(git_workflows PROPERTIES TIMEOUT 300)
+  # The UI suite also creates real Git repositories. With the toolbar pull,
+  # resize and SSH-binding fixtures, Windows process startup can exceed the
+  # workflow's 60-second default even while every individual test passes.
+  set_tests_properties(main_window PROPERTIES TIMEOUT 180)
+endif()
 
 add_test(NAME app_smoke COMMAND $<TARGET_FILE:relay_native> --smoke-test)
 set_tests_properties(app_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
+
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME windows_installer_safety COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_install_windows.py")
+endif()
+
+# Mock macOS inspection tools use POSIX shell scripts. Linux and macOS run
+# this verifier regression; Windows still requires native release validation.
+if(UNIX)
+  add_test(NAME packaging_verifier COMMAND "${CMAKE_COMMAND}"
+    "-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/tst_packaging.cmake")
+  set_tests_properties(packaging_verifier PROPERTIES TIMEOUT 30)
+endif()

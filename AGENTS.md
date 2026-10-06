@@ -4,48 +4,52 @@ This document is the authoritative engineering guide for coding agents working
 on Relay. Read it before changing code, running release commands, modifying Git
 or GitHub authentication, or publishing anything.
 
-It describes the shipping Electron implementation at Relay `0.5.0` and the
-C++26/Qt native successor now being built alongside it. When this document and
-the code disagree, treat the code as the immediate source of truth and update
-this document in the same change.
+Relay is a native C++26/Qt 6 Widgets application for macOS and Windows. The
+Electron client (`0.5.0`) has been removed from this repository and is no
+longer maintained. When this document and the code disagree, treat the code as
+the immediate source of truth and update this document in the same change.
+
+For the latest verification record read `docs/native-completion-2026-09-14.md`.
+Commit `ca05c2b` passed the pinned Qt macOS and Windows CI jobs, including the
+macOS source installer, in run 34118316989.
 
 ## 1. Product Definition
 
-Relay is a small GitHub Desktop-style Electron client whose distinguishing
-feature is first-class support for multiple GitHub accounts.
+Relay is a small GitHub Desktop-style client whose distinguishing feature is
+first-class support for multiple accounts.
 
 The supported production targets are deliberately narrow:
 
 - macOS on Apple Silicon (`arm64`)
 - Windows 64-bit (`x64`)
-- GitHub.com, not arbitrary GitHub Enterprise hosts
+- GitHub.com for OAuth accounts; Gitea, Forgejo and GitLab (including
+  self-hosted HTTPS servers) for API repository discovery; any Git host over
+  SSH
 
-Relay provides these working flows:
+Relay provides these flows:
 
 - Connect multiple GitHub accounts using the official GitHub CLI browser/device
-  OAuth flow.
-- Switch the active GitHub account without entering a personal access token.
-- Assign a specific GitHub account to a specific local repository, or let that
+  OAuth flow, and switch between them without a personal access token.
+- Assign a specific account to a specific local repository, or let that
   repository follow the globally active account.
 - Set a distinct commit email for each connected account.
-- Open an existing local Git repository.
-- Recursively scan a parent folder and remember all repositories found below it.
-- Remove a repository shortcut from Relay without deleting anything on disk.
-- Browse repositories available to the active GitHub account, including private,
-  collaborator, and organization repositories.
-- Clone a repository selected from that list, or clone an arbitrary HTTPS or SSH
-  URL.
-- View working-tree changes and textual diffs.
-- Browse the full branch history, loaded progressively, with per-commit
-  metadata, changed files, and per-file diffs.
-- Sort the repository sidebar manually, by age, by name, or by latest commit.
-- Select an SSH identity for a repository on a Git host other than GitHub.com.
-- Select changed files and create a commit using the selected account identity.
-- Fetch from and push to `origin` using the selected GitHub account.
-- Switch between existing local branches.
+- Open, initialize, or publish a local repository; recursively scan a folder
+  for repositories; remove a shortcut without touching disk.
+- Browse and clone repositories available to a GitHub, Gitea/Forgejo or GitLab
+  account, or clone an arbitrary HTTPS or SSH URL.
+- View working-tree changes, textual diffs and bounded image previews.
+- Browse history as a list or an all-branch graph, scoped to the current
+  branch, all branches, or a chosen local or remote branch.
+- Commit selected files; fetch, pull (fast-forward) and push `origin`.
+- Switch to local or remote-tracking branches; create, rename and delete local
+  branches; merge, rebase unpublished commits, revert, cherry-pick (including
+  several commits), stash, recoverable discard, undo, amend, tags, and conflict
+  resolution.
+- Select an SSH identity per repository for any SSH host, including GitHub.
+- Choose a theme, including imported custom palettes.
 
-Relay is not currently a complete GitHub Desktop replacement. See
-"Known Limitations" before promising or assuming behavior.
+Relay is not a complete GitHub Desktop replacement. See "Known Limitations"
+before promising or assuming behavior.
 
 ## 2. Non-Negotiable Product Invariants
 
@@ -53,110 +57,72 @@ Preserve these behaviors unless the user explicitly requests a product change:
 
 1. **Start with no repository open.** Recent repositories may remain in the
    sidebar, but application startup must not automatically reopen one.
-2. **Never ask for a PAT.** Authentication is browser-based GitHub CLI OAuth.
-3. **Never persist an OAuth token in `relay-data.json`, React state, logs, or Git
-   configuration.** Tokens may exist only transiently in the main process and a
-   child process environment.
+2. **Never ask for a GitHub PAT.** GitHub authentication remains browser-based
+   GitHub CLI OAuth. The owner explicitly authorized API-token fallback for
+   Gitea/Forgejo/GitLab discovery on 2026-09-25. Only the one-time password
+   input may hold that token; keep it out of account models, JSON and logs,
+   and store it in macOS Keychain / Windows Credential Manager.
+3. **Never persist an OAuth token in `relay-data.json`, widget or model state,
+   logs, or Git configuration.** Tokens may exist only transiently inside a
+   controller worker operation and a child process environment.
 4. **Removing a repository from Relay never deletes, moves, cleans, resets, or
    otherwise modifies repository files.** It removes only Relay metadata.
 5. **Repository identity follows this precedence:** an explicit per-repository
    account binding first, otherwise the globally active account.
 6. **Account commit email is independent of the GitHub login email.** A blank
    value resets to GitHub's numeric-ID noreply address.
-7. **The account switch popover closes when the user clicks outside it.**
+7. **The account menu closes when the user clicks outside it.**
 8. **Use flat, code-native SVG icons.** Do not introduce emoji as UI icons,
    glossy/illuminated icons, or icon gradients.
-9. **Keep the signed-in status visually quiet.** Do not restore the removed
-   green status dot or an "All systems operational" message.
-10. **macOS and Windows must have equivalent File-menu functionality.** Windows
-    uses the normal visible application menu; macOS uses the system menu bar.
-11. **The presentation layer never receives a GitHub token.** In Electron the
-    renderer has no direct Node.js access and all privileged operations cross
-    the preload bridge. In the native client, widgets receive only sanitized
-    domain models from `RelayController`; tokens stay transiently inside the
-    controller/service operation that launches Git or calls GitHub.
+9. **Keep the signed-in status visually quiet.** No green status dot and no
+   "All systems operational" message.
+10. **macOS and Windows have equivalent menu functionality.** Windows uses the
+    in-window `QMenuBar`; macOS uses the system menu bar with Qt menu roles.
+11. **The presentation layer never receives a token.** Widgets and item models
+    receive only sanitized domain values from `RelayController`; tokens stay
+    transiently inside the controller/service operation that launches Git or
+    calls an API, and no signal carries one.
 12. **External navigation is HTTPS-only and opens in the system browser.**
 
-These invariants are partly covered by tests, but many remain behavioral and
+These invariants are partly covered by tests, but several remain behavioral and
 must also be checked manually.
 
 ## 3. Repository Identity and Publication
 
 - Public repository: <https://github.com/ka-capek/relay-desktop>
 - Default branch: `main`
-- Current release line: `v0.5.0`
+- Version: `project(RelayNative VERSION ...)` in `CMakeLists.txt`, currently
+  `0.5.3`. CI names installers from it.
+- Releases so far are prereleases (`v0.5.1`, `v0.5.2`, `v0.5.3`). They use
+  external Git/gh and do not satisfy the stable bundled-runtime distribution
+  gate. `v0.5.0` was the last Electron release.
 - Release page: <https://github.com/ka-capek/relay-desktop/releases>
-- App ID: `dev.relay.gitclient`
-- Electron product name: `Relay`
-- npm package name: `relay-desktop`
+- Product name `Relay`; installed app `Relay Native.app` /
+  `%LOCALAPPDATA%/Programs/Relay Native`
 
 Do not push, publish a release, change repository visibility, or modify GitHub
 settings unless the user explicitly authorizes the remote write.
 
 ## 4. Technology Stack
 
-The desktop product uses:
-
-- Electron 44
-- React 19
-- TypeScript for the renderer and build configuration
-- CommonJS for Electron main-process modules
-- Vite 8 for the desktop renderer bundle
-- electron-builder 26 for DMG and NSIS packaging
-- Git as a child process for all repository operations
-- Official GitHub CLI (`gh`) for multi-account OAuth and credential lookup
-- OpenSSH, through the user's agent and configuration, for non-GitHub remotes
-- GitHub REST API for profile data and repository listing
-- Plain CSS for the complete UI and responsive desktop layout
-
-The repository also contains Vinext, Cloudflare, Drizzle, and worker scaffolding.
-That path can server-render the React UI and is used by the current test command,
-but it is not the installed desktop runtime. Do not confuse `npm run dev` with
-running the Electron application.
-
-### 4.1 Native successor stack
-
-The native successor uses:
-
 - C++26, required with compiler extensions disabled
 - Qt 6.11.1 exactly: Core, Gui, Widgets, Network, Svg, Concurrent, and Test
 - CMake 3.30+ with Ninja and checked-in platform presets
+- Upstream LLVM 20 `clang++` for the presets: Homebrew `llvm@20` on macOS,
+  `%ProgramFiles%/LLVM` on Windows with an x64 Visual Studio developer environment.
+  Windows uses the MSVC target, Microsoft `link.exe`, and dynamic CRT matching
+  Qt's MSVC binaries. LLVM 20's implicit linker produced invalid namespace-qualified
+  UAC attributes in the merged Qt manifest, preventing process startup;
+  CMake 3.31 does not map C++26 for AppleClang, cl.exe or clang-cl.
 - Dynamically linked Qt under LGPLv3; Relay's own code remains MIT
 - The same bundled/system Git and official GitHub CLI child-process model
-- The same `relay-data.json` and isolated `github-cli/` locations as Electron
+- The `relay-data.json` and isolated `github-cli/` locations used since 0.5.0
 - Model/view widgets for every unbounded list, including a virtualized table
   diff rather than a widget per line
 
-The native code lives under `native/`. Do not delete or feature-expand the
-Electron client while it remains the frozen parity specification.
+The code lives under `native/`.
 
 ## 5. Architectural Overview
-
-```text
-React renderer (app/page.tsx)
-        |
-        | window.relayDesktop (typed in renderer)
-        v
-context-isolated preload bridge (electron/preload.cjs)
-        |
-        | ipcRenderer.invoke / event listeners
-        v
-Electron main process (electron/main.cjs)
-        |                 |                    |
-        |                 |                    |
-        v                 v                    v
-Git service         GitHub auth           Repo discovery
-(git child          (gh child process,    (filesystem BFS)
-processes)           GitHub REST API)
-        |                 |
-        v                 v
-Bundled/system Git   OS credential store through gh
-```
-
-The trust boundary is the preload bridge. The renderer is unprivileged and must
-remain that way.
-
-### 5.1 Native architecture
 
 ```text
 Qt Widgets views and item models
@@ -180,179 +146,255 @@ generations and drops stale repository, diff, history, and commit responses.
 `AsyncProcess` provides direct cancellation for single-process vertical slices.
 Widgets never call Git, `gh`, the filesystem store, or GitHub REST directly.
 
-### 5.2 Electron runtime process responsibilities
+The native clone browser uses a separate request generation: only the newest
+account-repository lookup may publish success or failure. Changing the dialog's
+account clears its previous repository selection before requesting another
+list. `runAsync` checks optional freshness predicates before reading a future
+and unwraps `QUnhandledException` so service error messages survive QtConcurrent.
 
-**Renderer (`app/page.tsx`)**
+### 5.1 Historical native continuation and review, 2026-09-06
 
-- Owns all visual state and interaction state.
-- Renders the title bar, toolbar, repository sidebar, changes/history views,
-  modals, popovers, toasts, and all SVG icons.
-- Calls only methods exposed on `window.relayDesktop`.
-- Never reads the filesystem, runs Git, calls `gh`, or handles credentials.
-- Converts raw unified diff text into renderable line records.
+The owner reaffirmed C++/Qt, GitHub Desktop-style interaction, and multiple
+accounts. A normal commit list is the first milestone; a branch graph is a
+later optional history mode. Do not expose a nonfunctional graph toggle.
+Five independent adversarial reviews and their disposition are recorded in
+`docs/native-review-2026-09-06.md`.
 
-**Preload (`electron/preload.cjs`)**
+Native behavior recorded in that review:
 
-- Runs with access to Electron IPC.
-- Exposes the smallest practical API through `contextBridge`.
-- Translates invoke calls and subscribes to two event streams:
-  `relay:github-login-progress` and `relay:menu-action`.
-- Adds `desktop` and platform classes to the document root after DOM load.
+- Settings is reachable from Edit on Windows/Linux and the application menu
+  on macOS via `QAction::PreferencesRole`. General settings persist
+  `preferences.refreshOnFocus` (default true) and `preferences.diffFontSize`
+  (default 12, range 10–24) in the existing public JSON store. Accounts links
+  to account management. Unknown preference fields survive writes.
+- Edit actions target the focused text editor or diff. History and file
+  selection work with keyboard navigation; history refreshes on branch/HEAD
+  changes and clears obsolete details. Draft commit messages are kept per
+  repository for the current application session.
+- Repository → New branch creates and switches to a validated local branch.
+  Pull origin fetches then fast-forwards the configured origin upstream. It
+  refuses divergent history rather than silently creating a merge. Full merge
+  and conflict resolution UI is not implemented.
+- Repository mutations are serialized, refresh cannot invalidate an active
+  mutation, and stale repository read failures are suppressed. Successful
+  clones retain recents and account bindings even if selection changes.
+- Persistence failures restore the previously saved public state. Repository
+  activation happens only after its metadata is saved. Corrupt/unreadable
+  stores produce an error and are preserved, rather than silently becoming
+  empty stores that could overwrite account bindings.
+- Git status/name-status/numstat use NUL-delimited records. UI-selected paths
+  are literal pathspecs; a rename includes both paths, and pre-staged deletions
+  can be committed without staging an already absent path. Diff content keeps
+  significant trailing whitespace. Untracked text previews are limited to
+  2 MiB; the process runner fails on output overflow rather than silently
+  returning a truncated successful result. Git operations time out after
+  120 seconds.
+- Authentication discovers bundled `gh` first. Missing/invalid/expired CLI
+  account responses preserve existing settings. Login is cancellable and
+  bounded to 15 minutes. SSH does not require a GitHub OAuth token. The
+  command-scoped credential helper responds only to HTTPS github.com `get`
+  requests and receives account values as environment data, never shell text.
+  Push identity routing uses the origin push URL; multiple push URLs are
+  explicitly unsupported. SSH profile usernames apply to actual transport.
+- macOS stays alive when its window closes and reopens on application
+  activation; Quit exits explicitly. Smoke mode uses a disposable profile.
+- CMake presets use schema 8 compatible with the declared 3.30 minimum and
+  disable unused C++ module scanning. NSIS shortcuts target the installed
+  executable directory. Stage verification excludes `otool` headers from
+  dependency checks and does not mistake ordinary directories for forbidden
+  payloads.
 
-**Main process (`electron/main.cjs`)**
+Local Linux/Qt 6.8.2 tests supplement, but do not replace, the required native
+macOS arm64/Windows x64 Qt 6.11.1 builds and packaged authentication checks.
 
-- Creates and secures the BrowserWindow.
-- Owns native dialogs and application menus.
-- Validates IPC inputs.
-- Reads and atomically writes Relay's public metadata store.
-- Resolves active and per-repository accounts.
-- Retrieves OAuth tokens only when a Git operation or GitHub API request needs
-  one.
-- Coordinates Git, GitHub CLI, GitHub API, and repository discovery services.
+### 5.2 Current native workflows, 2026-09-07
 
-**Git service (`electron/git-service.cjs`)**
+`native/tools/install-macos.sh` is the local Apple Silicon installer (macOS
+14+). It uses isolated cached tools/Qt, a fresh temporary release build, Qt
+framework deployment, ad-hoc signature validation and a disposable-profile
+startup test before replacing `~/Applications/Relay Native.app`. Existing apps
+are retained as dated backups; the user's checkout and repositories are never
+reset or cleaned. Git/gh remain external Homebrew dependencies, exposed to
+Finder launches through the app's `LSEnvironment` PATH. It never changes shell
+profiles or signs in to accounts. CI exercises the installer from its checkout
+and the installed app through Launch Services. The script is not a substitute
+for the strict redistribution/release packaging pipeline.
 
-- Locates bundled Git or falls back to `git` on `PATH`.
-- Constructs a correct relocatable environment for bundled Git.
-- Executes Git without a shell via `execFile`.
-- Parses status, history, branches, ahead/behind counts, and diffs.
-- Performs clone, commit, fetch, push, and branch switching.
+The latest inventory and release limits are in
+`docs/native-completion-2026-09-07.md`; it supersedes the feature inventory in
+section 5.1. Native additions live in `git_workflows.cpp` and `workflow_ui.cpp`
+with the same controller/service boundary as existing operations.
 
-**GitHub auth service (`electron/github-auth.cjs`)**
+- GitHub account and SSH profile bindings resolve canonical repository paths
+  and existing legacy aliases (including macOS `/var` versus `/private/var`).
+  Updating a binding removes aliases of that repository only; unavailable paths
+  remain preserved in metadata.
+- `Preferences` now includes `commitName`, `commitEmail` and `graphHistory`.
+  Normal history is default. Graph history snapshots local/remote branch tips,
+  sends revision lists over stdin and batch-validates them. Filtering does not
+  draw misleading edges across hidden commits.
+- `RepositoryAction` covers local branch rename/delete/remote checkout, merge,
+  unpublished rebase, conflict resolve/continue/abort/skip, stash/apply/drop,
+  recoverable discard, revert/cherry-pick, undo, message amend, tags and origin.
+  Git account identity is explicit for commit-producing actions; without an
+  account, Settings and effective Git configuration supply a displayed identity.
+- Discard retains a full recovery stash, reapplies its index/worktree, then
+  restores only the expanded selected paths. Before any stash, refuse tracked
+  files replaced by real directories; Git can otherwise delete ignored content
+  not included in the stash. Use a unique recovery message to avoid identical
+  stash-object collisions. Never replace this with `stash --all` automatically.
+- Do not globally enable literal pathspecs for stash commands. Git's internal
+  cleanup depends on generated magic pathspecs. Other user path arguments remain
+  literal. Apply stashes with `--index`, and retain the stash until explicit drop.
+- Known published commits cannot be undone/amended/rebased here. Local branch
+  deletion additionally requires containment in the current branch. No force
+  push is offered. Merge commits revert/cherry-pick against their first parent.
+- File previews are worker-produced `FilePreview` values. Widgets never read
+  files. Raster images are bounded to 10 MiB encoded and 16 megapixels decoded.
+  Symlinks do not dereference to target content. Decode failures must not be
+  labeled as an absent file side; selection changes clear old image previews.
+- A publication dialog captures the displayed account and defaults to private.
+  Its worker verifies GitHub's authenticated login before creating a repository.
+  Persist identity binding before the remote write. Keep partial-success and
+  uncertain-POST recovery messages; never automatically retry or delete remotes.
+  API traffic is HTTPS to api.github.com with redirects disabled and size/time
+  limits. Origin editing rejects embedded credentials and explicit push URLs
+  requiring separate handling.
+- Account and repository mutation locks exclude each other. Accepted account
+  changes immediately invalidate previous discovery. Opening/creating a repo
+  during a mutation is rejected before invalidating generations.
+- MainWindow displays the actual branch until a requested switch succeeds.
+  Conflict errors stay inside the modal dialog. Undo restores the previous
+  message only when it would not overwrite a user's existing draft.
+- `.github/workflows/native.yml` is source-only preparation for macOS/Windows
+  checks. It has not run in this environment. No installer, signing, remote
+  publication, or full upstream-feature-parity claim follows from Linux tests.
 
-- Locates bundled `gh` or falls back to `gh` on `PATH` for source development.
-- Isolates Relay's GitHub CLI configuration under the Electron user-data folder.
-- Lists authenticated accounts, starts browser login, switches accounts, logs
-  out, and retrieves a token for one named account.
-- Scrubs inherited `GH_TOKEN`, `GITHUB_TOKEN`, and `GH_HOST` variables so a
-  developer's terminal environment cannot silently select the wrong account.
+Windows CI uses aqt's `--external` 7-Zip backend: py7zr rejected the Qt
+`modules/SvgWidgets.json` link during parallel SDK extraction in run
+34117355064. Run extraction sequentially with `aqt-windows.ini` and precreate
+the SDK directory: parallel 7-Zip workers also raced creating that directory
+in run 34117737965. Keep download verification and fail if 7-Zip is unavailable.
 
-**Repository discovery (`electron/repository-discovery.cjs`)**
+The source installer includes verbatim GNU license texts from `native/licenses/`
+so an outage at gnu.org cannot interrupt an otherwise complete installation.
 
-- Performs a breadth-first directory traversal.
-- Detects ordinary `.git` directories and linked-worktree `.git` files.
-- Avoids symlinks, `.git`, and `node_modules` directories.
-- Stops descending after finding a repository root.
-- Tolerates unreadable and disappearing directories.
-- Returns at most 5,000 sorted repository paths.
+### 5.3 Native themes and graph colors
+
+`theme.cpp` applies a semantic palette to QPalette, QSS and painted delegates.
+Four bundled JSON palettes under `native/resources/themes/` provide Light,
+Dark, Catppuccin Latte and Mocha. Native preferences persist `themeId` and a
+`customTheme` JSON object. Appearance settings support base selection, editable
+overrides and import/export. Validate unknown keys, color syntax and branch
+palette length before saving/importing. Export resolved colors using QSaveFile;
+never store a dependency on the imported path or execute arbitrary theme code.
+Invalid persisted overrides fall back to the selected base; legacy settings use
+Light. Palette changes repaint existing controls and diffs without a restart.
+Qt Fusion and explicitly positioned licensed SVG chevrons avoid platform/QSS
+arrow placement conflicts; native menu roles remain intact. The shared core
+owns resources so application and UI tests use the same icons and palettes.
+
+History has a visible List/Graph selector. Graph colors belong to active lines
+of ancestry, independently of lane position, and survive pagination/compaction.
+Allocate unused color identities until a line ends; do not recolor a passing
+line when a neighboring branch finishes. First-parent connectors retain the
+child's color until joining; merge arms use their parent line colors. Graph
+mode omits day-header gaps (dates remain in metadata) and filtered results hide
+edges. Dots and reference chips share graph colors, with hollow merge dots.
+Tests cover concurrent tips, compaction, paging, preference persistence,
+malformed themes and screenshots of every preset's graph, diff and settings.
 
 ## 6. Authoritative File Map
 
-### Desktop product
+Native source installation now also has `native/tools/install-windows.ps1`
+and `install_windows.py`. The PowerShell entry selects the x64 Visual Studio
+environment; Python builds with pinned tools, deploys dynamic Qt and the MSVC
+CRT, smoke-tests with a clean runtime PATH, and publishes through same-volume
+renames. Keep the previous installation and restore it if publication fails.
+Reject unrelated existing destinations and running Relay processes. Only the
+new stage/cache may be cleaned. Git and gh are external; this workflow is not
+the strict redistribution pipeline or a signed release. Changes require the
+Windows installer safety tests and the native CI installation smoke test.
+The shared aqt helper accepts `--output-dir` without GitHub environment files.
+The Windows installer discovers the single complete `Microsoft.VC*.CRT` payload
+under the active `VCToolsRedistDir/x64`, rather than assuming VC143; missing or
+ambiguous runtimes fail before installation.
 
-| Path | Purpose |
-| --- | --- |
-| `app/page.tsx` | Entire React application, renderer types, icons, state, and actions |
-| `app/globals.css` | Complete visual system and desktop-responsive layout |
-| `desktop/index.html` | Vite renderer HTML entry |
-| `desktop/main.tsx` | React root that renders `Home` from `app/page.tsx` |
-| `vite.desktop.config.ts` | Desktop Vite build; outputs to `desktop-dist/` |
-| `electron/main.cjs` | Electron lifecycle, menus, persistence, GitHub REST calls, IPC |
-| `electron/preload.cjs` | Context bridge and renderer-safe API |
-| `electron/git-service.cjs` | Git discovery, execution, parsing, and mutations |
-| `electron/github-auth.cjs` | Multi-account GitHub CLI OAuth integration |
-| `electron/repository-discovery.cjs` | Recursive local repository scanner |
-| `electron/repository-order.cjs` | Sidebar ordering rules and backward-compatible store normalization |
-| `electron/ssh-service.cjs` | SSH identities for non-GitHub hosts, remote parsing, and the connection test |
-| `electron/application-menu.cjs` | The one menu definition behind both the native menu and the Windows in-window menu bar |
-| `build/icon.icns` | Generated macOS icon; referenced by electron-builder |
-| `build/icon.ico` | Generated Windows icon; referenced by electron-builder |
-| `build/icon.png` | Generated 1024px icon, kept as a plain raster of the master |
-| `build/icon.svg` | Editable master for the application icon at 64px and above |
-| `build/icon-small.svg` | Editable master for 48px and below, with heavier strokes and no shadow |
-| `build/generate-icons.cjs` | Regenerates all three generated icons; run with `npm run icons:build` |
-| `package.json` | Scripts, dependencies, Electron entry, packaging configuration |
-| `tests/rendered-html.test.mjs` | Current server-render and architecture regression tests |
-| `TODO.md` | Explicitly requested product backlog; items are not implemented until verified |
-
-### Native successor
+`runtime_check.cpp` supplies startup dependency checks (Git >=2.35.0 and
+gh >=2.98.0, a conservative baseline matching the previously bundled CLI).
+Checks use the actual service executable/environment and bounded `--version`
+processes in a controller worker; do not authenticate, install tools, or persist
+their output. Widgets get only sanitized issue strings, shown in a persistent
+selectable banner with retry and a Help-menu entry. Missing CLI startup must
+preserve existing account metadata. Windows rechecks standard external tool
+locations when PATH has not yet changed in the current process. An external
+absolute Git path must not activate the bundled-Git environment overrides.
+Both repository sorting implementations use an English collator only when the
+default locale is C, where Qt otherwise ignores numeric mode.
 
 | Path | Purpose |
 | --- | --- |
 | `CMakeLists.txt`, `CMakePresets.json` | C++26 project, Qt dependency pin, macOS arm64 and Windows x64 presets |
 | `native/include/relay/domain.hpp` | Sanitized shared domain models and legacy JSON conversion |
 | `native/src/process_runner.cpp` | Bounded child-process execution plus cancellable asynchronous operations |
-| `native/src/git_service.cpp` | Native port of Git commands, parsers, history, diffs, mutations, and transport routing |
+| `native/src/git_service.cpp` | Git commands, parsers, history, diffs, mutations, and transport routing |
 | `native/src/github_auth.cpp` | Isolated `gh` account discovery, login, switching, logout, and transient token lookup |
 | `native/src/github_api.cpp` | Profile, email, and pushable-repository REST calls without exposing tokens to views |
-| `native/src/relay_store.cpp` | Atomic, owner-only, Electron-compatible metadata persistence |
+| `native/src/relay_store.cpp` | Atomic, owner-only metadata persistence, readable by older Relay versions |
 | `native/src/repository_discovery.cpp` | Bounded non-destructive breadth-first repository scanning |
 | `native/src/repository_order.cpp` | Ordering normalization, sorting, and manual-order compatibility |
-| `native/src/ssh_service.cpp` | Non-GitHub SSH profile parsing, command construction, and connection tests |
+| `native/src/ssh_service.cpp` | SSH profile parsing (including GitHub), host-checked commands, and connection tests |
 | `native/src/avatar_cache.cpp` | Restricted-host, size-bounded, offline avatar cache |
 | `native/src/diff_model.cpp`, `native/src/diff_view.cpp` | Virtualized accessible unified-diff parser and table view |
 | `native/src/list_models.cpp` | Repository, file, history, and commit-file models |
 | `native/tests/` | QtTest unit, integration, large-diff, Git-fixture, and app smoke tests |
 | `docs/native-measurements.md` | Reproducible native size and physical-footprint measurements |
-
-### Hosted/scaffolding path
-
-| Path | Purpose and warning |
-| --- | --- |
-| `app/layout.tsx` | Vinext/Next metadata and font setup; not loaded by desktop Vite entry |
-| `app/chatgpt-auth.ts` | Hosted ChatGPT authentication helper; not used by Electron |
-| `vite.config.ts` | Vinext/Cloudflare build, not the desktop Vite build |
-| `worker/index.ts` | Cloudflare worker entry, not Electron main |
-| `db/`, `drizzle/`, `drizzle.config.ts` | Hosted database scaffolding; not desktop persistence |
-| `examples/` | Scaffold examples; not production desktop code |
-| `build/sites-vite-plugin.ts` | Packages hosted-site metadata; unrelated to Electron packaging |
-
-Before deleting scaffolding, verify whether tests or hosting workflows still
-depend on it. Before implementing a desktop request, start in `app/page.tsx` and
-`electron/`, not the hosted stack.
+| `native/src/git_workflows.cpp`, `native/src/workflow_ui.cpp` | Repository actions (branches, merge, rebase, stash, discard, cherry-pick, tags) and their UI |
+| `native/src/forge_service.cpp`, `forge_controller.cpp`, `forge_dialog.cpp`, `forge_ui.cpp` | Gitea/Forgejo/GitLab API discovery and account UI |
+| `native/src/credential_store.cpp` | macOS Keychain / Windows Credential Manager access for forge API tokens |
+| `native/src/runtime_check.cpp` | Startup Git and GitHub CLI version checks |
+| `native/src/theme.cpp`, `native/resources/themes/` | Semantic palette, QSS, and bundled theme JSON |
+| `native/src/main_window.cpp`, `native/src/dialogs.cpp` | Main window, menus, and dialogs |
+| `native/tools/` | Source installers, preview DMG, Windows installer tests, release verification |
+| `native/packaging/` | Strict packaging guide, notices, and the Inno Setup preview script |
+| `.github/workflows/native.yml` | macOS arm64 and Windows x64 build, test, installer and artifact CI |
+| `build/icon.svg`, `build/icon-small.svg` | Icon masters (64px and above; 48px and below) |
+| `build/icon.icns`, `build/icon.ico`, `build/icon.png` | Generated icons used by the bundle, `.rc`, CPack and Inno Setup |
+| `PLAN.md`, `docs/` | Rewrite plan, reviews, completion records and measurements |
+| `TODO.md`, `TODO-Karels.md` | Requested backlog; items are not done until verified |
 
 ### Generated and local-only paths
 
 | Path | Treatment |
 | --- | --- |
-| `node_modules/` | Generated dependencies; never commit |
-| `desktop-dist/` | Generated desktop renderer; rebuilt by `desktop:build` |
-| `dist/`, `.next/`, `.vinext/`, `.wrangler/` | Generated hosted build state |
-| `outputs/` | electron-builder installers and unpacked apps; publish as release assets, not Git files |
+| `build-native/` | CMake build trees; never commit |
+| `outputs/` | Installers and measurements; publish as release assets, not Git files |
 | `work/` | Local integration fixtures and temporary profiles; never publish |
 | `runtime/` | Large third-party Git and GitHub CLI runtimes; intentionally ignored |
-| `.openai/` | Local Sites metadata; intentionally ignored |
 
 ## 7. Startup and Application Lifecycle
 
-1. Electron waits for `app.whenReady()`.
-2. `registerIpc()` installs every `relay:*` invoke handler.
-3. `installApplicationMenu()` installs native File/Edit/View/Window menus.
-4. `createWindow()` creates a hidden BrowserWindow.
-5. The window loads `desktop-dist/index.html` from disk.
-6. The preload adds platform CSS classes and exposes `window.relayDesktop`.
-7. React mounts and calls `getState()`.
-8. `getState()` calls `syncGitHubAccounts()` before returning public state.
-9. The window becomes visible on `ready-to-show`.
+1. `main()` constructs `RelayApplication` and applies the saved theme.
+2. With `--smoke-test`, a disposable profile replaces the real store and
+   account synchronization is skipped.
+3. `RelayController` and `MainWindow` are created and the window is shown.
+4. The controller reads the store, runs the Git/gh runtime check, and
+   synchronizes GitHub accounts on a worker thread.
+5. No repository is opened; `selectedRepositoryPath` is always `null`.
 
-The BrowserWindow security configuration is intentional:
+On macOS the app stays alive when its window closes
+(`setQuitOnLastWindowClosed(false)`) and shows the window again on application
+activation; Quit exits explicitly. On Windows closing the window quits.
 
-```text
-contextIsolation: true
-nodeIntegration: false
-sandbox: true
-```
-
-Do not weaken these settings to make renderer code easier. Add a narrow IPC
-method instead.
-
-The BrowserWindow also:
-
-- Denies renderer-created windows.
-- Sends HTTPS links to the system browser.
-- Blocks non-`file://` navigation in the renderer.
-- Uses a hidden-inset title bar on macOS.
-- Keeps the Windows application menu visible.
-
-On macOS the app stays alive after the last window closes and recreates a window
-on activation. On Windows it quits when all windows close.
+When the window is activated, Relay refreshes the open repository if
+`preferences.refreshOnFocus` is on and no operation is busy.
 
 ## 8. Persistence Model
 
 Relay stores public application metadata in:
 
 ```text
-<Electron userData>/relay-data.json
+<user data>/relay-data.json
 ```
 
 Typical locations are:
@@ -363,7 +405,7 @@ Typical locations are:
 The GitHub CLI config for Relay lives beside it:
 
 ```text
-<Electron userData>/github-cli/
+<user data>/github-cli/
 ```
 
 The metadata store has this conceptual shape:
@@ -440,7 +482,7 @@ Important persistence details:
   account metadata is reused.
 
 Ordering and SSH fields are normalized on every read by
-`electron/repository-order.cjs` and `normalizeSshState()` in `main.cjs`. A store
+`RelayStore` and `repository_order.cpp`. A store
 written before those fields existed is upgraded in place: `repositoryOrder` and
 `manualOrder` gain defaults, `manualOrder` is seeded from the existing
 repository list so nothing is reshuffled, and `addedAt` backfills from
@@ -470,22 +512,18 @@ gh auth login
 
 GitHub CLI runs without an interactive terminal inside Relay. In that mode it
 prints the official device URL rather than opening it. Relay parses the one-time
-device code from cleaned CLI output, emits only the sanitized code and fixed
-verification URL to the renderer, and has the Electron main process open
-`https://github.com/login/device` exactly once per login attempt. If the system
-browser cannot be opened, login keeps running and the renderer retains a manual
-open button.
-
-The device code remains visible in a read-only, selectable input. Its copy
-button awaits the Clipboard API and shows `Copied` only after the write
-succeeds; failures leave a manual-copy path instead of reporting false success.
+device code from cleaned CLI output (`GitHubAuth::loginProgressFromOutput()`),
+emits only the sanitized code and fixed verification URL through the
+controller's `loginProgress` signal, and the window opens
+`https://github.com/login/device` once per login attempt. Login is cancellable
+and bounded to 15 minutes.
 
 The OAuth credential is stored by GitHub CLI in the operating system credential
 store. Relay's JSON store contains only account metadata.
 
 ### 9.2 Account synchronization
 
-`syncGitHubAccounts()`:
+`RelayController::synchronizeAccounts()`:
 
 1. Reads authenticated GitHub CLI accounts.
 2. Reuses known metadata by case-insensitive handle.
@@ -493,12 +531,12 @@ store. Relay's JSON store contains only account metadata.
 4. Builds a stable account ID from the numeric GitHub user ID.
 5. Selects the CLI-active account, or the first account if none is marked active.
 6. Removes repository bindings whose account no longer exists.
-7. Persists and returns public state.
+7. Persists and publishes public state.
 
 ### 9.3 Account switching
 
 Switching the active Relay account calls `gh auth switch`. It is not merely a
-React selection. This keeps GitHub CLI's active account and Relay's active
+UI selection. This keeps GitHub CLI's active account and Relay's active
 account aligned.
 
 ### 9.4 Commit email
@@ -523,18 +561,19 @@ repositoryAccounts[repositoryPath] ?? activeAccountId
 The clone dialog uses the globally active account because a cloned repository
 does not yet have a path binding.
 
-### 9.6 SSH identities for non-GitHub hosts
+### 9.6 SSH identities
 
 GitHub accounts and SSH identities are deliberately separate models. An account
 is an OAuth identity held by the GitHub CLI; an SSH profile is only a hint about
-which key to offer a host. Do not model a non-GitHub host as a GitHub account,
-and do not add a personal access token for one.
+which key to offer a host. Do not model an SSH host as a GitHub account. A
+profile can be selected for any matching SSH host, including github.com, and
+needs no GitHub sign-in (see "Native usability" in section 18).
 
 With no profile bound to a repository, Relay sets nothing, so the user's SSH
 agent and `~/.ssh/config` behave exactly as they do for `git` on the command
 line. That is the default and covers most setups.
 
-When a profile is bound, `sshCommandFor()` builds a `GIT_SSH_COMMAND` for that
+When a profile is bound, `SshService` builds a `GIT_SSH_COMMAND` for that
 single Git invocation:
 
 ```text
@@ -546,24 +585,25 @@ OpenSSH offers every agent key and the server closes the connection after too
 many attempts. Paths are POSIX single-quoted, including on Windows, because Git
 hands `GIT_SSH_COMMAND` to a shell.
 
-Two rules keep the credential shapes from crossing:
+Rules that keep the credential shapes from crossing:
 
-- `sshCommandForRepository()` returns null for any GitHub remote, and
-  `sshEnvironment()` in the Git service attaches `GIT_SSH_COMMAND` only to an
-  SSH remote.
-- The fetch and push handlers do not even request an OAuth token unless the
-  remote is a GitHub remote, and the credential helper remains gated on
-  `https://github.com`.
+- `GIT_SSH_COMMAND` is attached only to an SSH transport URL, and the profile
+  host is checked against the actual URL (including the origin push URL);
+  a mismatch is refused before SSH starts.
+- An OAuth token is requested only for an HTTPS github.com remote, and the
+  credential helper answers only HTTPS github.com `get` requests.
 
-`testConnection()` runs an authentication-only `ssh -T` with `BatchMode=yes`, so
-it can never hang on an invisible passphrase prompt, and `describeSshResult()`
+`SshService::testConnection()` runs an authentication-only `ssh -T` with
+`BatchMode=yes`, so it can never hang on an invisible passphrase prompt, and
+`describeResult()`
 turns the outcome into one actionable sentence that names the host without
 echoing key paths back to the user.
 
 ### 9.7 Token handling
 
-`accountToken()` asks GitHub CLI for one named account token in the main process.
-The token is never returned across IPC.
+`GitHubAuth::accountToken()` asks GitHub CLI for one named account token on a
+controller worker thread. The token is never stored in a member, model, or
+signal.
 
 For an HTTPS `github.com` clone, fetch, or push, the Git service:
 
@@ -573,15 +613,15 @@ For an HTTPS `github.com` clone, fetch, or push, the Git service:
 4. Sets `GIT_TERMINAL_PROMPT=0` to avoid hanging on an invisible prompt.
 
 Never log the child environment or the constructed credential response. Never
-embed a token in the remote URL, Git configuration, command history, renderer
-state, error text, or release metadata.
+embed a token in the remote URL, Git configuration, command history, widget
+or model state, error text, or release metadata.
 
 SSH URLs do not use a GitHub OAuth token. They use the user's existing SSH
 configuration and keys.
 
 ## 10. GitHub REST API Usage
 
-The main process uses GitHub REST API version `2022-11-28` and the
+`GitHubApi` uses GitHub REST API version `2022-11-28` and the
 `application/vnd.github+json` media type.
 
 ### Profile request
@@ -606,11 +646,13 @@ GET /user/repos
 ```
 
 The implementation follows `Link` headers until no `rel="next"` link remains.
-It returns only the fields the renderer needs. The renderer filters locally and
-renders at most the first 250 matching rows at once.
+It keeps only repositories the account can push to that are not archived, and
+the dialog says how many were hidden. Commit-email choices come from
+`GET /user/emails` when the `user:email` scope is available.
 
-GitHub API requests belong in the main process. Do not add an IPC method that
-returns a raw OAuth token so the renderer can call GitHub directly.
+API requests run in controller workers. Never hand a token to a widget so it
+can call GitHub itself. Gitea/Forgejo/GitLab discovery is described in section
+18 ("Native multi-host and branch work").
 
 ## 11. Bundled Runtime Resolution
 
@@ -683,9 +725,10 @@ supports it.
 
 - Canonical top-level path from `rev-parse --show-toplevel`
 - Current branch or `detached HEAD`
-- Porcelain v1 status, including untracked files
+- Porcelain v1 status (NUL-delimited), including untracked files
 - `origin` URL if present
-- Existing local branches
+- Local branches, remote-tracking branches, tags, stashes, and any operation
+  in progress (merge, rebase, cherry-pick, revert)
 - Up to 30 history entries, used only as a HEAD signal for the History tab
 - Parsed changed files and approximate line counts
 - Ahead/behind values relative to the upstream or matching remote branch
@@ -698,8 +741,7 @@ folder.
 
 ### 12.2 Status parsing
 
-The renderer model reduces Git status to `A`, `M`, or `D` with tones
-`added`, `modified`, and `deleted`. It does not preserve every two-character Git
+The file model reduces Git status to added, modified, or deleted. It does not preserve every two-character Git
 status combination.
 
 Untracked text files smaller than 2 MiB get an approximate added-line count by
@@ -711,7 +753,8 @@ reading the file. Binary and large files retain zero cosmetic line counts.
 - A staged-diff fallback is used when the first command fails.
 - Untracked text files are represented as a synthetic all-added unified diff.
 - Untracked binary files return `Binary file — preview unavailable`.
-- The renderer parses hunk headers and tracks old/new line numbers.
+- `DiffModel` parses hunk headers and tracks old/new line numbers; `DiffView`
+  is a virtualized table.
 
 ### 12.4 History reads
 
@@ -730,9 +773,8 @@ history.
   compared against the empty tree, so its files read as added.
 - `readCommitFileDiff()` returns one file's diff against that same parent.
 
-Commit hashes and file paths arrive over IPC and are untrusted.
-`assertCommitHash()` checks the shape and `assertCommitInRepository()` runs
-`git cat-file -e <hash>^{commit}` against the open repository, so a real hash
+Commit hashes and file paths are untrusted even when they come from Relay's
+own models. The shape is checked and `git cat-file -e <hash>^{commit}` runs against the open repository, so a real hash
 from a different clone is refused. File paths always travel after `--`.
 
 ### 12.5 Commit
@@ -748,14 +790,16 @@ Commit behavior is intentionally file-selective:
 
 Do not silently commit every working-tree change.
 
-### 12.6 Fetch and push
+### 12.6 Fetch, pull and push
 
 - Fetch runs `git fetch origin --prune`.
 - Push runs `git push --set-upstream origin HEAD`.
 - Both accept an optional SSH command, applied only to an SSH remote.
 - Fetch/push require an `origin` remote.
 - Push requires a named local branch.
-- The renderer chooses fetch when there is nothing to publish, otherwise push.
+- The main sync button suggests fetch or push from the last known state; its
+  menu offers Fetch, Pull and Push directly. Pull fetches, then fast-forwards
+  the origin upstream and refuses divergent history.
 
 ### 12.7 Clone
 
@@ -765,7 +809,7 @@ Clone runs:
 git clone --progress -- <remoteUrl> <destinationPath>
 ```
 
-The main process validates:
+The controller and service validate:
 
 - URL starts with `http://`, `https://`, `ssh://`, or `git@`.
 - Parent folder is supplied and exists.
@@ -776,9 +820,19 @@ After a successful clone, Relay fully reads and remembers the new repository.
 
 ### 12.8 Branch switching
 
-Relay currently switches only to an existing local branch using
-`git switch <branch>`. Input rejects characters outside word characters,
-period, slash, and hyphen.
+The current-branch picker lists local branches and, as `Remote · <remote>/<branch>`,
+remote-tracking branches other than symbolic `HEAD` refs.
+
+- A local branch: `GitService::switchBranch()` verifies `refs/heads/<name>` and
+  runs `git switch --no-guess <name>`.
+- A remote branch: `RepositoryAction::checkoutRemote` runs
+  `git switch --create <name> --track refs/remotes/<remote>/<name>`. If a local
+  branch of that name already exists, Git refuses and the error is shown.
+
+Remote branches are what the last fetch recorded. **Fetch all origin branches**
+fetches the full heads refspec for single-branch clones. Names starting with
+`-` are rejected, and the picker shows the actual branch until a switch
+succeeds.
 
 ## 13. Repository Discovery Semantics
 
@@ -795,7 +849,7 @@ Once a repository root is found, the scanner does not descend into it. This
 avoids scanning internal Git data and nested submodule working directories from
 the same root traversal.
 
-The main process reads discovered repositories in batches of 10. Individual
+The controller reads discovered repositories in batches of 10. Individual
 unreadable or invalid repositories are ignored rather than failing the complete
 scan. The response distinguishes:
 
@@ -805,643 +859,357 @@ scan. The response distinguishes:
 
 The scanner must remain non-destructive.
 
-## 14. IPC Contract
+## 14. Menus
 
-Every new privileged feature normally requires changes in three places:
+`MainWindow::buildMenus()` builds one `QMenuBar`. On macOS Qt places it in the
+system menu bar and moves role-tagged actions (Settings, Quit) into the
+application menu; on Windows it is the window's own menu bar. Workflow actions
+add further Repository menu items from `workflow_ui.cpp`.
 
-1. Register a handler in `electron/main.cjs`.
-2. Expose a narrow bridge method in `electron/preload.cjs`.
-3. Add or update the `RelayDesktop` TypeScript type in `app/page.tsx`.
+- **File:** Add Local Repository… (`QKeySequence::Open`), Clone Repository…
+  (`Ctrl+Shift+O`, Cmd on macOS), Scan Folder for Repositories…, Remove Current
+  Repository from Relay, Quit Relay (`QuitRole`).
+- **Edit:** Undo, Redo, Cut, Copy, Paste, Select All (targeting the focused
+  editor or diff), Settings… (`PreferencesRole`).
+- **Repository:** New branch… (`Ctrl+Shift+N`), Pull origin, and the repository
+  actions.
+- **View:** Reload, Force Reload, Actual Size, Toggle Full Screen.
+- **Window:** Minimize, Close.
+- **Help:** Check Git and GitHub CLI.
 
-Current invoke channels:
+When adding a menu item, add it once, route it to a controller slot, and check
+labels and shortcuts on both platforms.
 
-| Channel | Renderer method | Input | Result / behavior |
-| --- | --- | --- | --- |
-| `relay:get-state` | `getState()` | none | Synchronizes GitHub accounts and returns `AppState` |
-| `relay:select-repository` | `selectRepository()` | none | Native folder picker, repository read, or `null` |
-| `relay:choose-clone-directory` | `chooseCloneDirectory()` | none | Native parent-folder picker or `null` |
-| `relay:list-github-repositories` | `listGitHubRepositories(accountId)` | account ID | Sanitized GitHub repository list |
-| `relay:clone-repository` | `cloneRepository(input)` | URL, parent, name, account | Repository and updated app state |
-| `relay:scan-folder` | `scanFolder()` | none | Native picker plus scan counts/state or `null` |
-| `relay:remove-repository` | `removeRepository(path)` | absolute path | Updated app state; never deletes disk data |
-| `relay:open-repository` | `openRepository(path)` | absolute path | Full repository model |
-| `relay:refresh-repository` | `refreshRepository(path)` | absolute path | Full repository model |
-| `relay:get-file-diff` | `getFileDiff(repo, file)` | repository and file paths | Unified diff text |
-| `relay:read-history` | `readHistory(path, options)` | path, skip, limit, anchor | One batch of commits plus `anchor` and `endOfHistory` |
-| `relay:read-commit` | `readCommit(path, hash)` | path and commit hash | Full commit metadata and changed files |
-| `relay:read-commit-diff` | `readCommitDiff(path, hash, file)` | path, hash, file path | That file's diff in that commit |
-| `relay:commit` | `commit(input)` | selected files/message/account | Refreshed repository |
-| `relay:fetch-origin` | `fetchOrigin(path, accountId)` | repository and optional account | Refreshed repository |
-| `relay:push-origin` | `pushOrigin(path, accountId)` | repository and optional account | Refreshed repository |
-| `relay:switch-branch` | `switchBranch(path, branch)` | repository and branch | Refreshed repository |
-| `relay:connect-account` | `connectAccount()` | none | Browser OAuth then updated state |
-| `relay:set-active-account` | `setActiveAccount(id)` | account ID | Switches `gh` account and returns state |
-| `relay:set-account-email` | `setAccountEmail(id, email)` | account ID and email | Updated public state |
-| `relay:set-repository-account` | `setRepositoryAccount(path, id)` | path and nullable account | Updated public state |
-| `relay:remove-account` | `removeAccount(id)` | account ID | Logs out locally and returns state |
-| `relay:backfill-repository-metadata` | `backfillRepositoryMetadata()` | none | Fills in first/latest commit for repositories remembered before those fields existed |
-| `relay:list-account-emails` | `listAccountEmails(accountId)` | account ID | Commit-email choices; degrades to the noreply address without the `user:email` scope |
-| `relay:set-repository-order` | `setRepositoryOrder(mode, direction)` | sort mode and direction | Updated public state |
-| `relay:set-manual-order` | `setManualOrder(paths)` | ordered repository paths | Updated public state |
-| `relay:save-ssh-profile` | `saveSshProfile(profile)` | SSH profile without key material | Updated public state |
-| `relay:remove-ssh-profile` | `removeSshProfile(id)` | profile ID | Updated public state; no key file is touched |
-| `relay:set-repository-ssh-profile` | `setRepositorySshProfile(path, id)` | path and nullable profile | Updated public state |
-| `relay:test-ssh-profile` | `testSshProfile(profile)` | SSH profile | `{ ok, message }` with no sensitive material |
-| `relay:get-menu` | `getMenu()` | none | Platform flag and the menu descriptor |
-| `relay:menu-command` | `runMenuCommand(id)` | menu command ID | Runs the command; rejects unknown IDs |
-| `relay:open-external` | `openExternal(url)` | HTTPS URL | Opens system browser |
+## 15. Visual and Interaction System
 
-Current main-to-renderer event channels:
-
-| Channel | Preload subscription | Purpose |
-| --- | --- | --- |
-| `relay:github-login-progress` | `onGitHubLoginProgress` | Device code and login status |
-| `relay:menu-action` | `onMenuAction` | Native File-menu commands |
-
-Validate all IPC inputs in the main process even if the renderer already
-validates them. The renderer is not the security boundary.
-
-## 15. Native Menus
-
-`electron/application-menu.cjs` holds one menu definition. Both the native
-Electron template and the descriptor the renderer draws on Windows are derived
-from it, so the two cannot drift; a test asserts they agree.
-
-On macOS the system menu bar is the only menu. On Windows the native menu bar
-would occupy a second chrome row, so it is hidden with `autoHideMenuBar` and
-`setMenuBarVisibility(false)` while remaining **installed**, which is what keeps
-its accelerators working, and the renderer draws the same menus on the title
-row. That in-window bar carries `menubar`/`menu` roles, mnemonic underlines,
-Alt to open, arrow-key navigation, and Escape to close, and routes every command
-through `relay:menu-command`, which accepts only IDs present in the definition.
-
-The File menu contains:
-
-- Add Local Repository… (`CmdOrCtrl+O`)
-- Clone Repository… (`CmdOrCtrl+Shift+O`)
-- Scan Folder for Repositories…
-- Remove Current Repository from Relay
-- Exit on Windows
-
-Menu clicks send a small action string to the renderer. The renderer stores the
-latest action closures in `menuActionsRef` so the one-time IPC subscription does
-not retain stale React state.
-
-When adding a menu action:
-
-1. Add the item to `MENU_DEFINITION` in `electron/application-menu.cjs`, and
-   extend `runMenuCommand()` in `electron/main.cjs` if it is not a role.
-2. Extend `MenuAction` in `app/page.tsx` if the renderer handles it.
-3. Add the action callback in `menuActionsRef.current`.
-4. Verify both macOS and Windows labels/accelerators.
-5. Extend the architecture regression test if the action is important.
-
-## 16. Renderer State Model
-
-The renderer uses local React state rather than a separate state library.
-
-Persistent/public domain state:
-
-- `appState`: accounts, active account, recent repositories, and bindings
-- `repository`: the full currently opened repository; deliberately not restored
-  at startup
-
-Repository interaction state:
-
-- Active Changes/History tab
-- Active changed file
-- Selected commit files
-- Diff text
-- Commit summary and description
-- Repository search
-
-Transient UI state:
-
-- Loading and string-valued `busy` operation state
-- Toast notice
-- Account popover
-- Add/manage account modals
-- Repository account settings modal
-- Clone modal, source tab, selected GitHub repository, clone form, and list state
-- Account email modal
-- GitHub login progress and transient device-code copy feedback
-
-`applyRepository()` is the central renderer-side normalization point. It:
-
-- Sets the current repository.
-- Moves its summary to the front of recent repositories.
-- Caps the local list at 5,000.
-- Preserves only selected files that still exist when requested.
-- Selects the first changed file when an old selection is invalid.
-
-The main process remains authoritative for persisted recent repositories. The
-renderer performs matching optimistic list updates to keep the UI responsive.
-
-### 16.1 Refresh behavior
-
-When the window regains focus, Relay refreshes the current repository unless an
-operation is already busy. Individual actions also refresh after Git mutations.
-
-### 16.2 Popover dismissal
-
-The account popover uses an `accountMenuRef` and a document-level `pointerdown`
-listener installed only while open. A click inside the wrapper does not close
-it; a click elsewhere does. Preserve cleanup in the effect return function.
-
-### 16.3 Error normalization
-
-`messageFrom()` strips Electron's `Error invoking remote method` wrapper and a
-leading `Error:`. Main-process errors should be human-readable because they are
-shown directly in a toast.
-
-## 17. Visual and Interaction System
-
-The UI deliberately resembles GitHub Desktop structurally without copying its
-source or branding.
-
-Key layout:
+The UI resembles GitHub Desktop structurally without copying its source or
+branding.
 
 ```text
-title row (Windows only): Relay | File Edit View Window | window controls
-repository action row: current repository | current branch | fetch/push  ...  active account
-workspace:
-  repository sidebar (ordering control, then the repository list)
+menu bar (system on macOS, in-window on Windows)
+repository action row: repository | branch picker | sync (fetch/pull/push menu) ... account/identity
+workspace (splitters):
+  repository sidebar (filter, ordering control, repository list)
   main panel:
-    Changes tab: file list + commit box | diff viewer
-    History tab: commit list | commit detail, changed files, diff
-status bar: signed-in identity | repository account settings
+    Changes tab: file list + commit box | diff or image preview
+    History tab: branch scope, List/Graph, search | commit list | details, files, diff
+status bar: identity and transport | repository settings
 ```
 
-macOS has no title row: its window controls sit in the repository action row,
-which is the drag region. Windows keeps a title row with the menus on it and
-the native window controls in a title bar overlay.
+- Colors and the style sheet come from `theme.cpp` and the active palette
+  (section 5.3). Do not hard-code colors in widgets.
+- Icons are flat SVG resources (chevrons from Lucide). Do not use emoji, icon
+  fonts, gradients, or highlight effects.
+- Avatars are GitHub profile pictures from `AvatarCache`, with flat initials as
+  the fallback.
+- Every icon-only button has an accessible name.
+- The account menu is a `QMenu`, which closes on an outside click.
+- Long-running operations show busy state; failures appear as notices, and
+  conflict errors stay inside their modal dialog.
 
-Typography reads from the tokens at the top of `app/globals.css`. Primary
-control and body text is `--text-body` (13px) and secondary metadata is
-`--text-meta`/`--text-sm` (11-12px). `--text-badge` (10px) is the only size
-below 11px and belongs only on compact, non-essential badges. Do not reintroduce
-one-off pixel sizes.
+## 16. Development Commands
 
-Design rules:
-
-- Keep controls left-aligned where practical.
-- Use the green color tokens as restrained action/selection accents.
-- Avatars use flat solid coral, violet, or blue backgrounds.
-- Icons live in the `Icon` component and are inline SVG paths.
-- Add new icons to `IconName` and the `Icon` switch; do not substitute Unicode
-  symbols or emoji.
-- Avoid icon gradients and highlight effects.
-- General panel/modal shadows are allowed; the "flat icons" rule does not ban
-  all depth from the application.
-- Maintain accessible names for icon-only buttons.
-- Modal backdrops close on direct backdrop clicks unless an operation must not
-  be interrupted.
-- At widths below 720px the repository sidebar hides and the changes view may
-  scroll horizontally. Electron's minimum window width is currently 820px, so
-  this is mainly defensive and hosted-preview behavior.
-
-The desktop root gets `desktop` plus `macos`, `windows`, or `linux`. Desktop CSS
-removes hosted-page padding and borders, enables title-bar dragging, opts all
-interactive controls out of the drag region, and leaves space for macOS traffic
-lights.
-
-## 18. Development Commands
-
-Install dependencies:
+macOS (Apple Silicon, `brew install llvm@20`):
 
 ```bash
-npm install
-```
-
-Build the desktop renderer only:
-
-```bash
-npm run desktop:build
-```
-
-Regenerate the application icons after editing either icon master:
-
-```bash
-npm run icons:build
-```
-
-Build and open Electron:
-
-```bash
-npm run desktop:open
-```
-
-Lint source:
-
-```bash
-npm run lint
-```
-
-Run the current test suite:
-
-```bash
-npm test
-```
-
-Build production installers:
-
-```bash
-npm run desktop:mac
-npm run desktop:windows
-```
-
-Build both configured targets:
-
-```bash
-npm run desktop:release
-```
-
-Hosted/scaffolding commands:
-
-```bash
-npm run dev
-npm run build
-npm run start
-```
-
-Use `desktop:*` commands for desktop-product requests. `npm test` currently
-runs the Vinext build before Node tests, so it validates server rendering and
-source wiring but does not launch Electron.
-
-Native macOS development:
-
-```bash
-cmake --preset macos-debug
+cmake --preset macos-debug -DCMAKE_PREFIX_PATH=/path/to/Qt/6.11.1/macos
 cmake --build --preset macos-debug --parallel
 ctest --preset macos-debug
 open build-native/macos-debug/native/Relay.app
 ```
 
-Use the corresponding `windows-debug` preset from a native Windows x64
-environment. Homebrew Qt is acceptable for development but not the final
-packaging baseline because its frameworks carry Homebrew-specific transitive
-library paths. Release/measurement builds must use the pinned official Qt
-distribution and reject staged dependencies under `/opt/homebrew` or
-`/usr/local`.
+Windows x64, from an x64 Visual Studio developer environment with LLVM 20 and
+the Qt MSVC 2022 x64 build:
 
-## 19. Testing and Verification Strategy
+```bat
+cmake --preset windows-debug
+cmake --build --preset windows-debug --parallel
+ctest --preset windows-debug
+```
+
+Local source installers: `native/tools/install-macos.sh` and
+`native/tools/install-windows.ps1` (see section 6 and README).
+
+Homebrew Qt is acceptable for development but not the final packaging baseline
+because its frameworks carry Homebrew-specific transitive library paths.
+Release/measurement builds must use the pinned official Qt distribution and
+reject staged dependencies under `/opt/homebrew` or `/usr/local`.
+
+There is no icon generator in the repository. The previous one ran inside
+Electron and was removed with it. Edit `build/icon*.svg` only together with a
+replacement generator that rewrites `icon.icns`, `icon.ico` and `icon.png`.
+
+## 17. Testing and Verification Strategy
 
 Match verification effort to risk.
 
-### 19.1 Minimum for renderer-only changes
+- Every change: configure, build, and run `ctest` with the applicable preset.
+  `app_smoke` starts the app offscreen with `--smoke-test` and a disposable
+  profile.
+- Service changes: extend the matching `native/tests/tst_*.cpp` using
+  temporary Git fixtures.
+- UI changes: extend `tst_main_window.cpp` or `tst_dialogs.cpp`, and launch the
+  built app to exercise the click sequence.
+- Installer changes: `test_install_windows.py`, `test-preview-windows.ps1`,
+  and the CI installer steps.
+- Pushing a pull request that touches `native/**`, `CMakeLists.txt`,
+  `CMakePresets.json` or the workflow runs `.github/workflows/native.yml` on
+  macOS arm64 and Windows x64 with Qt 6.11.1. That is the authoritative check;
+  Linux builds only supplement it.
 
-```bash
-npm run lint
-npm run desktop:build
-```
+Git fixtures should cover, as relevant: clean, modified, untracked, binary,
+no commits, with and without `origin` and upstream, local and remote-only
+branches, conflicts, a linked worktree, several repositories in one tree, and
+clone/fetch/pull/push over a local transport. Never point destructive tests at
+a user's real repository.
 
-Also visually inspect the relevant state in Electron. For interaction changes,
-exercise the actual click sequence rather than relying only on static markup.
+Authentication tests must not print tokens. Prefer account counts and sanitized
+shapes, use a disposable profile when login state is not needed, and use the
+injected memory vault for forge credentials. Real OAuth, private repositories
+and OS credential stores remain manual checks on installed builds.
 
-### 19.2 Minimum for main/preload/service changes
+Packaging verification:
 
-```bash
-npm run lint
-node --check electron/main.cjs
-node --check electron/preload.cjs
-node --check electron/git-service.cjs
-node --check electron/github-auth.cjs
-node --check electron/repository-discovery.cjs
-npm run desktop:build
-```
+- macOS: the app and its frameworks are arm64; `codesign --verify` passes on
+  the ad-hoc signature; the DMG verifies and its copied app launches.
+- Windows: `Relay.exe` is PE x86-64 with a valid manifest; the MSVC runtime and
+  Qt plugins are deployed; Setup upgrades in place and preserves unrelated and
+  Electron folders.
+- Both: the installed app starts with no repository open and the Git/gh check
+  passes with external tools.
 
-Then launch Electron and exercise the IPC route through the renderer or preload
-API. A direct unit call to a service does not prove packaged paths or IPC wiring.
+## 18. Packaging and Release Model
 
-### 19.3 Git integration fixtures
+There are two packaging paths:
 
-Use temporary repositories under `work/` or a directory from `mktemp -d`.
-Cover as relevant:
+- **Preview installers (current releases).** CI builds the source install,
+  then packages an Inno Setup `Relay-Native-Setup-<version>-x64.exe` and an
+  ad-hoc signed `Relay-Native-<version>-arm64.dmg`. They require external Git
+  and gh. Details below.
+- **Strict release packaging.** `RELAY_ENABLE_PACKAGING=ON` with CPack bundles
+  Git and gh from `runtime/` and verifies the stage. See
+  `native/packaging/README.md`. Not used for a release yet.
 
-- Clean repository
-- Modified tracked file
-- Untracked text file
-- Binary file
-- Repository with no commits
-- Repository with and without an `origin`
-- Repository with and without an upstream
-- Linked worktree whose `.git` marker is a file
-- Folder tree containing multiple repositories
-- HTTPS clone of a small public GitHub repository
+### Native usability included in refreshed 0.5.2
 
-Never point destructive tests at a user's real repository.
+The toolbar synchronization button has a split menu exposing Fetch, Pull and
+Push independently of the cached ahead/behind counts. Pull still requires an
+origin upstream and fast-forwards only. Changes/history horizontal splitters
+have wider visible handles; history details/files and the diff now use a
+vertical splitter instead of a fixed-height changed-file list.
+The account popover lists repository SSH profiles alongside GitHub account
+management. Matching SSH hosts, including GitHub.com, can select a saved profile or the
+normal SSH agent without a GitHub account. The selected transport is displayed
+in the toolbar/status bar; commit identity still follows existing account/Git
+configuration precedence. Native clone/fetch/pull/push apply the selected SSH
+profile to GitHub SSH URLs as explicitly requested by the owner. HTTPS keeps
+OAuth routing. Validate the profile host against the actual transport URL
+(including origin push URL); refuse mismatches before launching SSH. No tokens
+or key material enter widgets. UI integration tests cover remote changes pulled before a fetch,
+resizing a populated diff, persisted SSH selection and host mismatch rejection.
+The Windows main-window suite has a 180-second CTest limit because its real
+Git fixtures exceed the default 60 seconds on CI; individual waits stay bounded.
 
-### 19.4 Authentication tests
+### Native multi-host and branch work (2026-09-25)
 
-- Do not print tokens.
-- Prefer testing account counts and sanitized field shapes.
-- Test with a disposable Electron user-data directory when login state is not
-  required.
-- When real account state is required, perform read-only checks or write back the
-  exact existing value.
-- Verify the account popover outside-click behavior.
-- Verify custom email persistence without changing authentication identity.
+The native current-branch picker includes local and remote-tracking branches.
+History has a separate scope selector (current/all/specific local or remote).
+Reading another branch never checks it out. Explicit checkout and creation
+from a selected branch are separate actions. History paging snapshots commit
+tips and applies request generations across scope changes. The explicit
+Fetch all origin branches action fetches the complete heads refspec, even for
+single-branch clones, without changing Git configuration or pruning refs.
+Other remotes' already-fetched refs remain visible.
 
-### 19.5 Packaging verification
+Multiple selected history commits use one Git cherry-pick sequencer operation
+in displayed oldest-to-newest order, capped at 200; validate every object and
+duplicates before mutation. Continue/skip/abort preserve the full sequence.
+Merge picks use first parent. The owner leaves force push and remote branch
+deletion to the CLI. Existing merge/rebase/revert/stash/conflict actions remain.
 
-For macOS:
+New forge_service/forge_controller/forge_dialog files implement API discovery
+for Gitea/Forgejo and GitLab, including self-hosted HTTPS/subpath servers.
+Public AppState.forgeAccounts is separate from GitHub OAuth accounts and
+commit identity. Paginate access/member repositories, retaining private,
+read-only and archived entries. These API credentials are not Git transport
+credentials; cloning uses the chosen SSH profile. Browser token-settings links
+support manual token creation; direct OAuth requires a registered application
+and is not claimed. Other Git services still work through generic Git/SSH.
 
-- Confirm app, bundled Git, and bundled `gh` are Mach-O arm64.
-- Launch the packaged `.app`, not only development Electron.
-- Confirm File menu entries.
-- Confirm the initial state has no open repository.
-- Perform a real public HTTPS clone through the packaged IPC path.
-- Validate the DMG with `hdiutil verify`.
+credential_store.cpp uses native Security.framework or Advapi32 APIs, only
+from controller workers; Linux has no plaintext fallback. Inject a memory
+vault only in tests. User-entered tokens leave the password input immediately;
+widgets never receive them back. Vault references bind to the deterministic
+provider/server/user identity. Reconnection writes a new unique key, publishes
+metadata only after saving, and retains the previous credential on save failure.
+An uncommitted result owns cleanup even if its controller closes. Persisted
+forgeCredentialCleanup references permit retry after vault removal errors.
+Drop stale API successes and failures after account selection/dialog closure.
+Requests are HTTPS, bounded, redirect-free; never surface raw remote errors.
 
-For Windows when building from macOS:
+Tests cover paginated discovery/security, native OS vault roundtrip on target
+platforms, connect/browse/restart/disconnect UI, failed metadata/vault writes,
+controller shutdown, stale requests, branch browsing without checkout and
+multi-commit conflict continuation. Private real-server authentication remains
+an installed-platform manual check; do not claim fixtures prove it.
+Windows Git service/workflow suite budgets are 180/300 seconds: run
+36154921968 passed the new cases but exhausted the former total suite limits
+near the final fixtures. Individual process limits remain unchanged. Gitea PAT
+requests use Authorization: token; GitLab uses Bearer. Discovery has a 64 MiB
+aggregate payload bound in addition to per-request size and time limits.
 
-- Confirm `Relay.exe`, bundled `git.exe`, and `gh.exe` are PE x86-64 payloads.
-- Confirm `git-remote-https.exe`, templates, and CA bundle are packaged.
-- Inspect the NSIS artifact and unpacked resources.
-- A final smoke test on an actual Windows x64 machine is still preferable.
+### Native preview installers (0.5.2 onward)
 
-### 19.6 Current automated tests
+CI packages its validated source-build payloads with Inno Setup 6 on Windows
+(`native/packaging/preview/windows.iss`) and a standard DMG on macOS
+(`native/tools/build-preview-dmg.sh`). These remain unsigned previews using
+external Git/gh, separate from strict bundled-runtime release packaging.
+The stable Inno AppId is `dev.relay.native.preview`, distinct from the old Electron installer.
+Keep it stable across native versions so upgrades reuse the per-user directory
+and uninstall registration. The wizard always offers a directory page and an
+optional desktop shortcut. It adopts 0.5.1 ZIPs through their installation.json,
+refuses unrelated/Electron directories and junctions, and refuses locked app
+executables. Never delete profiles or repositories from installer scripts.
+Source installs refuse to replace an Inno-managed app so its uninstall record
+cannot be orphaned. Windows CI tests a custom-directory upgrade, both shortcut
+choices, real 0.5.1 ZIP adoption, locked-file refusal and Electron preservation.
+macOS uses the same Relay Native.app filename; Finder replaces it in its existing
+location without an uninstall. CI verifies the DMG and launches its copied app.
 
-`tests/rendered-html.test.mjs` checks, against temporary Git fixtures where
-real repository behavior is involved:
+### 18.1 Release checklist
 
-- Relay server-renders in the no-repository state.
-- Old demo text such as `git-fixture` and `All systems operational` is absent.
-- Important native menu and IPC strings remain wired.
-- Git runtime environment and clone code exist.
-- Worktree scanning exists.
-- GitHub repository picker exists.
-- Account menu outside-click handling exists.
-- Repository removal copy promises files remain untouched.
-- CSS contains no linear gradients.
-- A store written before ordering existed upgrades without reshuffling, and the
-  manual order stays consistent with the remembered repositories.
-- The `HEAD` commit date used for sorting reads, including `null` with no commits.
-- History pages without gaps, duplicates, or a cap, and describes root, merge,
-  and deletion commits correctly.
-- Commit hashes that are malformed, absent, or from another repository are
-  refused.
-- The native menu and the in-window menu bar come from one definition.
-- There is one repository action row and no duplicate account pill.
-- The commit-email modal submits from the keyboard exactly once.
-- SSH remote parsing, GitHub separation, and failure messages that leak nothing.
-- A clone, fetch, and push over a real Git SSH transport, asserting no GitHub
-  credential appears in the exchange.
+1. Set the version in `CMakeLists.txt` (`project(RelayNative VERSION ...)`).
+2. Update the version mentioned in README's Download section and section 3.
+3. Merge to `main` through a pull request and wait for the native CI run on
+   both platforms to pass.
+4. Download the `Relay-Native-macos-debug-installers` and
+   `Relay-Native-windows-debug-installers` artifacts from that run (or the
+   matching release presets if configured).
+5. Install each on a real machine and smoke-test: startup, Git/gh check,
+   sign-in, a clone, a commit, fetch/pull/push.
+6. Compute SHA-256 hashes.
+7. Tag `v<version>` on the merged commit and create a GitHub release marked as
+   a prerelease, uploading the installers as release assets, not Git blobs.
+8. Verify asset names, sizes, and the GitHub-reported digest.
 
-These are regression guards, not a complete integration suite. They do not
-launch Electron and do not cover Windows.
+Builds are not Developer ID signed, notarized, or Authenticode signed. Ad-hoc
+signing stops Apple Silicon from calling the app damaged but is not
+distribution signing. Do not claim otherwise.
 
-## 20. Packaging and Release Model
+## 19. Common Change Recipes
 
-electron-builder packages only:
+### Add a privileged operation
 
-```text
-desktop-dist/**/*
-electron/**/*
-package.json
-```
-
-It additionally copies platform-specific Git and GitHub CLI trees from
-`runtime/` into the app resources.
-
-Icons are supplied as real containers, `build/icon.icns` and `build/icon.ico`,
-not as a single PNG for electron-builder to convert. Its conversion put a 512px
-image in the `ic13` (128@2x) slot and a 1024px image in `ic14` (256@2x), so
-macOS rescaled the icon at every Retina size. Regenerate with `npm run
-icons:build` after editing either master; the output is byte-stable across runs.
-
-Configured artifacts:
-
-- `Relay-<version>-arm64.dmg`
-- `Relay-Setup-<version>-x64.exe`
-
-Output directory:
-
-```text
-outputs/installers/
-```
-
-The NSIS installer is interactive, allows choosing an install directory, and
-creates desktop and Start Menu shortcuts.
-
-### 20.1 Release checklist
-
-1. Confirm the intended version.
-2. Update both `package.json` and `package-lock.json`.
-3. Run lint, syntax checks, tests, and desktop build.
-4. Build the Apple Silicon DMG.
-5. Build the Windows x64 installer.
-6. Launch and smoke-test the packaged macOS app.
-7. Inspect Windows payload architecture and runtime files.
-8. Verify the DMG checksum/container.
-9. Compute SHA-256 hashes.
-10. Ensure only the intended current installers are in the user-facing output
-    location.
-11. Commit and push source only when explicitly authorized.
-12. Create a GitHub release and upload installers as release assets, not Git
-    blobs.
-13. Verify release asset names, sizes, upload state, and GitHub-reported digest.
-
-The macOS app is ad-hoc re-signed by `build/after-pack.cjs`. Without it the
-bundle keeps the prebuilt Electron binary's signature, which electron-builder
-invalidates by renaming the executable and adding resources; the app then
-reports `Sealed Resources=none`, fails `codesign --verify`, and Apple Silicon
-refuses to launch it as damaged. Ad-hoc signing does not make the build signed
-or notarized.
-
-Current builds are unsigned. Do not claim otherwise. macOS Gatekeeper and
-Windows SmartScreen may display first-run warnings. Proper signing requires:
-
-- Apple Developer ID signing and notarization for macOS
-- A trusted code-signing certificate for Windows
-
-## 21. Common Change Recipes
-
-### Add a new privileged renderer operation
-
-1. Define the smallest possible main-process handler.
-2. Validate every external value in the main process.
-3. Keep secrets and filesystem objects out of the response.
-4. Expose one preload method.
-5. Extend `RelayDesktop` types.
-6. Add renderer state and UI.
-7. Add an automated wiring assertion.
-8. Exercise it through packaged or development Electron.
+1. Implement the work in a service, synchronous and headless.
+2. Validate every external value in the service.
+3. Add a `RelayController` slot that runs it through `runAsync()`, with a
+   generation or freshness check if the result can go stale, and the
+   repository/account mutation lock if it mutates.
+4. Return only sanitized domain values through a signal.
+5. Connect the view.
+6. Add a QtTest case.
 
 ### Add a Git operation
 
-1. Implement it in `electron/git-service.cjs`.
-2. Use argument arrays and `--` separators.
-3. Decide whether it needs a repository path or a parent working directory.
-4. Decide whether GitHub HTTPS credentials apply.
-5. Set `GIT_TERMINAL_PROMPT=0` for noninteractive network operations.
-6. Return a refreshed repository model after mutations.
-7. Test no-remote, no-branch, auth-failure, and ordinary success cases.
+1. Implement it in `GitService` or `git_workflows.cpp` with an argument list,
+   `--` separators, and literal pathspecs for user paths.
+2. Decide whether GitHub HTTPS credentials or an SSH command apply.
+3. Set `GIT_TERMINAL_PROMPT=0` for network operations.
+4. Return a refreshed `Repository` after a mutation.
+5. Test no-remote, no-branch, conflict, failure, and success cases.
 
-### Add account metadata
+### Add account or preference metadata
 
-1. Add a safe default in `syncGitHubAccounts()`.
-2. Preserve known stored values during synchronization.
-3. Ensure removing an account cleans dependent bindings.
-4. Never store secrets.
-5. Keep old stores readable by merging defaults or normalizing missing fields.
+1. Add a safe default and preserve stored values on synchronization.
+2. Preserve unknown fields on write.
+3. Clean dependent bindings when an account is removed.
+4. Never store secrets; forge API tokens go to the OS credential store.
 
-### Add a native menu item
+## 20. Security Checklist
 
-Follow the four-layer path:
-
-```text
-Electron Menu item
-  -> relay:menu-action event
-  -> MenuAction union
-  -> menuActionsRef callback
-```
-
-### Add an icon
-
-1. Add a semantic name to `IconName`.
-2. Add a 24x24 SVG path in `Icon`.
-3. Use `currentColor` and the common stroke settings.
-4. Add an accessible label to the containing button.
-5. Do not use emoji or font glyph substitutes.
-
-### Change persistence
-
-1. Keep `emptyStore()` backward compatible.
-2. Normalize untrusted/missing fields in `readStore()`.
-3. Preserve atomic write behavior.
-4. Explicitly decide whether a field belongs in `publicState()`.
-5. Confirm the field is not sensitive.
-6. Add cleanup for references to removed accounts or repositories.
-
-## 22. Security Checklist
-
-Before completing a change, ask:
-
-- Does any token cross into the renderer?
+- Does any token reach a widget, model, signal, log, or error message?
 - Could an inherited `GH_TOKEN` select a different account?
-- Could an IPC path escape the user's intended repository or clone parent?
+- Could a path escape the intended repository or clone parent?
 - Are user-controlled Git arguments separated from options?
 - Could a command prompt invisibly and hang?
-- Could an error or log contain a token?
 - Could an external URL use a non-HTTPS scheme?
-- Could a GitHub token reach a host that is not github.com?
+- Could a GitHub token reach a host that is not github.com, or a forge token
+  reach a server other than the one it was created for?
 - Could a private key path, key contents, or a passphrase reach the store, the
-  renderer, a log, or an error message?
-- Could a commit hash or file path from IPC address an object outside the open
+  UI, a log, or an error message?
+- Could a commit hash or file path address an object outside the open
   repository?
-- Could a renderer navigation replace the local app?
+- Could a discard, stash, rebase or undo lose user data without a recovery
+  path?
 - Does repository removal touch disk data?
-- Does a public commit include generated installers, runtime binaries, local app
-  data, credentials, `.env` files, or `.openai` metadata?
+- Does a commit include installers, runtime binaries, local app data,
+  credentials, or `.env` files?
 
-Keep `contextIsolation`, sandboxing, and disabled Node integration intact.
+## 21. Error Handling Conventions
 
-## 23. Error Handling Conventions
-
-- Service errors should contain one actionable sentence where possible.
-- `git-service.cjs` removes a leading `fatal:` from Git stderr.
+- Service errors are one actionable sentence where possible.
+- Git stderr loses its leading `fatal:`.
 - GitHub CLI errors use the last non-empty cleaned output line.
-- Authentication expiry should tell the user to sign in again.
-- A canceled native dialog returns `null`, not an exception.
-- Bulk scanning reports unreadable counts instead of failing everything.
-- UI actions clear their `busy` state in `finally` blocks.
-- Toasts last longer for errors than success messages.
+- Authentication expiry tells the user to sign in again.
+- A canceled dialog is not an error.
+- Bulk scanning reports counts instead of failing everything.
+- Busy state clears when an operation finishes, whether it failed or not.
+- Never surface raw remote API error bodies.
 
-Do not swallow errors that make an operation appear successful. It is acceptable
-to ignore best-effort cosmetic data such as line statistics or automatic focus
-refresh failures.
+Do not swallow errors that make an operation look successful.
 
-## 24. Known Limitations and Technical Debt
+## 22. Known Limitations
 
-Agents should understand these before extending the project:
-
-- `app/page.tsx` is a large monolithic component containing types, icons, state,
-  actions, and markup. Feature work may justify extraction, but avoid a broad
-  rewrite when a focused change is safer.
-- IPC types are manually duplicated between preload behavior and renderer types;
-  there is no shared schema or runtime validator.
-- Many repository paths accepted by IPC are only lightly validated. The current
-  threat model assumes a trusted local renderer, though BrowserWindow hardening
-  reduces exposure.
-- Folder scanning runs in the Electron main process and has no incremental
-  progress events or cancellation.
+- GitHub OAuth is GitHub.com only. Gitea/Forgejo/GitLab accounts are for API
+  discovery; their Git transport is SSH or existing Git credentials.
+- No force push and no remote branch deletion (left to the CLI by the owner).
+- Pull only fast-forwards; divergent branches need an explicit merge or rebase.
+- Rebase is limited to unpublished commits; published commits cannot be
+  undone or amended here.
+- Picking a remote branch whose name already exists locally fails with Git's
+  error rather than switching to the local branch.
+- History paging uses `--skip`, so very deep history gets slower as the user
+  scrolls. History search filters only loaded commits. Merges compare against
+  the first parent.
+- Ahead/behind is approximate when upstream information is incomplete.
+- Commit signing is not supported.
+- SSH identities cover the transport only. Relay does not create keys, edit
+  `~/.ssh/config`, or handle passphrases.
 - Scanning and recents are capped at 5,000 repositories.
-- The GitHub repository picker renders only the first 250 filtered items.
-- Only GitHub.com is supported. Host is hard-coded in auth and API logic.
-- OAuth injection applies only to HTTPS GitHub remotes. SSH relies on the user's
-  SSH environment; other HTTPS hosts receive no Relay credential.
-- Relay supports fetch and push but not pull, merge, rebase, stash, discard,
-  reset, tag, remote management, or conflict resolution.
-- History paging uses `--skip`, which Git resolves by walking, so a very deep
-  history gets slower the further the user scrolls.
-- History search filters only the commits already loaded, not the whole history.
-- A merge commit is always compared against its first parent; there is no
-  parent selector.
-- SSH identities cover the transport only. Relay does not create keys, add them
-  to an agent, edit `~/.ssh/config`, or handle passphrases.
-- The Windows in-window menu bar is Relay's own. Its accessibility relies on
-  ARIA roles rather than the native menu, which stays installed and hidden so
-  its accelerators keep working.
-- Branch UI lists and switches local branches only. It does not create branches
-  or directly check out remote-only branches.
-- Status parsing collapses Git's full index/worktree matrix to A/M/D and has
-  limited rename/quoted-path handling. Commit file lists collapse the same way.
-- Ahead/behind fallback is approximate when upstream information is incomplete.
-- Diffs are text-oriented and not suitable for images or rich binary previews.
-- Commit creation has no signing support.
-- Git and GitHub CLI third-party runtimes are not reproducibly downloaded by a
-  repository script. Release packaging requires a prepared local `runtime/`.
-- The current automated suite does not launch Electron and does not test Windows
-  directly. Everything added for the Windows title bar overlay, its window
-  controls, display scaling, and Windows OpenSSH path handling is unverified on
-  a real Windows machine.
-- Builds are unsigned and unnotarized.
-- Hosted Vinext/Cloudflare/Drizzle scaffolding makes the dependency graph and
-  `npm test` heavier than the desktop application alone requires.
-- There is no auto-update mechanism.
-- There is no crash reporting, telemetry, or structured logging.
-- Account avatars are initials, not fetched profile images.
+- Releases use external Git and gh; strict bundled packaging is not used yet,
+  and `runtime/` is not downloaded by a repository script.
+- There is no icon generator (section 16).
+- Real OAuth, private repositories, forge servers and OS credential stores are
+  not covered by automated tests.
+- Builds are not distribution-signed. There is no auto-update, crash reporting,
+  or telemetry.
 
-Treat this list as context, not authorization to expand scope. Fix only what the
-user requests or what is necessary for a safe implementation.
+Treat this list as context, not authorization to expand scope.
 
-## 25. Agent Working Agreement
+## 23. Agent Working Agreement
 
-When working in this repository:
-
-1. Read `AGENTS.md`, `README.md`, `package.json`, and the relevant source files.
+1. Read `AGENTS.md`, `README.md`, and the relevant `native/` sources.
 2. Inspect `git status` before editing. Preserve unrelated user changes.
-3. Identify whether the request concerns the Electron desktop product or hosted
-   scaffolding.
-4. Keep changes focused and preserve the non-negotiable invariants.
-5. Do not edit generated output when source changes can regenerate it.
-6. Do not commit `runtime/`, `outputs/`, `work/`, `.openai/`, or credentials.
-7. Do not perform remote writes without explicit authorization.
-8. Test at the narrowest level first, then at the real integration boundary.
-9. For high-risk changes, test the packaged app, not only source modules.
-10. Document new architecture, IPC, persistence, security, build, or release
-    behavior here.
-11. Report unsigned-build limitations honestly.
-12. Never describe Relay as a demo. It is intended to be a working application.
+3. Keep changes focused and preserve the invariants.
+4. Do not edit generated output when a source change can regenerate it.
+5. Do not commit `runtime/`, `outputs/`, `work/`, `build-native/`, or
+   credentials.
+6. Do not perform remote writes without explicit authorization.
+7. Test at the narrowest level first, then at the real integration boundary.
+8. Document new architecture, persistence, security, build, or release
+   behavior here.
+9. Report unsigned-build limitations honestly.
+10. Never describe Relay as a demo. It is intended to be a working application.
 
-## 26. Definition of Done
-
-A change is done when all applicable items are true:
+## 24. Definition of Done
 
 - Requested behavior works through the actual user-facing path.
-- No product invariant was accidentally regressed.
-- Presentation/controller/service boundaries remain secure. Electron changes
-  also preserve renderer/main/preload isolation.
-- Credentials remain out of renderer state, logs, disk metadata, and Git.
-- Lint passes.
-- Syntax checks pass for changed CommonJS modules.
-- Desktop renderer builds.
-- Relevant automated tests pass.
-- Native changes configure and build with the applicable CMake preset and pass
-  CTest, including `app_smoke` when UI or startup code changed.
-- Relevant Git or GitHub integration was exercised safely.
-- Cross-platform packaging implications were considered.
+- No invariant regressed.
+- Credentials stay out of the UI, logs, disk metadata, and Git.
+- The project builds with the applicable preset and `ctest` passes, including
+  `app_smoke`; for anything merged, native CI is green on both platforms.
+- Relevant Git or provider integration was exercised safely.
+- Both macOS and Windows implications were considered.
 - Visual behavior was inspected if UI changed.
 - `AGENTS.md` and `README.md` remain accurate.
 - Only requested local or remote state was changed.
