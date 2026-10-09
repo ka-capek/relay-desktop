@@ -42,12 +42,15 @@
 #include <QTest>
 
 namespace {
+// Upper bound for one step that starts Git processes. Windows CI runs four
+// suites at once, and opening a repository there starts dozens of git.exe.
+constexpr int gitTimeoutMs = 30000;
 
 void runGit(const QString& repository, const QStringList& arguments) {
   QProcess process;
   process.setWorkingDirectory(repository);
   process.start(QStringLiteral("git"), arguments);
-  QVERIFY2(process.waitForFinished(10'000), "git command timed out");
+  QVERIFY2(process.waitForFinished(gitTimeoutMs), "git command timed out");
   QVERIFY2(process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0,
            process.readAllStandardError().constData());
 }
@@ -103,18 +106,18 @@ class MainWindowTest final : public QObject {
     QVERIFY(history);
     window.findChild<QTabWidget*>()->setCurrentIndex(1);
     auto* model = dynamic_cast<relay::HistoryCommitListModel*>(history->model());
-    QTRY_COMPARE_WITH_TIMEOUT(model->commits().size(), 50, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(model->commits().size(), 50, gitTimeoutMs);
     QLineEdit* search = nullptr;
     for (auto* edit : window.findChildren<QLineEdit*>())
       if (edit->accessibleName() == QStringLiteral("Search commits")) search = edit;
     QVERIFY(search);
     // "zephyr" is only in the body of a commit that is not loaded yet.
     search->setText(QStringLiteral("ZEPHYR"));
-    QTRY_COMPARE_WITH_TIMEOUT(model->rowCount(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(model->rowCount(), 1, gitTimeoutMs);
     QCOMPARE(model->commitAt(0)->title, QStringLiteral("Old work"));
     QVERIFY(model->showingSearchResults());
     search->clear();
-    QTRY_VERIFY_WITH_TIMEOUT(!model->showingSearchResults() && model->rowCount() == 50, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!model->showingSearchResults() && model->rowCount() == 50, gitTimeoutMs);
   }
 
   void paneWidthsSurviveRestartAndReset() {
@@ -189,13 +192,13 @@ class MainWindowTest final : public QObject {
     auto* current = window.findChild<QComboBox*>(QStringLiteral("branchPicker"));
     auto* history = window.findChild<QListView*>(QStringLiteral("historyList"));
     QVERIFY(branches && current && history);
-    QTRY_VERIFY_WITH_TIMEOUT(branches->findData(QStringLiteral("refs/remotes/gitea/review")) >= 0, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(branches->findData(QStringLiteral("refs/remotes/gitea/review")) >= 0, gitTimeoutMs);
     QVERIFY(current->findData(QStringLiteral("refs/remotes/gitea/review")) >= 0);
     branches->setCurrentIndex(branches->findData(QStringLiteral("refs/remotes/gitea/review")));
     auto* model = dynamic_cast<relay::HistoryCommitListModel*>(history->model());
     QVERIFY(model);
     QCOMPARE(history->selectionMode(), QAbstractItemView::ExtendedSelection);
-    QTRY_COMPARE_WITH_TIMEOUT(model->commits().size(), 2, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(model->commits().size(), 2, gitTimeoutMs);
     QCOMPARE(model->commits().first().title, QStringLiteral("Remote-only change"));
     QCOMPARE(controller.currentRepository()->branch, QStringLiteral("main"));
     QCOMPARE(current->currentText(), QStringLiteral("main"));
@@ -208,7 +211,7 @@ class MainWindowTest final : public QObject {
     auto* checkout = window.findChild<QPushButton*>(QStringLiteral("checkoutHistoryBranch"));
     QTRY_VERIFY(checkout->isEnabled());
     checkout->click();
-    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->branch, QStringLiteral("review"), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->branch, QStringLiteral("review"), gitTimeoutMs);
     QCOMPARE(current->currentText(), QStringLiteral("review"));
   }
 
@@ -238,21 +241,21 @@ class MainWindowTest final : public QObject {
     QVERIFY(current);
     const auto ref = QStringLiteral("refs/remotes/origin/feature/origin-only");
     const auto fetchItem = QStringLiteral("relay:fetch-origin-branches");
-    QTRY_VERIFY_WITH_TIMEOUT(current->findData(fetchItem) >= 0, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(current->findData(fetchItem) >= 0, gitTimeoutMs);
     QTRY_VERIFY(current->isEnabled());
     QCOMPARE(current->findData(ref), -1);
     current->setCurrentIndex(current->findData(fetchItem));
-    QTRY_VERIFY_WITH_TIMEOUT(current->findData(ref) >= 0, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(current->findData(ref) >= 0, gitTimeoutMs);
     QCOMPARE(current->currentText(), QStringLiteral("main"));
     QCOMPARE(controller.currentRepository()->branch, QStringLiteral("main"));
     QTRY_VERIFY(current->isEnabled());
     current->setCurrentIndex(current->findData(ref));
-    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->branch, QStringLiteral("feature/origin-only"), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->branch, QStringLiteral("feature/origin-only"), gitTimeoutMs);
     QTRY_COMPARE(current->currentText(), QStringLiteral("feature/origin-only"));
     QProcess upstream;
     upstream.setWorkingDirectory(local);
     upstream.start(QStringLiteral("git"), {QStringLiteral("rev-parse"), QStringLiteral("--abbrev-ref"), QStringLiteral("@{upstream}")});
-    QVERIFY(upstream.waitForFinished(10000));
+    QVERIFY(upstream.waitForFinished(gitTimeoutMs));
     QCOMPARE(QString::fromUtf8(upstream.readAllStandardOutput()).trimmed(), QStringLiteral("origin/feature/origin-only"));
   }
 
@@ -275,7 +278,7 @@ class MainWindowTest final : public QObject {
       QProcess git;
       git.start(QStringLiteral("git"), {QStringLiteral("-C"), remote, QStringLiteral("log"), QStringLiteral("-1"),
                                         QStringLiteral("--format=%s"), QStringLiteral("main")});
-      git.waitForFinished(10000);
+      git.waitForFinished(gitTimeoutMs);
       return QString::fromUtf8(git.readAllStandardOutput()).trimmed();
     };
     relay::RelayControllerConfig config;
@@ -288,7 +291,7 @@ class MainWindowTest final : public QObject {
     controller.openRepository(local);
     auto* force = window.findChild<QAction*>(QStringLiteral("forcePushAction"));
     QVERIFY(force);
-    QTRY_VERIFY_WITH_TIMEOUT(force->isEnabled(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(force->isEnabled(), gitTimeoutMs);
 
     // Cancel is the default and changes nothing.
     QTimer::singleShot(0, &window, [&window] {
@@ -308,7 +311,7 @@ class MainWindowTest final : public QObject {
       box->findChild<QPushButton*>(QStringLiteral("forcePushButton"))->click();
     });
     force->trigger();
-    QTRY_COMPARE_WITH_TIMEOUT(originSubject(), QStringLiteral("Rewritten"), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(originSubject(), QStringLiteral("Rewritten"), gitTimeoutMs);
   }
 
   void deletesBranchOnOriginAfterConfirmation() {
@@ -324,7 +327,7 @@ class MainWindowTest final : public QObject {
     const auto originHas = [&remote](const QString& branch) {
       QProcess git;
       git.start(QStringLiteral("git"), {QStringLiteral("-C"), remote, QStringLiteral("for-each-ref"), QStringLiteral("refs/heads/") + branch});
-      git.waitForFinished(10000);
+      git.waitForFinished(gitTimeoutMs);
       return !git.readAllStandardOutput().trimmed().isEmpty();
     };
     relay::RelayControllerConfig config;
@@ -337,7 +340,7 @@ class MainWindowTest final : public QObject {
     controller.openRepository(local);
     auto* remove = window.findChild<QAction*>(QStringLiteral("deleteOriginBranchAction"));
     QVERIFY(remove);
-    QTRY_VERIFY_WITH_TIMEOUT(remove->isEnabled(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(remove->isEnabled(), gitTimeoutMs);
 
     bool confirmed = false;
     QTimer::singleShot(0, &window, [&] {
@@ -360,7 +363,7 @@ class MainWindowTest final : public QObject {
     });
     remove->trigger();
     QVERIFY(confirmed);
-    QTRY_VERIFY_WITH_TIMEOUT(!originHas(QStringLiteral("finished")), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!originHas(QStringLiteral("finished")), gitTimeoutMs);
     QVERIFY(originHas(QStringLiteral("main")));
     QTRY_VERIFY(!controller.currentRepository()->remoteBranches.contains(QStringLiteral("origin/finished")));
   }
@@ -381,7 +384,7 @@ class MainWindowTest final : public QObject {
     controller.openRepository(temporary.path());
     auto* action = window.findChild<QAction*>(QStringLiteral("pullRequestAction"));
     QVERIFY(action);
-    QTRY_VERIFY_WITH_TIMEOUT(action->isEnabled(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(action->isEnabled(), gitTimeoutMs);
     UrlRecorder recorder;
     QDesktopServices::setUrlHandler(QStringLiteral("https"), &recorder, "open");
     QSignalSpy failures(&controller, &relay::RelayController::operationFailed);
@@ -399,7 +402,7 @@ class MainWindowTest final : public QObject {
     runGit(temporary.path(), {QStringLiteral("push"), QStringLiteral("--set-upstream"), QStringLiteral("origin"), QStringLiteral("feature/pr")});
     runGit(temporary.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Unpushed")});
     controller.refreshRepository();
-    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository()->ahead == 1, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository()->ahead == 1, gitTimeoutMs);
     QTRY_VERIFY(action->isEnabled());
     bool prompted = false;
     QTimer::singleShot(0, &window, [&] {
@@ -410,7 +413,7 @@ class MainWindowTest final : public QObject {
     });
     action->trigger();
     QVERIFY(prompted);
-    QTRY_COMPARE_WITH_TIMEOUT(recorder.urls.size(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(recorder.urls.size(), 1, gitTimeoutMs);
     QCOMPARE(controller.currentRepository()->ahead, 0);
     QDesktopServices::unsetUrlHandler(QStringLiteral("https"));
     QCOMPARE(recorder.urls.first(), QUrl(QStringLiteral("https://github.com/octo/relay/compare/feature/pr?expand=1")));
@@ -433,7 +436,7 @@ class MainWindowTest final : public QObject {
     controller.openRepository(temporary.path());
     auto* action = window.findChild<QAction*>(QStringLiteral("rewriteCommitsAction"));
     QVERIFY(action);
-    QTRY_VERIFY_WITH_TIMEOUT(action->isEnabled(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(action->isEnabled(), gitTimeoutMs);
     // The dialog is modal and opens once the commits have been read.
     bool shown = false;
     QTimer poll;
@@ -453,8 +456,8 @@ class MainWindowTest final : public QObject {
     });
     poll.start(50);
     action->trigger();
-    QTRY_VERIFY_WITH_TIMEOUT(shown, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->history.value(0).title, QStringLiteral("First"), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(shown, gitTimeoutMs);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->history.value(0).title, QStringLiteral("First"), gitTimeoutMs);
     QCOMPARE(controller.currentRepository()->history.value(1).title, QStringLiteral("Initial commit"));
   }
 
@@ -480,7 +483,7 @@ class MainWindowTest final : public QObject {
     controller.openRepository(temporary.path());
     auto* action = window.findChild<QAction*>(QStringLiteral("compareBranchesAction"));
     QVERIFY(action);
-    QTRY_VERIFY_WITH_TIMEOUT(action->isEnabled(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(action->isEnabled(), gitTimeoutMs);
     action->trigger();
     auto* dialog = window.findChild<relay::CompareDialog*>();
     QVERIFY(dialog && dialog->isVisible());
@@ -489,11 +492,11 @@ class MainWindowTest final : public QObject {
     QCOMPARE(base->currentData().toString(), QStringLiteral("refs/heads/main"));
     QCOMPARE(head->currentData().toString(), QStringLiteral("refs/heads/feature"));
     auto* tabs = dialog->findChild<QTabWidget*>();
-    QTRY_COMPARE_WITH_TIMEOUT(tabs->tabText(0), QStringLiteral("1 only in feature"), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(tabs->tabText(0), QStringLiteral("1 only in feature"), gitTimeoutMs);
     QCOMPARE(tabs->tabText(1), QStringLiteral("0 only in main"));
     auto* diff = static_cast<relay::DiffView*>(dialog->findChild<QWidget*>(QStringLiteral("compareDiff")));
     QVERIFY(diff);
-    QTRY_VERIFY_WITH_TIMEOUT(diff->diffModel()->rowCount() > 0, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(diff->diffModel()->rowCount() > 0, gitTimeoutMs);
     tabs->setCurrentIndex(2);
     if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
       QDir().mkpath(output);
@@ -505,9 +508,9 @@ class MainWindowTest final : public QObject {
       if (auto* box = dialog->findChild<QMessageBox*>()) box->button(QMessageBox::Ok)->click();
     });
     merge->click();
-    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->history.value(0).title, QStringLiteral("Feature work"), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->history.value(0).title, QStringLiteral("Feature work"), gitTimeoutMs);
     // The open dialog follows the repository: nothing is left to merge.
-    QTRY_COMPARE_WITH_TIMEOUT(tabs->tabText(0), QStringLiteral("0 only in feature"), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(tabs->tabText(0), QStringLiteral("0 only in feature"), gitTimeoutMs);
     QVERIFY(!merge->isVisible());
   }
 
@@ -535,7 +538,7 @@ class MainWindowTest final : public QObject {
     auto* summary = window.findChild<QLineEdit*>(QStringLiteral("commitSummary"));
     auto* commit = window.findChild<QPushButton*>(QStringLiteral("commitButton"));
     QVERIFY(coAuthors && recent && summary && commit);
-    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository() && !controller.currentRepository()->files.isEmpty(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository() && !controller.currentRepository()->files.isEmpty(), gitTimeoutMs);
     emit recent->menu()->aboutToShow();
     const auto actions = recent->menu()->actions();
     const auto ada = std::find_if(actions.cbegin(), actions.cend(), [](QAction* action) { return action->text() == QStringLiteral("Ada Lovelace <ada@example.com>"); });
@@ -549,11 +552,11 @@ class MainWindowTest final : public QObject {
       window.grab().save(QDir(output).filePath(QStringLiteral("commit-co-authors.png")));
     }
     commit->click();
-    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->history.value(0).title, QStringLiteral("Pair on README"), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->history.value(0).title, QStringLiteral("Pair on README"), gitTimeoutMs);
     QVERIFY(coAuthors->text().isEmpty());
     QProcess git;
     git.start(QStringLiteral("git"), {QStringLiteral("-C"), temporary.path(), QStringLiteral("log"), QStringLiteral("-1"), QStringLiteral("--format=%B")});
-    QVERIFY(git.waitForFinished(10000));
+    QVERIFY(git.waitForFinished(gitTimeoutMs));
     QVERIFY(QString::fromUtf8(git.readAllStandardOutput()).contains(QStringLiteral("Co-authored-by: Ada Lovelace <ada@example.com>")));
   }
 
@@ -570,7 +573,7 @@ class MainWindowTest final : public QObject {
     const auto originTags = [&remote] {
       QProcess git;
       git.start(QStringLiteral("git"), {QStringLiteral("-C"), remote, QStringLiteral("tag"), QStringLiteral("--list")});
-      git.waitForFinished(10000);
+      git.waitForFinished(gitTimeoutMs);
       return QString::fromUtf8(git.readAllStandardOutput()).trimmed();
     };
     QTemporaryDir profile;
@@ -585,7 +588,7 @@ class MainWindowTest final : public QObject {
     auto* push = window.findChild<QAction*>(QStringLiteral("pushTagAction"));
     auto* remove = window.findChild<QAction*>(QStringLiteral("deleteOriginTagAction"));
     QVERIFY(push && remove);
-    QTRY_VERIFY_WITH_TIMEOUT(push->isEnabled() && remove->isEnabled(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(push->isEnabled() && remove->isEnabled(), gitTimeoutMs);
 
     // Answers each modal dialog as it appears.
     QStringList answered;
@@ -604,10 +607,10 @@ class MainWindowTest final : public QObject {
     });
     poll.start(30);
     push->trigger();
-    QTRY_COMPARE_WITH_TIMEOUT(originTags(), QStringLiteral("v2.0"), 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(originTags(), QStringLiteral("v2.0"), gitTimeoutMs);
     QTRY_VERIFY(remove->isEnabled());
     remove->trigger();
-    QTRY_VERIFY_WITH_TIMEOUT(originTags().isEmpty(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(originTags().isEmpty(), gitTimeoutMs);
     QCOMPARE(answered, (QStringList{QStringLiteral("Push tag to origin"), QStringLiteral("Delete tag on origin"), QStringLiteral("deleteOriginTagDialog")}));
     QVERIFY(controller.currentRepository()->tags.contains(QStringLiteral("v2.0")));
   }
@@ -632,7 +635,7 @@ class MainWindowTest final : public QObject {
     const auto originFeature = [&remote] {
       QProcess git;
       git.start(QStringLiteral("git"), {QStringLiteral("-C"), remote, QStringLiteral("log"), QStringLiteral("--format=%s"), QStringLiteral("feature")});
-      git.waitForFinished(10000);
+      git.waitForFinished(gitTimeoutMs);
       return QString::fromUtf8(git.readAllStandardOutput()).trimmed();
     };
     QTemporaryDir profile;
@@ -646,7 +649,7 @@ class MainWindowTest final : public QObject {
     controller.openRepository(local);
     auto* rebase = window.findChild<QAction*>(QStringLiteral("rebaseBranchAction"));
     QVERIFY(rebase);
-    QTRY_VERIFY_WITH_TIMEOUT(rebase->isEnabled(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(rebase->isEnabled(), gitTimeoutMs);
     QStringList answered;
     QTimer poll;
     connect(&poll, &QTimer::timeout, &window, [&] {
@@ -665,7 +668,7 @@ class MainWindowTest final : public QObject {
     });
     poll.start(30);
     rebase->trigger();
-    QTRY_COMPARE_WITH_TIMEOUT(originFeature(), QStringLiteral("Feature\nMain moved\nInitial commit"), 15000);
+    QTRY_COMPARE_WITH_TIMEOUT(originFeature(), QStringLiteral("Feature\nMain moved\nInitial commit"), gitTimeoutMs);
     QCOMPARE(answered, (QStringList{QStringLiteral("chooser"), QStringLiteral("rebasePublishedDialog"), QStringLiteral("forcePushDialog")}));
   }
 
@@ -694,7 +697,7 @@ class MainWindowTest final : public QObject {
     controller.start();
     controller.openRepository(local);
     auto* pull = window.findChild<QAction*>(QStringLiteral("pullAction"));
-    QTRY_VERIFY_WITH_TIMEOUT(pull->isEnabled(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(pull->isEnabled(), gitTimeoutMs);
     QStringList answered;
     QTimer poll;
     connect(&poll, &QTimer::timeout, &window, [&] {
@@ -706,7 +709,7 @@ class MainWindowTest final : public QObject {
     });
     poll.start(30);
     pull->trigger();
-    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->history.value(1).title, QStringLiteral("Theirs"), 15000);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->history.value(1).title, QStringLiteral("Theirs"), gitTimeoutMs);
     QCOMPARE(controller.currentRepository()->history.value(0).title, QStringLiteral("Mine"));
     QCOMPARE(answered, QStringList{QStringLiteral("pullDivergedDialog")});
   }
@@ -731,7 +734,7 @@ class MainWindowTest final : public QObject {
     window.show();
     controller.start();
     controller.openRepository(local);
-    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository(), gitTimeoutMs);
     QCOMPARE(controller.currentRepository()->behind, 0);
     const auto sync = window.findChild<QToolButton*>(QStringLiteral("syncButton"));
     const auto pull = window.findChild<QAction*>(QStringLiteral("pullAction"));
@@ -740,7 +743,7 @@ class MainWindowTest final : public QObject {
     QVERIFY(pull->isEnabled());
     pull->trigger();
     QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->history.value(0).title,
-                              QStringLiteral("Remote update"), 10000);
+                              QStringLiteral("Remote update"), gitTimeoutMs);
     controller.closeRepository();
     QVERIFY(!pull->isEnabled());
     QVERIFY(!sync->isEnabled());
@@ -760,20 +763,20 @@ class MainWindowTest final : public QObject {
     window.show();
     controller.start();
     controller.openRepository(local);
-    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository(), gitTimeoutMs);
     window.findChild<QTabWidget*>(QStringLiteral("contentTabs"))->setCurrentIndex(1);
     const auto vertical = window.findChild<QSplitter*>(QStringLiteral("historyDetailSplitter"));
     const auto horizontal = window.findChild<QSplitter*>(QStringLiteral("historySplitter"));
     QVERIFY(vertical && horizontal);
     QTRY_VERIFY(vertical->isVisible());
     const auto history = window.findChild<QListView*>(QStringLiteral("historyList"));
-    QTRY_VERIFY_WITH_TIMEOUT(history->model()->rowCount() > 0, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(history->model()->rowCount() > 0, gitTimeoutMs);
     history->setCurrentIndex(history->model()->index(0, 0));
     const auto files = window.findChild<QListView*>(QStringLiteral("commitFileList"));
-    QTRY_VERIFY_WITH_TIMEOUT(files->model()->rowCount() > 0, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(files->model()->rowCount() > 0, gitTimeoutMs);
     const auto diff = dynamic_cast<relay::DiffView*>(vertical->widget(1));
     QVERIFY(diff);
-    QTRY_VERIFY_WITH_TIMEOUT(diff->model()->rowCount() > 0, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(diff->model()->rowCount() > 0, gitTimeoutMs);
     QCoreApplication::processEvents();
     const int before = vertical->widget(1)->height();
     auto* handle = vertical->handle(1);
@@ -818,7 +821,7 @@ class MainWindowTest final : public QObject {
     controller.saveSshProfile({QStringLiteral("other"), QStringLiteral("Other host"),
         QStringLiteral("other.example.com"), QStringLiteral("git"), std::nullopt, {}, true});
     controller.openRepository(local);
-    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository(), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository(), gitTimeoutMs);
     const auto button = window.findChild<QToolButton*>(QStringLiteral("accountButton"));
     QTRY_VERIFY(window.findChild<QToolButton*>(QStringLiteral("syncButton"))->isEnabled());
     button->menu()->popup(button->mapToGlobal(QPoint(0, button->height())));
@@ -1220,12 +1223,12 @@ class MainWindowTest final : public QObject {
     controller.setPreferences({false, 12});
     window.show();
     controller.openRepository(root.path());
-    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository() != nullptr, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository() != nullptr, gitTimeoutMs);
     auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("contentTabs"));
     auto* history = window.findChild<QListView*>(QStringLiteral("historyList"));
     QVERIFY(tabs && history);
     tabs->setCurrentIndex(1);
-    QTRY_COMPARE_WITH_TIMEOUT(history->model()->rowCount(), 1, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(history->model()->rowCount(), 1, gitTimeoutMs);
     runGit(root.path(), {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("side")});
     QFile file(root.filePath(QStringLiteral("side.txt")));
     QVERIFY(file.open(QIODevice::WriteOnly));
@@ -1233,9 +1236,9 @@ class MainWindowTest final : public QObject {
     runGit(root.path(), {QStringLiteral("add"), QStringLiteral("side.txt")});
     runGit(root.path(), {QStringLiteral("commit"), QStringLiteral("-m"), QStringLiteral("Side change")});
     controller.refreshRepository();
-    QTRY_COMPARE_WITH_TIMEOUT(history->model()->rowCount(), 2, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(history->model()->rowCount(), 2, gitTimeoutMs);
     controller.switchBranch(QStringLiteral("main"));
-    QTRY_COMPARE_WITH_TIMEOUT(history->model()->rowCount(), 1, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(history->model()->rowCount(), 1, gitTimeoutMs);
     QCOMPARE(controller.currentRepository()->branch, QStringLiteral("main"));
     history->setCurrentIndex(history->model()->index(0, 0));
     auto* commitFiles = window.findChild<QListView*>(QStringLiteral("commitFileList"));
