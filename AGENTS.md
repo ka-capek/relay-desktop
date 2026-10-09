@@ -1152,8 +1152,9 @@ OAuth routing. Validate the profile host against the actual transport URL
 (including origin push URL); refuse mismatches before launching SSH. No tokens
 or key material enter widgets. UI integration tests cover remote changes pulled before a fetch,
 resizing a populated diff, persisted SSH selection and host mismatch rejection.
-The Windows main-window suite has a 180-second CTest limit because its real
-Git fixtures exceed the default 60 seconds on CI; individual waits stay bounded.
+The Windows main-window suite has a 300-second CTest limit because its real
+Git fixtures exceed the default 60 seconds on CI (180 seconds stopped being
+enough with the 0.5.4 cases in run 37954523555); individual waits stay bounded.
 
 ### Native multi-host and branch work (2026-09-25)
 

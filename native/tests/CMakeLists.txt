@@ -21,7 +21,9 @@ if(WIN32)
   # The UI suite also creates real Git repositories. With the toolbar pull,
   # resize and SSH-binding fixtures, Windows process startup can exceed the
   # workflow's 60-second default even while every individual test passes.
-  set_tests_properties(main_window PROPERTIES TIMEOUT 180)
+  # Run 37954523555 passed every 0.5.4 case, then hit 180 seconds three tests
+  # before the end; individual waits stay bounded.
+  set_tests_properties(main_window PROPERTIES TIMEOUT 300)
 endif()
 
 add_test(NAME app_smoke COMMAND $<TARGET_FILE:relay_native> --smoke-test)
