@@ -8,7 +8,14 @@
 #include <QList>
 #include <QString>
 
+#include <optional>
+
 namespace relay {
+
+struct GitHubRepositoryName {
+  QString owner;
+  QString name;
+};
 
 struct GitHubRepositoryPage {
   QList<GitHubRepository> repositories;
@@ -33,6 +40,15 @@ class GitHubApi final {
   static bool isValidEmail(const QString& email);
   static QList<EmailChoice> emailChoicesFromJson(const Account& account, const QJsonArray& emails);
   static QString resolveCommitEmail(const Account& account, const QString& requested);
+
+  // owner/name of a github.com HTTPS or SSH remote; nothing for any other host.
+  [[nodiscard]] static std::optional<GitHubRepositoryName> repositoryFromRemote(const QString& remote);
+  // GitHub's page for opening a pull request from branch to the default branch.
+  [[nodiscard]] static QString pullRequestCreationUrl(const GitHubRepositoryName& repository, const QString& branch);
+  // The open pull request whose head is owner:branch, or an empty string.
+  [[nodiscard]] QString openPullRequestUrl(const QString& token, const QString& handle,
+                                           const GitHubRepositoryName& repository, const QString& branch) const;
+  [[nodiscard]] static QString pullRequestUrlFromJson(const QJsonDocument& body, const GitHubRepositoryName& repository);
 
  private:
   struct Response {

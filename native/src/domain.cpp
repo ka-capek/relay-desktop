@@ -199,6 +199,8 @@ AppState appStateFromJson(const QJsonObject& object) {
   state.preferences.themeId = preferences.value(QStringLiteral("themeId")).toString(QStringLiteral("light"));
   state.preferences.customTheme = preferences.value(QStringLiteral("customTheme")).toObject();
   state.preferences.layout = preferences.value(QStringLiteral("layout")).toObject();
+  state.preferences.editorId = preferences.value(QStringLiteral("editorId")).toString();
+  state.preferences.editorPath = preferences.value(QStringLiteral("editorPath")).toString();
   return state;
 }
 
@@ -241,6 +243,8 @@ QJsonObject mergeAppStateIntoJson(const AppState& state, QJsonObject base) {
   preferences.insert(QStringLiteral("themeId"), state.preferences.themeId);
   preferences.insert(QStringLiteral("customTheme"), state.preferences.customTheme);
   preferences.insert(QStringLiteral("layout"), state.preferences.layout);
+  preferences.insert(QStringLiteral("editorId"), state.preferences.editorId);
+  preferences.insert(QStringLiteral("editorPath"), state.preferences.editorPath);
   base.insert(QStringLiteral("preferences"), preferences);
   return base;
 }

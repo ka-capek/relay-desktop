@@ -309,6 +309,48 @@ class GitWorkflowsTest final : public QObject {
     QCOMPARE(git(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), head);
   }
 
+  void rebasesPublishedCommitsOnlyWhenConfirmed() {
+    QTemporaryDir dir;
+    const auto root = dir.path();
+    const auto server = root + QStringLiteral("/server.git");
+    const auto work = root + QStringLiteral("/work");
+    QVERIFY(QDir().mkpath(work));
+    init(work);
+    git(root, {QStringLiteral("init"), QStringLiteral("--bare"), QStringLiteral("-b"), QStringLiteral("main"), server});
+    git(work, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"), server});
+    git(work, {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("feature")});
+    write(work, QStringLiteral("feature.txt"), "feature\n");
+    commit(work, QStringLiteral("published feature"));
+    git(work, {QStringLiteral("push"), QStringLiteral("-u"), QStringLiteral("origin"), QStringLiteral("main"), QStringLiteral("feature")});
+    write(work, QStringLiteral("local.txt"), "local\n");
+    commit(work, QStringLiteral("local feature"));
+    git(work, {QStringLiteral("switch"), QStringLiteral("main")});
+    write(work, QStringLiteral("main.txt"), "main\n");
+    commit(work, QStringLiteral("main moved"));
+    git(work, {QStringLiteral("switch"), QStringLiteral("feature")});
+
+    relay::GitService service;
+    const auto plan = service.planRebase(work, QStringLiteral("main"));
+    QCOMPARE(plan.onto, QStringLiteral("refs/heads/main"));
+    QCOMPARE(plan.replayed, 2);
+    QCOMPARE(plan.published, 1);
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, static_cast<void>(service.planRebase(work, QStringLiteral("--all"))));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, static_cast<void>(service.planRebase(work, QStringLiteral("missing"))));
+    const auto before = git(work, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")});
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.performAction(work, RepositoryAction::rebaseBranch, plan.onto, {}, identity));
+    QCOMPARE(git(work, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), before);
+
+    service.performAction(work, RepositoryAction::rebasePublished, plan.onto, {}, identity);
+    QCOMPARE(git(work, {QStringLiteral("log"), QStringLiteral("--format=%s"), QStringLiteral("-3")}),
+             QStringLiteral("local feature\npublished feature\nmain moved"));
+    const auto state = service.readRepository(work);
+    QCOMPARE(state.ahead, 3);
+    QCOMPARE(state.behind, 1);
+    // The usual follow-up: a force push over exactly the fetched origin tip.
+    service.pushOrigin(work, {}, {}, {}, git(work, {QStringLiteral("rev-parse"), QStringLiteral("refs/remotes/origin/feature")}));
+    QCOMPARE(git(server, {QStringLiteral("rev-parse"), QStringLiteral("feature")}), git(work, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}));
+  }
+
   void recreatedMergeConflictUsesTheRebaseSequencer() {
     QTemporaryDir dir; const auto root = dir.path(); divergent(root);
     relay::GitService service;
@@ -448,6 +490,81 @@ class GitWorkflowsTest final : public QObject {
     QCOMPARE(controller.currentRepository()->conflictedFiles.size(), 1);
     controller.executeRepositoryAction(RepositoryAction::abortOperation);
     QTRY_VERIFY(controller.currentRepository()->pendingOperation.isEmpty());
+  }
+
+  void rewritesUnpublishedCommitsOnly() {
+    QTemporaryDir directory;
+    const auto root = directory.path();
+    init(root);
+    git(root, {QStringLiteral("update-ref"), QStringLiteral("refs/remotes/origin/main"), QStringLiteral("HEAD")});
+    for (const auto& name : {QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C"), QStringLiteral("D")}) {
+      write(root, name + QStringLiteral(".txt"), name.toUtf8());
+      commit(root, name);
+    }
+    const relay::GitService service;
+    const auto commits = service.readUnpublishedCommits(root);
+    QCOMPARE(commits.size(), 4);
+    QCOMPARE(commits.first().message, QStringLiteral("D"));
+    const auto hash = [&commits](const QString& message) {
+      for (const auto& commit : commits) if (commit.message == message) return commit.fullHash;
+      return QString{};
+    };
+    const auto published = git(root, {QStringLiteral("rev-parse"), QStringLiteral("refs/remotes/origin/main")});
+    const QList<relay::CommitRewriteStep> plan{{hash(QStringLiteral("A")), false, QStringLiteral("A renamed, it's \"quoted\"")},
+        {hash(QStringLiteral("C")), false, QStringLiteral("C and B\n\nBody")}, {hash(QStringLiteral("B")), true, {}},
+        {hash(QStringLiteral("D")), false, {}}};
+
+    // Every unpublished commit exactly once, nothing published, and a message for squashes.
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.rewriteUnpublishedCommits(root, plan.mid(1), identity));
+    auto withPublished = plan;
+    withPublished[3].hash = published;
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.rewriteUnpublishedCommits(root, withPublished, identity));
+    auto firstSquash = plan;
+    firstSquash[0].squash = true;
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.rewriteUnpublishedCommits(root, firstSquash, identity));
+    auto noMessage = plan;
+    noMessage[1].message.clear();
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.rewriteUnpublishedCommits(root, noMessage, identity));
+    write(root, QStringLiteral("dirty.txt"), "dirty");
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.rewriteUnpublishedCommits(root, plan, identity));
+    QFile::remove(root + QStringLiteral("/dirty.txt"));
+    QCOMPARE(service.readUnpublishedCommits(root).first().fullHash, commits.first().fullHash);
+
+    service.rewriteUnpublishedCommits(root, plan, identity);
+    QCOMPARE(git(root, {QStringLiteral("log"), QStringLiteral("--format=%s"), QStringLiteral("HEAD")}),
+             QStringLiteral("D\nC and B\nA renamed, it's \"quoted\"\ninitial"));
+    QCOMPARE(git(root, {QStringLiteral("log"), QStringLiteral("-1"), QStringLiteral("--format=%b"), QStringLiteral("HEAD~1")}), QStringLiteral("Body"));
+    QCOMPARE(git(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD~3")}), published);
+    QCOMPARE(read(root, QStringLiteral("B.txt")), QByteArray("B"));
+    QVERIFY(git(root, {QStringLiteral("status"), QStringLiteral("--porcelain")}).isEmpty());
+    QVERIFY(!QFileInfo::exists(root + QStringLiteral("/.git/relay-rewrite")));
+  }
+
+  void rewritesFromTheRootAndAbortsAConflictingOrder() {
+    QTemporaryDir directory;
+    const auto root = directory.path();
+    init(root);
+    write(root, QStringLiteral("file.txt"), "one\n");
+    commit(root, QStringLiteral("one"));
+    write(root, QStringLiteral("file.txt"), "two\n");
+    commit(root, QStringLiteral("two"));
+    const relay::GitService service;
+    const auto commits = service.readUnpublishedCommits(root);
+    QCOMPARE(commits.size(), 3);
+    const auto original = commits.first().fullHash;
+
+    // Swapping two edits of the same line conflicts; abort restores everything.
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.rewriteUnpublishedCommits(root,
+        {{commits.at(2).fullHash, false, {}}, {commits.at(0).fullHash, false, {}}, {commits.at(1).fullHash, false, {}}}, identity));
+    QCOMPARE(service.readRepository(root).pendingOperation, QStringLiteral("rebase"));
+    service.performAction(root, RepositoryAction::abortOperation, {}, {}, identity);
+    QCOMPARE(git(root, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}), original);
+    QVERIFY(!QFileInfo::exists(root + QStringLiteral("/.git/relay-rewrite")));
+
+    service.rewriteUnpublishedCommits(root, {{commits.at(2).fullHash, false, QStringLiteral("everything")},
+        {commits.at(1).fullHash, true, {}}, {commits.at(0).fullHash, true, {}}}, identity);
+    QCOMPARE(git(root, {QStringLiteral("log"), QStringLiteral("--format=%s")}), QStringLiteral("everything"));
+    QCOMPARE(read(root, QStringLiteral("file.txt")), QByteArray("two\n"));
   }
 };
 QTEST_GUILESS_MAIN(GitWorkflowsTest)

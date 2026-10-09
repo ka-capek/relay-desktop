@@ -4,7 +4,9 @@
 #include <algorithm>
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QSet>
 #include <QRegularExpression>
 #include <QUuid>
 #include <QUrl>
@@ -100,6 +102,118 @@ void GitService::setOriginRemote(const QString& root, const QString& remote, con
       QStringLiteral("origin"), remote}));
 }
 
+namespace {
+QString posixQuoted(QString value) {
+  return u'\'' + value.replace(QStringLiteral("'"), QStringLiteral("'\\''")) + u'\'';
+}
+}  // namespace
+
+QString GitService::branchRef(const QString& root, const QString& target) const {
+  const auto ref = target.startsWith(QStringLiteral("refs/remotes/")) || target.startsWith(QStringLiteral("refs/heads/"))
+      ? target : QStringLiteral("refs/heads/") + target;
+  if (target.isEmpty() || target.startsWith(u'-') ||
+      runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
+                           ref + QStringLiteral("^{commit}")}).isEmpty())
+    throw ProcessError(QStringLiteral("Choose an existing local or remote branch."));
+  return ref;
+}
+
+RebasePlan GitService::planRebase(const QString& root, const QString& onto) const {
+  const auto ref = branchRef(root, onto);
+  const auto count = [this, &root](QStringList arguments) {
+    arguments.prepend(QStringLiteral("--count"));
+    arguments.prepend(QStringLiteral("rev-list"));
+    return runGit(root, arguments).toInt();
+  };
+  const auto replayed = count({QStringLiteral("HEAD"), QStringLiteral("--not"), ref});
+  const auto unpublished = count({QStringLiteral("HEAD"), QStringLiteral("--not"), ref, QStringLiteral("--remotes")});
+  return {ref, replayed, replayed - unpublished};
+}
+
+QList<UnpublishedCommit> GitService::readUnpublishedCommits(const QString& root) const {
+  if (runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), QStringLiteral("--quiet"), QStringLiteral("HEAD")}).isEmpty())
+    return {};
+  const auto output = runGit(root, {QStringLiteral("log"), QStringLiteral("-z"), QStringLiteral("--max-count=101"),
+      QStringLiteral("--format=%H%x1f%h%x1f%P%x1f%B"), QStringLiteral("HEAD"), QStringLiteral("--not"),
+      QStringLiteral("--remotes"), QStringLiteral("--")}, {}, true);
+  QList<UnpublishedCommit> commits;
+  for (const auto& record : output.split(QChar{0}, Qt::SkipEmptyParts)) {
+    const auto fields = record.split(QChar{0x1f});
+    if (fields.size() < 4) continue;
+    commits.append({fields.at(0).trimmed(), fields.at(1), fields.mid(3).join(QChar{0x1f}).trimmed(),
+                    fields.at(2).split(u' ', Qt::SkipEmptyParts).size() > 1});
+  }
+  return commits;
+}
+
+void GitService::rewriteUnpublishedCommits(const QString& root, const QList<CommitRewriteStep>& steps,
+                                           const Account& account) const {
+  requireIdle(root, true);
+  const auto unpublished = readUnpublishedCommits(root);
+  if (unpublished.size() > 100) throw ProcessError(QStringLiteral("Relay rewrites at most 100 unpublished commits."));
+  if (unpublished.isEmpty()) throw ProcessError(QStringLiteral("There are no unpublished commits to rewrite."));
+  if (std::any_of(unpublished.cbegin(), unpublished.cend(), [](const UnpublishedCommit& commit) { return commit.merge; }))
+    throw ProcessError(QStringLiteral("Unpublished merge commits cannot be squashed or reordered here."));
+  // The plan must name every unpublished commit exactly once, so nothing is
+  // silently dropped and nothing published is rewritten.
+  QSet<QString> expected;
+  for (const auto& commit : unpublished) expected.insert(commit.fullHash);
+  QSet<QString> seen;
+  for (const auto& step : steps) seen.insert(step.hash);
+  if (steps.size() != unpublished.size() || seen != expected)
+    throw ProcessError(QStringLiteral("The unpublished commits changed. Refresh and try again."));
+  if (steps.first().squash) throw ProcessError(QStringLiteral("The oldest commit cannot be squashed into an earlier one."));
+
+  const auto rewriteDirectory = QDir(root).absoluteFilePath(runGit(root, {QStringLiteral("rev-parse"),
+      QStringLiteral("--git-path"), QStringLiteral("relay-rewrite")}));
+  QDir(rewriteDirectory).removeRecursively();
+  if (!QDir().mkpath(rewriteDirectory)) throw ProcessError(QStringLiteral("Relay could not prepare the rewrite."));
+  QStringList todo;
+  const auto finishGroup = [&](qsizetype start, qsizetype end) {
+    bool squashed = end - start > 1;
+    const auto& message = steps.at(start).message;
+    if (message.trimmed().isEmpty()) {
+      if (squashed) throw ProcessError(QStringLiteral("Enter a message for each squashed commit."));
+      return;
+    }
+    const auto file = QDir(rewriteDirectory).filePath(QStringLiteral("message-%1.txt").arg(start));
+    QFile output(file);
+    if (!output.open(QIODevice::WriteOnly | QIODevice::Truncate) || output.write(message.toUtf8()) < 0)
+      throw ProcessError(QStringLiteral("Relay could not prepare the rewrite."));
+    output.close();
+    todo.append(QStringLiteral("exec git commit --amend --only --allow-empty --cleanup=strip -F ") +
+                posixQuoted(QDir::fromNativeSeparators(file)));
+  };
+  qsizetype groupStart = 0;
+  for (qsizetype index = 0; index < steps.size(); ++index) {
+    if (index > 0 && !steps.at(index).squash) {
+      finishGroup(groupStart, index);
+      groupStart = index;
+    }
+    todo.append((steps.at(index).squash ? QStringLiteral("fixup ") : QStringLiteral("pick ")) + steps.at(index).hash);
+  }
+  finishGroup(groupStart, steps.size());
+  const auto todoFile = QDir(rewriteDirectory).filePath(QStringLiteral("todo"));
+  {
+    QFile output(todoFile);
+    if (!output.open(QIODevice::WriteOnly | QIODevice::Truncate) || output.write((todo.join(u'\n') + u'\n').toUtf8()) < 0)
+      throw ProcessError(QStringLiteral("Relay could not prepare the rewrite."));
+  }
+  auto environment = identityEnvironment(account);
+  addSigningConfiguration(environment, account);
+  // Git runs the sequence editor through its shell with the todo path appended.
+  environment.insert(QStringLiteral("GIT_SEQUENCE_EDITOR"), QStringLiteral("cp ") + posixQuoted(QDir::fromNativeSeparators(todoFile)));
+  const auto oldest = unpublished.last().fullHash;
+  const auto base = runGitOrEmpty(root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
+                                         oldest + QStringLiteral("^")});
+  QStringList arguments{QStringLiteral("-c"), QStringLiteral("rebase.updateRefs=false"), QStringLiteral("-c"),
+                        QStringLiteral("rebase.autoSquash=false"), QStringLiteral("rebase"), QStringLiteral("--interactive"),
+                        QStringLiteral("--empty=keep")};
+  arguments.append(base.isEmpty() ? QStringLiteral("--root") : base);
+  static_cast<void>(runGit(root, arguments, environment));
+  QDir(rewriteDirectory).removeRecursively();
+}
+
 void GitService::performAction(const QString& root, const RepositoryAction action,
                                const QString& target, const QStringList& paths,
                                const Account& account) const {
@@ -177,23 +291,19 @@ void GitService::performAction(const QString& root, const RepositoryAction actio
       break;
     }
     case RepositoryAction::mergeBranch:
-    case RepositoryAction::rebaseBranch: {
+    case RepositoryAction::rebaseBranch:
+    case RepositoryAction::rebasePublished: {
       requireIdle(root, true);
-      QString ref;
-      if (target.startsWith(QStringLiteral("refs/remotes/"))) {
-        execute({QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"), target});
-        ref = target;
-      } else ref = localRef(target);
       if (action == RepositoryAction::mergeBranch) {
-        execute({QStringLiteral("merge"), QStringLiteral("--no-edit"), ref}, environment);
-      } else {
-        const auto replayed = execute({QStringLiteral("rev-list"), QStringLiteral("--count"), QStringLiteral("HEAD"), QStringLiteral("--not"), ref});
-        const auto unpublished = execute({QStringLiteral("rev-list"), QStringLiteral("--count"), QStringLiteral("HEAD"),
-            QStringLiteral("--not"), ref, QStringLiteral("--remotes")});
-        if (replayed != unpublished)
-          throw ProcessError(QStringLiteral("This would rewrite a commit already on a remote branch. Merge the branch instead."));
-        execute({QStringLiteral("rebase"), QStringLiteral("--rebase-merges"), ref}, environment);
+        execute({QStringLiteral("merge"), QStringLiteral("--no-edit"), branchRef(root, target)}, environment);
+        break;
       }
+      const auto plan = planRebase(root, target);
+      // Rewriting published commits needs the explicit confirmation that
+      // comes with rebasePublished; a plain rebase never does it.
+      if (action == RepositoryAction::rebaseBranch && plan.published > 0)
+        throw ProcessError(QStringLiteral("This would rewrite a commit already on a remote branch. Merge the branch instead."));
+      execute({QStringLiteral("rebase"), QStringLiteral("--rebase-merges"), plan.onto}, environment);
       break;
     }
     case RepositoryAction::abortOperation:
@@ -209,6 +319,15 @@ void GitService::performAction(const QString& root, const RepositoryAction actio
         throw ProcessError(QStringLiteral("A merge cannot skip a commit. Continue or abort it."));
       execute({state.pendingOperation, action == RepositoryAction::abortOperation
           ? QStringLiteral("--abort") : (action == RepositoryAction::skipOperation ? QStringLiteral("--skip") : QStringLiteral("--continue"))}, environment);
+      // Message files of a commit rewrite are needed until its rebase ends.
+      if (state.pendingOperation == QStringLiteral("rebase")) {
+        Repository after;
+        after.path = root;
+        readOperationState(after);
+        if (after.pendingOperation.isEmpty())
+          QDir(QDir(root).absoluteFilePath(execute({QStringLiteral("rev-parse"), QStringLiteral("--git-path"),
+              QStringLiteral("relay-rewrite")}))).removeRecursively();
+      }
       break;
     }
     case RepositoryAction::resolveOurs:

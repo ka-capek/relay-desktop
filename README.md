@@ -10,7 +10,7 @@ accounts, repositories and settings carry over with no new sign-in.
 
 ## Download
 
-[**Relay 0.5.3**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.5.3)
+[**Relay 0.5.4**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.5.4)
 is a prerelease. The Windows setup includes Git for Windows and the GitHub CLI;
 the macOS DMG includes the GitHub CLI and uses the Git from the Xcode Command
 Line Tools or Homebrew. The installers are unsigned (macOS uses ad-hoc
@@ -132,7 +132,8 @@ HTTPS remotes continue to use the selected GitHub OAuth account.
 The current-branch picker lists local and fetched remote-tracking branches.
 Selecting a remote branch checks it out as a local tracking branch; remote
 branches that already have a local branch of the same name are not listed
-again. In History,
+again. A branch that so far exists only on origin appears after **Fetch all
+branches from origin**, the last item of the picker. In History,
 use the branch selector to browse a local branch, a remote branch, or all
 branches together without changing the working tree. **Check out branch** is
 an explicit action; **New branch from here** starts a branch at the selected
@@ -142,13 +143,52 @@ not change that configuration or prune old remote-tracking refs. Branches
 already fetched from other remotes are also visible.
 
 Repository actions include branch creation/rename/local deletion, merge,
-unpublished rebase, revert, stash/apply/drop, tags, recoverable discard, undo,
+rebase, revert, stash/apply/drop, tags, recoverable discard, undo,
 amend and conflict resolution with continue/skip/abort. Select multiple history
 rows with Ctrl/Cmd or Shift, then **Repository → Cherry-pick selected commits…**.
 The confirmation shows the destination and applies the selected commits from
 oldest to newest in displayed history order (up to 200). A conflicting series
 can be continued, skipped, or aborted as one operation. Merge commits use their
-first-parent changes. Force push and deleting remote branches remain CLI tasks.
+first-parent changes.
+
+Add co-authors under the commit description as `Name <email>`, separated by
+commas, or pick a recent author of the repository with **Recent**. Relay adds
+them as `Co-authored-by` trailers, which GitHub shows on the commit.
+
+**Repository → Push tag to origin…** publishes a local tag; a different tag
+with the same name on origin is never replaced. **Delete tag on origin…** lists
+origin's tags and removes the chosen one, leaving local tags as they are.
+
+**Repository → Open in editor / Open in Terminal / Show in Finder** (Explorer on
+Windows) open the repository folder in another application. Choose the editor
+in Settings → General; Relay detects Visual Studio Code, Cursor, Zed, Sublime
+Text, JetBrains IDEs and others, or any application you pick.
+
+**Repository → Compare branches…** shows the commits only on each of two local
+or remote branches and the files the compared branch changed since it branched
+off, with diffs. When the base is the current branch it can merge the other
+branch in.
+
+**Repository → Squash and reorder commits…** lists the commits that are not on
+any remote yet. Drag them into a new order, check a commit to squash it into
+the one below, and edit messages; Relay then rewrites them with an interactive
+rebase. Published commits are never offered, and a conflict can be continued,
+skipped or aborted like any rebase.
+
+**Repository → Create or open pull request** opens the current branch's open
+pull request on GitHub.com, or GitHub's page for creating one. Unpushed commits
+can be pushed first.
+
+**Repository → Delete branch on origin…** removes a fetched branch from origin.
+The confirmation shows its last commit so it can be restored, local branches
+are kept, origin's default branch is refused, and Relay refuses the deletion if
+someone pushed to the branch after your last fetch.
+
+**Force push origin…** (Repository menu and the sync button's menu) replaces
+origin's copy of the current branch, for example after amending or rebasing
+commits that were already pushed. The confirmation shows the origin commit from
+your last fetch, and the push is refused if origin has moved since, so work
+someone else pushed in the meantime is never overwritten unseen.
 
 ## Gitea, Forgejo and GitLab accounts
 
@@ -261,7 +301,7 @@ identity. History defaults to a normal commit list; Settings can switch to an
 all-branch graph. Both modes share commit details and text/image previews.
 
 Repository menus provide branch creation/rename/deletion, remote checkout,
-merge, unpublished-commit rebase, stash/restore, recoverable selected-file
+merge, rebase, stash/restore, recoverable selected-file
 discard, revert/cherry-pick, latest-commit undo/message editing and local tags.
 A conflict dialog handles resolution, continue, abort and skip. New repositories
 can be initialized locally or published through an explicit GitHub dialog.
@@ -306,7 +346,10 @@ in the sidebar as recent shortcuts until the user chooses one.
 - Pane widths and the window size are remembered; **View → Reset Layout**
   restores the defaults.
 - When a pull finds that both your branch and origin have new commits, Relay
-  asks whether to merge or to rebase your unpublished commits.
+  asks whether to merge or to rebase your commits.
+- **Repository → Rebase current branch…** warns when the rebase would rewrite
+  commits already on a remote branch, suggests merging instead, and after a
+  confirmed rewrite offers the protected force push.
 - Each account can sign its commits with its own SSH key (account menu →
   **Commit signing**). Commit details show when a commit is signed.
 

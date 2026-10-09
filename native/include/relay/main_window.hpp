@@ -110,6 +110,8 @@ class MainWindow final : public QMainWindow {
   QCheckBox* selectAllFiles_{};
   QLineEdit* commitSummary_{};
   QPlainTextEdit* commitDescription_{};
+  QLineEdit* commitCoAuthors_{};
+  QToolButton* coAuthorButton_{};
   QLabel* commitIdentity_{};
   QPushButton* commitButton_{};
   QLineEdit* historySearch_{};
@@ -134,6 +136,19 @@ class MainWindow final : public QMainWindow {
   QAction* forceRefreshAction_{};
   QAction* createBranchAction_{};
   QAction* pullAction_{};
+  QAction* forcePushAction_{};
+  QString pullRequestAfterPush_;
+  QString forcePushOfferPath_;
+  QString preconfirmedRebase_;  // chosen in the diverged-pull dialog
+  QList<QPair<QString, QString>> editors_;
+  QAction* openEditorAction_{};
+  void updateEditorAction();
+  class CompareDialog* compareDialog_{};
+  void confirmForcePush();
+  void confirmDeleteOriginBranch();
+  void requestPullRequest();
+  void showCompareDialog();
+  [[nodiscard]] bool canForcePush() const;
 
   AppState appState_;
   std::optional<Repository> repository_;

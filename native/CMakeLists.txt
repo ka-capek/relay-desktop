@@ -14,6 +14,8 @@ set(RELAY_NATIVE_SOURCES
   include/relay/diff_model.hpp
   include/relay/diff_view.hpp
   include/relay/dialogs.hpp
+  include/relay/compare_dialog.hpp
+  include/relay/external_apps.hpp
   include/relay/process_runner.hpp
   include/relay/relay_controller.hpp
   include/relay/relay_store.hpp
@@ -35,6 +37,8 @@ set(RELAY_NATIVE_SOURCES
   src/diff_model.cpp
   src/diff_view.cpp
   src/dialogs.cpp
+  src/compare_dialog.cpp
+  src/external_apps.cpp
   src/github_api.cpp
   src/github_auth.cpp
   src/git_workflows.cpp

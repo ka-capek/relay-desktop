@@ -4,9 +4,11 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QSpinBox>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QTabWidget>
@@ -315,6 +317,77 @@ class DialogsTest final : public QObject {
     port->setText(QStringLiteral("65535"));
     QVERIFY(dialog.isProfileValid());
     QVERIFY(save->isEnabled());
+  }
+
+  void commitRewriteDialogBuildsOldestFirstPlans() {
+    // Newest first, as History and readUnpublishedCommits() list them.
+    relay::CommitRewriteDialog dialog({{QStringLiteral("c3"), QStringLiteral("c3"), QStringLiteral("Third")},
+                                       {QStringLiteral("c2"), QStringLiteral("c2"), QStringLiteral("Second\n\nBody")},
+                                       {QStringLiteral("c1"), QStringLiteral("c1"), QStringLiteral("First")}});
+    auto* list = dialog.findChild<QListWidget*>(QStringLiteral("rewriteList"));
+    auto* message = dialog.findChild<QPlainTextEdit*>(QStringLiteral("rewriteMessage"));
+    auto* accept = dialog.findChild<QPushButton*>(QStringLiteral("rewriteAccept"));
+    QVERIFY(list && message && accept);
+    QVERIFY(!accept->isEnabled());
+    QVERIFY(!(list->item(2)->flags() & Qt::ItemIsUserCheckable));
+
+    // Squash Third into Second: one group with a combined default message.
+    list->item(0)->setCheckState(Qt::Checked);
+    list->setCurrentRow(0);
+    QCOMPARE(message->toPlainText(), QStringLiteral("Second\n\nBody\n\nThird"));
+    QVERIFY(accept->isEnabled());
+    auto steps = dialog.steps();
+    QCOMPARE(steps.size(), 3);
+    QCOMPARE(steps.at(0).hash, QStringLiteral("c1"));
+    QVERIFY(steps.at(0).message.isEmpty());
+    QCOMPARE(steps.at(1).hash, QStringLiteral("c2"));
+    QCOMPARE(steps.at(1).message, QStringLiteral("Second\n\nBody\n\nThird"));
+    QCOMPARE(steps.at(2).hash, QStringLiteral("c3"));
+    QVERIFY(steps.at(2).squash);
+
+    message->setPlainText(QStringLiteral("Combined"));
+    QCOMPARE(dialog.steps().at(1).message, QStringLiteral("Combined"));
+
+    // Moving the squashed commit to the bottom leaves it unsquashed.
+    list->setCurrentRow(0);
+    dialog.moveSelected(1);
+    dialog.moveSelected(1);
+    QCOMPARE(list->item(2)->data(Qt::UserRole).toString(), QStringLiteral("c3"));
+    steps = dialog.steps();
+    QCOMPARE(steps.at(0).hash, QStringLiteral("c3"));
+    QVERIFY(!steps.at(0).squash);
+    QVERIFY(std::none_of(steps.cbegin(), steps.cend(), [](const relay::CommitRewriteStep& step) { return step.squash; }));
+    // Second keeps the message edited for it, as a reword.
+    QCOMPARE(steps.at(2).hash, QStringLiteral("c2"));
+    QCOMPARE(steps.at(2).message, QStringLiteral("Combined"));
+  }
+
+  void settingsKeepsEditorChoiceAndUnrelatedPreferences() {
+    relay::Preferences stored;
+    stored.editorId = QStringLiteral("zed");
+    stored.layout = QJsonObject{{QStringLiteral("window"), QStringLiteral("kept")}};
+    relay::SettingsDialog dialog(stored);
+    dialog.setEditors({{QStringLiteral("vscode"), QStringLiteral("Visual Studio Code")}, {QStringLiteral("zed"), QStringLiteral("Zed")}});
+    auto* editor = dialog.findChild<QComboBox*>(QStringLiteral("externalEditor"));
+    auto* path = dialog.findChild<QLineEdit*>(QStringLiteral("externalEditorPath"));
+    QVERIFY(editor && path);
+    QCOMPARE(editor->currentText(), QStringLiteral("Zed"));
+    QVERIFY(!path->isEnabled());
+    QCOMPARE(dialog.preferences().layout, stored.layout);
+    editor->setCurrentIndex(editor->findData(QStringLiteral("custom")));
+    QVERIFY(path->isEnabled());
+    path->setText(QStringLiteral("/Applications/Editor.app"));
+    QCOMPARE(dialog.preferences().editorId, QStringLiteral("custom"));
+    QCOMPARE(dialog.preferences().editorPath, QStringLiteral("/Applications/Editor.app"));
+    editor->setCurrentIndex(0);
+    QVERIFY(dialog.preferences().editorId.isEmpty());
+    QVERIFY(dialog.preferences().editorPath.isEmpty());
+
+    // A remembered editor that is no longer installed stays selected.
+    stored.editorId = QStringLiteral("nova");
+    relay::SettingsDialog missing(stored);
+    missing.setEditors({});
+    QCOMPARE(missing.preferences().editorId, QStringLiteral("nova"));
   }
 };
 

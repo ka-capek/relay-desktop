@@ -70,6 +70,46 @@ GitHubApi::Response GitHubApi::get(const QUrl& url, const QString& token, const 
   return {status, document, link};
 }
 
+std::optional<GitHubRepositoryName> GitHubApi::repositoryFromRemote(const QString& remote) {
+  // Anchored on the whole host so a look-alike such as notgithub.com never
+  // passes, and limited to the characters GitHub allows in owner/name.
+  static const QRegularExpression pattern(
+      QStringLiteral(R"(^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([A-Za-z0-9-]{1,39})/([A-Za-z0-9._-]{1,100}?)(?:\.git)?/?$)"),
+      QRegularExpression::CaseInsensitiveOption);
+  const auto match = pattern.match(remote.trimmed());
+  if (!match.hasMatch() || match.captured(2) == QStringLiteral(".") || match.captured(2) == QStringLiteral("..")) return std::nullopt;
+  return GitHubRepositoryName{match.captured(1), match.captured(2)};
+}
+
+QString GitHubApi::pullRequestCreationUrl(const GitHubRepositoryName& repository, const QString& branch) {
+  return QStringLiteral("https://github.com/%1/%2/compare/%3?expand=1")
+      .arg(repository.owner, repository.name, QString::fromLatin1(QUrl::toPercentEncoding(branch, QByteArrayLiteral("/"))));
+}
+
+QString GitHubApi::pullRequestUrlFromJson(const QJsonDocument& body, const GitHubRepositoryName& repository) {
+  if (!body.isArray() || body.array().isEmpty()) return {};
+  const auto url = body.array().first().toObject().value(QStringLiteral("html_url")).toString();
+  // Only a link to this repository's pull request is opened in the browser.
+  static const QRegularExpression number(QStringLiteral(R"(^[1-9][0-9]{0,9}$)"));
+  const auto prefix = QStringLiteral("https://github.com/%1/%2/pull/").arg(repository.owner, repository.name);
+  if (!url.startsWith(prefix, Qt::CaseInsensitive) || !number.match(url.mid(prefix.size())).hasMatch()) return {};
+  return url;
+}
+
+QString GitHubApi::openPullRequestUrl(const QString& token, const QString& handle,
+                                      const GitHubRepositoryName& repository, const QString& branch) const {
+  QUrl url(QStringLiteral("https://api.github.com/repos/%1/%2/pulls").arg(repository.owner, repository.name));
+  // Encoded here so a branch name containing & or # stays one query value.
+  url.setQuery(QStringLiteral("state=open&per_page=1&head=") +
+                   QString::fromLatin1(QUrl::toPercentEncoding(repository.owner + u':' + branch)),
+               QUrl::StrictMode);
+  const auto response = get(url, token);
+  if (response.status == 401) throw std::runtime_error(QStringLiteral("GitHub credentials for @%1 expired. Sign in again.").arg(handle).toStdString());
+  if (response.status == 404) throw std::runtime_error(QStringLiteral("@%1 cannot see %2/%3 on GitHub.").arg(handle, repository.owner, repository.name).toStdString());
+  if (response.status < 200 || response.status >= 300) throw std::runtime_error(QStringLiteral("GitHub could not list pull requests (%1).").arg(response.status).toStdString());
+  return pullRequestUrlFromJson(response.body, repository);
+}
+
 QJsonObject GitHubApi::profile(const QString& token, const QString& handle) const {
   const auto response = get(QUrl(QStringLiteral("https://api.github.com/user")), token);
   if (response.status < 200 || response.status >= 300 || !response.body.isObject()) {

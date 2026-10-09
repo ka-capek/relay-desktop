@@ -1,4 +1,5 @@
 #include "relay/main_window.hpp"
+#include "relay/compare_dialog.hpp"
 
 #include "relay/diff_view.hpp"
 #include "relay/dialogs.hpp"
@@ -46,12 +47,25 @@
 #include <QTabWidget>
 #include <QToolButton>
 #include <QTimer>
+#include <utility>
 #include <QVBoxLayout>
 
 #include <algorithm>
 
 namespace relay {
 namespace {
+// Branch picker data for the action that fetches every origin branch; not a ref.
+constexpr char fetchOriginBranchesItem[] = "relay:fetch-origin-branches";
+
+// The commit origin/<branch> pointed at in the last repository read, or empty.
+QString originTrackingTip(const Repository& repository, const QString& branch) {
+  const auto prefix = QStringLiteral("refs/remotes/origin/%1 ").arg(branch);
+  for (const auto& line : repository.historyRefState.split(u'\n', Qt::SkipEmptyParts))
+    if (line.startsWith(prefix)) return line.mid(prefix.size()).trimmed();
+  return {};
+}
+
+QString originTrackingTip(const Repository& repository) { return originTrackingTip(repository, repository.branch); }
 
 const Account* accountNamed(const AppState& state, const QString& id) {
   const auto iterator = std::find_if(state.accounts.cbegin(), state.accounts.cend(),
@@ -233,12 +247,16 @@ void MainWindow::buildMenus() {
     controller_->pullOrigin(currentAccountId());
   });
   pullAction_->setObjectName(QStringLiteral("pullAction"));
+  forcePushAction_ = repositoryMenu->addAction(tr("Force push origin…"), this, &MainWindow::confirmForcePush);
+  forcePushAction_->setObjectName(QStringLiteral("forcePushAction"));
   connect(repositoryMenu, &QMenu::aboutToShow, this, [this] {
     createBranchAction_->setEnabled(repository_.has_value() && busyOperations_.isEmpty());
     pullAction_->setEnabled(repository_ && repository_->hasUpstream && busyOperations_.isEmpty());
+    forcePushAction_->setEnabled(canForcePush());
   });
   createBranchAction_->setEnabled(false);
   pullAction_->setEnabled(false);
+  forcePushAction_->setEnabled(false);
 
   buildWorkflowMenus(file, repositoryMenu);
 
@@ -307,11 +325,13 @@ void MainWindow::buildShell() {
   auto* push = syncMenu->addAction(tr("Push origin"), this, [this] {
     if (repository_) controller_->pushOrigin(currentAccountId());
   });
+  syncMenu->addAction(forcePushAction_);
   connect(syncMenu, &QMenu::aboutToShow, this, [this, fetch, push] {
     const bool remoteReady = repository_ && !repository_->remote.isEmpty() && busyOperations_.isEmpty();
     fetch->setEnabled(remoteReady);
     push->setEnabled(remoteReady);
     pullAction_->setEnabled(remoteReady && repository_->hasUpstream);
+    forcePushAction_->setEnabled(canForcePush());
   });
   syncButton_->setMenu(syncMenu);
   syncButton_->setEnabled(false);
@@ -393,7 +413,9 @@ void MainWindow::buildShell() {
     if (!repository_ || index < 0) return;
     const auto ref = branchPicker_->itemData(index).toString();
     { const QSignalBlocker blocker(branchPicker_); branchPicker_->setCurrentIndex(branchPicker_->findData(QStringLiteral("refs/heads/") + repository_->branch)); }
-    if (ref.startsWith(QStringLiteral("refs/remotes/")))
+    if (ref == QLatin1StringView(fetchOriginBranchesItem))
+      controller_->fetchOrigin(currentAccountId(), true);
+    else if (ref.startsWith(QStringLiteral("refs/remotes/")))
       controller_->executeRepositoryAction(RepositoryAction::checkoutRemote, ref.mid(13));
     else if (ref.startsWith(QStringLiteral("refs/heads/")) && ref.mid(11) != repository_->branch)
       controller_->switchBranch(ref.mid(11));
@@ -574,18 +596,52 @@ QWidget* MainWindow::buildChangesPage(QWidget* parent) {
   commitIdentity_->setProperty("role", QStringLiteral("meta"));
   commitIdentity_->setWordWrap(true);
   commitSummary_ = new QLineEdit(commitBox);
+  commitSummary_->setObjectName(QStringLiteral("commitSummary"));
   commitSummary_->setPlaceholderText(tr("Summary (required)"));
   commitSummary_->setAccessibleName(tr("Commit summary"));
   commitDescription_ = new QPlainTextEdit(commitBox);
   commitDescription_->setPlaceholderText(tr("Description"));
   commitDescription_->setAccessibleName(tr("Commit description"));
   commitDescription_->setMaximumHeight(78);
+  commitCoAuthors_ = new QLineEdit(commitBox);
+  commitCoAuthors_->setObjectName(QStringLiteral("commitCoAuthors"));
+  commitCoAuthors_->setPlaceholderText(tr("Co-authors: Name <email>, …"));
+  commitCoAuthors_->setAccessibleName(tr("Commit co-authors"));
+  coAuthorButton_ = new QToolButton(commitBox);
+  coAuthorButton_->setObjectName(QStringLiteral("coAuthorButton"));
+  coAuthorButton_->setText(tr("Recent"));
+  coAuthorButton_->setToolTip(tr("Add a recent author of this repository as a co-author"));
+  coAuthorButton_->setAccessibleName(tr("Add a recent co-author"));
+  coAuthorButton_->setPopupMode(QToolButton::InstantPopup);
+  auto* coAuthorMenu = new QMenu(coAuthorButton_);
+  coAuthorButton_->setMenu(coAuthorMenu);
+  connect(coAuthorMenu, &QMenu::aboutToShow, this, [this, coAuthorMenu] {
+    coAuthorMenu->clear();
+    QStringList seen;
+    for (const auto& item : repository_ ? repository_->history : QList<HistoryItem>{}) {
+      const auto entry = QStringLiteral("%1 <%2>").arg(item.author, item.email);
+      if (item.email.isEmpty() || seen.contains(item.email, Qt::CaseInsensitive) || commitCoAuthors_->text().contains(item.email, Qt::CaseInsensitive)) continue;
+      seen.append(item.email);
+      coAuthorMenu->addAction(entry, this, [this, entry] {
+        const auto current = commitCoAuthors_->text().trimmed();
+        commitCoAuthors_->setText(current.isEmpty() ? entry : current + QStringLiteral(", ") + entry);
+      });
+      if (seen.size() == 15) break;
+    }
+    if (coAuthorMenu->isEmpty()) coAuthorMenu->addAction(tr("No other recent authors"))->setEnabled(false);
+  });
+  auto* coAuthorRow = new QHBoxLayout;
+  coAuthorRow->setSpacing(6);
+  coAuthorRow->addWidget(commitCoAuthors_, 1);
+  coAuthorRow->addWidget(coAuthorButton_);
   commitButton_ = new QPushButton(tr("Commit selected files"), commitBox);
+  commitButton_->setObjectName(QStringLiteral("commitButton"));
   commitButton_->setProperty("kind", QStringLiteral("primary"));
   commitButton_->setEnabled(false);
   commitLayout->addWidget(commitIdentity_);
   commitLayout->addWidget(commitSummary_);
   commitLayout->addWidget(commitDescription_);
+  commitLayout->addLayout(coAuthorRow);
   commitLayout->addWidget(commitButton_);
   leftLayout->addWidget(commitBox);
 
@@ -621,7 +677,7 @@ QWidget* MainWindow::buildChangesPage(QWidget* parent) {
   connect(commitSummary_, &QLineEdit::textChanged, this, &MainWindow::updateCommitAction);
   connect(commitButton_, &QPushButton::clicked, this, [this] {
     controller_->commit(changedFileModel_->checkedPaths(), commitSummary_->text(),
-                        commitDescription_->toPlainText(), currentAccountId());
+                        commitDescription_->toPlainText(), currentAccountId(), commitCoAuthors_->text());
   });
   return splitter;
 }
@@ -826,13 +882,101 @@ void MainWindow::connectController() {
     box.setDefaultButton(merge);
     box.exec();
     if (box.clickedButton() == merge) controller_->executeRepositoryAction(RepositoryAction::mergeBranch, upstream);
-    else if (box.clickedButton() == rebase) controller_->executeRepositoryAction(RepositoryAction::rebaseBranch, upstream);
+    else if (box.clickedButton() == rebase) {
+      preconfirmedRebase_ = upstream;
+      controller_->planRebase(upstream);
+    }
+  });
+  connect(controller_, &RelayController::rebasePlanReady, this, [this](const QString& path, const RebasePlan& plan) {
+    if (!repository_ || repository_->path != path) return;
+    const auto onto = plan.onto.section(u'/', 2);
+    const bool preconfirmed = std::exchange(preconfirmedRebase_, QString{}) == plan.onto;
+    if (plan.replayed == 0) { showNotice(tr("%1 already contains every commit of %2; there is nothing to rebase.").arg(onto, repository_->branch)); return; }
+    if (plan.published == 0 && preconfirmed) {
+      controller_->executeRepositoryAction(RepositoryAction::rebaseBranch, plan.onto);
+      return;
+    }
+    if (plan.published == 0) {
+      QMessageBox box(QMessageBox::Question, tr("Rebase current branch"),
+          tr("Replay %n commit(s) of %1 on top of %2?", nullptr, plan.replayed).arg(repository_->branch, onto),
+          QMessageBox::Ok | QMessageBox::Cancel, this);
+      box.setObjectName(QStringLiteral("rebaseDialog"));
+      box.setDefaultButton(QMessageBox::Cancel);
+      if (box.exec() == QMessageBox::Ok) controller_->executeRepositoryAction(RepositoryAction::rebaseBranch, plan.onto);
+      return;
+    }
+    QMessageBox box(QMessageBox::Warning, tr("Rebase current branch"),
+        tr("%1 of the %2 commits to replay are already on a remote branch.").arg(plan.published).arg(plan.replayed),
+        QMessageBox::Cancel, this);
+    box.setObjectName(QStringLiteral("rebasePublishedDialog"));
+    box.setTextFormat(Qt::PlainText);
+    box.setInformativeText(tr("Rebasing %1 onto %2 rewrites them. Afterwards origin needs a force push, and anyone who "
+                              "already has those commits must reconcile their work. Merging keeps history unchanged.")
+                               .arg(repository_->branch, onto));
+    auto* rewrite = box.addButton(tr("Rebase and rewrite"), QMessageBox::DestructiveRole);
+    rewrite->setObjectName(QStringLiteral("rebasePublishedButton"));
+    auto* merge = box.addButton(tr("Merge instead"), QMessageBox::AcceptRole);
+    box.setDefaultButton(QMessageBox::Cancel);
+    box.exec();
+    if (box.clickedButton() == merge) {
+      controller_->executeRepositoryAction(RepositoryAction::mergeBranch,
+          plan.onto.startsWith(QStringLiteral("refs/heads/")) ? plan.onto.mid(11) : plan.onto);
+    } else if (box.clickedButton() == rewrite) {
+      forcePushOfferPath_ = path;
+      controller_->executeRepositoryAction(RepositoryAction::rebasePublished, plan.onto);
+    }
+  });
+  connect(controller_, &RelayController::originTagChanged, this, [this](const QString& path, const QString& message) {
+    if (repository_ && repository_->path == path) showNotice(message);
+  });
+  connect(controller_, &RelayController::originTagsReady, this, [this](const QString& path, const QList<QPair<QString, QString>>& tags) {
+    if (!repository_ || repository_->path != path) return;
+    if (tags.isEmpty()) { showNotice(tr("Origin has no tags.")); return; }
+    QStringList names;
+    for (const auto& tag : tags) names.append(tag.first);
+    bool accepted = false;
+    const auto name = QInputDialog::getItem(this, tr("Delete tag on origin"), tr("Tag on origin"), names,
+                                            int(names.size()) - 1, false, &accepted);
+    if (!accepted || !repository_ || repository_->path != path) return;
+    const auto expected = tags.at(names.indexOf(name)).second;
+    QMessageBox box(QMessageBox::Warning, tr("Delete tag on origin"), tr("Delete tag %1 on origin?").arg(name), QMessageBox::Cancel, this);
+    box.setObjectName(QStringLiteral("deleteOriginTagDialog"));
+    box.setTextFormat(Qt::PlainText);
+    box.setInformativeText(tr("It is removed for everyone; your local tags are kept. It points to %1. "
+                              "Relay refuses the deletion if the tag on origin has changed since this list.").arg(expected));
+    auto* remove = box.addButton(tr("Delete on origin"), QMessageBox::DestructiveRole);
+    remove->setObjectName(QStringLiteral("deleteOriginTagButton"));
+    box.setDefaultButton(QMessageBox::Cancel);
+    box.exec();
+    if (box.clickedButton() == remove) controller_->deleteOriginTag(currentAccountId(), name, expected);
+  });
+  connect(controller_, &RelayController::editorsDetected, this, [this](const QList<QPair<QString, QString>>& editors) {
+    editors_ = editors;
+    updateEditorAction();
+  });
+  connect(controller_, &RelayController::unpublishedCommitsReady, this, [this](const QString& path, const QList<UnpublishedCommit>& commits) {
+    if (!repository_ || repository_->path != path) return;
+    if (commits.size() < 2) { showNotice(tr("Squashing or reordering needs at least two commits that are not on a remote yet.")); return; }
+    if (commits.size() > 100) { showNotice(tr("Relay rewrites at most 100 unpublished commits."), true); return; }
+    if (std::any_of(commits.cbegin(), commits.cend(), [](const UnpublishedCommit& commit) { return commit.merge; })) {
+      showNotice(tr("Unpublished merge commits cannot be squashed or reordered here."), true);
+      return;
+    }
+    CommitRewriteDialog dialog(commits, this);
+    if (dialog.exec() == QDialog::Accepted && repository_ && repository_->path == path)
+      controller_->rewriteUnpublishedCommits(dialog.steps());
+  });
+  connect(controller_, &RelayController::pullRequestReady, this, [this](const QString& path, const QString& url, const bool existing) {
+    if (!repository_ || repository_->path != path || !url.startsWith(QStringLiteral("https://github.com/"))) return;
+    statusBar()->showMessage(existing ? tr("Opening the pull request in your browser") : tr("Opening GitHub to create a pull request"), 5000);
+    QDesktopServices::openUrl(QUrl(url));
   });
   connect(controller_, &RelayController::commitCreated, this, [this](const QString& path) {
     commitDrafts_.remove(path);
     if (repository_ && repository_->path == path) {
       commitSummary_->clear();
       commitDescription_->clear();
+      commitCoAuthors_->clear();
     }
   });
   connect(controller_, &RelayController::commitUndone, this, [this](const QString& path, const QString& summary, const QString& description) {
@@ -848,15 +992,18 @@ void MainWindow::connectController() {
   connect(controller_, &RelayController::stateChanged, this, &MainWindow::applyState);
   connect(controller_, &RelayController::currentRepositoryChanged, this, &MainWindow::applyRepository);
   connect(controller_, &RelayController::repositoryClosed, this, [this] {
+    if (compareDialog_) compareDialog_->close();
     if (repository_) commitDrafts_.insert(repository_->path, {commitSummary_->text(), commitDescription_->toPlainText()});
     repository_.reset();
     applyState(controller_->state());
     updateWorkflowActions();
     commitSummary_->clear();
     commitDescription_->clear();
+    commitCoAuthors_->clear();
     clearCommitDetail();
     createBranchAction_->setEnabled(false);
     pullAction_->setEnabled(false);
+    forcePushAction_->setEnabled(false);
     branchPicker_->setEnabled(false);
     workspaceStack_->setCurrentIndex(0);
     repositoryButton_->setText(tr("Choose a repository"));
@@ -948,6 +1095,23 @@ void MainWindow::connectController() {
     showNotice(result.message, !result.ok);
   });
   connect(controller_, &RelayController::busyChanged, this, [this](const QString& operation, const bool busy) {
+    // After a confirmed rewrite of published commits finishes (possibly after
+    // conflicts), offer the lease-protected force push once.
+    if (!busy && operation == QStringLiteral("repository-action") && !forcePushOfferPath_.isEmpty() && repository_ &&
+        repository_->path == forcePushOfferPath_ && repository_->pendingOperation.isEmpty()) {
+      forcePushOfferPath_.clear();
+      // Deferred: this operation still counts as busy until the handler ends.
+      QTimer::singleShot(0, this, [this] {
+        if (repository_ && repository_->ahead > 0 && repository_->behind > 0 && canForcePush()) confirmForcePush();
+      });
+    }
+    // "Push first" from the pull request prompt: continue only if the push
+    // left nothing unpushed. A failed push has already reported its error.
+    if (!busy && operation == QStringLiteral("push") && !pullRequestAfterPush_.isEmpty()) {
+      const auto path = std::exchange(pullRequestAfterPush_, QString{});
+      if (repository_ && repository_->path == path && repository_->ahead == 0)
+        QTimer::singleShot(0, this, [this] { controller_->openPullRequest(currentAccountId()); });
+    }
     if (operation == QStringLiteral("connect-account")) {
       if (busy && !loginDialog_) {
         lastOpenedDeviceCode_.clear();
@@ -988,6 +1152,7 @@ void MainWindow::connectController() {
     updateHistoryBranchActions();
     createBranchAction_->setEnabled(repository_.has_value() && busyOperations_.isEmpty());
     pullAction_->setEnabled(repository_ && repository_->hasUpstream && busyOperations_.isEmpty());
+    forcePushAction_->setEnabled(canForcePush());
     syncButton_->setEnabled(repository_.has_value() && busyOperations_.isEmpty());
     commitButton_->setEnabled(commitButton_->isEnabled() && busyOperations_.isEmpty());
     updateStatus();
@@ -1039,6 +1204,8 @@ void MainWindow::applyState(const AppState& state) {
   }
   workingDiff_->setCodeFontSize(state.preferences.diffFontSize);
   historyDiff_->setCodeFontSize(state.preferences.diffFontSize);
+  if (compareDialog_) compareDialog_->setDiffFontSize(state.preferences.diffFontSize);
+  updateEditorAction();
   repositoryModel_->setRepositories(state.repositories);
   repositoryModel_->setOrder(state.repositoryOrder, state.manualOrder);
   repositoryModel_->setPinnedAccountIds(state.repositoryAccounts);
@@ -1116,6 +1283,10 @@ void MainWindow::applyRepository(const Repository& repository) {
   if (!sameRepository) { const QSignalBlocker blocker(historyBranch_); historyBranch_->clear(); }
   repository_ = repository;
   updateHistoryBranches();
+  if (compareDialog_ && compareDialog_->isVisible()) {
+    if (sameRepository) compareDialog_->setRepository(repository);
+    else compareDialog_->close();
+  }
   workspaceStack_->setCurrentIndex(1);
   repositoryButton_->setText(QStringLiteral("%1  ·  %2").arg(repository.name, repository.owner));
   repositoryButton_->setToolTip(repository.path);
@@ -1130,6 +1301,12 @@ void MainWindow::applyRepository(const Repository& repository) {
     for (const auto& branch : repository.remoteBranches)
       if (!repository.branches.contains(branch.mid(branch.indexOf(u'/') + 1)))
         branchPicker_->addItem(tr("Remote · %1").arg(branch), QStringLiteral("refs/remotes/") + branch);
+    // Remote branches are only what the last fetch recorded. A branch that so
+    // far exists only on origin appears here after this fetch.
+    if (!repository.remote.isEmpty()) {
+      branchPicker_->insertSeparator(branchPicker_->count());
+      branchPicker_->addItem(tr("Fetch all branches from origin"), QString::fromLatin1(fetchOriginBranchesItem));
+    }
     branchPicker_->setCurrentIndex(branchPicker_->findData(QStringLiteral("refs/heads/") + repository.branch));
   }
   const auto* previousFile = changedFileModel_->fileAt(changedFileList_->currentIndex().row());
@@ -1159,6 +1336,7 @@ void MainWindow::applyRepository(const Repository& repository) {
   branchPicker_->setEnabled(busyOperations_.isEmpty());
   createBranchAction_->setEnabled(busyOperations_.isEmpty());
   pullAction_->setEnabled(repository.hasUpstream && busyOperations_.isEmpty());
+  forcePushAction_->setEnabled(canForcePush());
   removeAction_->setEnabled(true);
   repositorySettingsButton_->setEnabled(true);
   syncButton_->setEnabled(busyOperations_.isEmpty());
@@ -1272,6 +1450,9 @@ void MainWindow::updateCommitAction() {
 
 void MainWindow::showSettingsDialog() {
   SettingsDialog dialog(appState_.preferences, this);
+  dialog.setEditors(editors_);
+  // Editors installed since startup appear the next time.
+  controller_->detectEditors();
   connect(&dialog, &SettingsDialog::manageAccountsRequested, this, &MainWindow::showAccountsDialog);
   if (dialog.exec() == QDialog::Accepted) controller_->setPreferences(dialog.preferences());
 }
@@ -1515,6 +1696,129 @@ QString MainWindow::currentAccountId() const {
 
 QString MainWindow::currentCommitHash() const {
   return commitDetail_ ? commitDetail_->fullHash : QString{};
+}
+
+void MainWindow::updateEditorAction() {
+  if (!openEditorAction_) return;
+  const auto& preferences = appState_.preferences;
+  QString name;
+  if (preferences.editorId == QStringLiteral("custom")) name = QFileInfo(preferences.editorPath).completeBaseName();
+  for (const auto& editor : std::as_const(editors_))
+    if (name.isEmpty() && (preferences.editorId.isEmpty() || editor.first == preferences.editorId)) name = editor.second;
+  openEditorAction_->setText(name.isEmpty() ? tr("Open in editor") : tr("Open in %1").arg(name));
+}
+
+void MainWindow::showCompareDialog() {
+  if (!repository_) return;
+  if (!compareDialog_) {
+    compareDialog_ = new CompareDialog(this);
+    compareDialog_->setDiffFontSize(appState_.preferences.diffFontSize);
+    connect(compareDialog_, &CompareDialog::comparisonRequested, controller_, &RelayController::compareBranches);
+    connect(compareDialog_, &CompareDialog::fileDiffRequested, controller_, &RelayController::requestComparisonFileDiff);
+    connect(compareDialog_, &CompareDialog::mergeRequested, this, [this](const QString& ref) {
+      if (!repository_ || !busyOperations_.isEmpty()) return;
+      const auto target = ref.startsWith(QStringLiteral("refs/heads/")) ? ref.mid(11) : ref;
+      QMessageBox box(QMessageBox::Question, tr("Merge"), tr("Merge %1 into %2?").arg(ref.section(u'/', 2), repository_->branch),
+                      QMessageBox::Ok | QMessageBox::Cancel, compareDialog_);
+      box.setDefaultButton(QMessageBox::Cancel);
+      if (box.exec() == QMessageBox::Ok) controller_->executeRepositoryAction(RepositoryAction::mergeBranch, target);
+    });
+    connect(controller_, &RelayController::comparisonReady, compareDialog_, [this](const QString& path, const BranchComparison& comparison) {
+      if (repository_ && repository_->path == path) compareDialog_->showComparison(comparison);
+    });
+    connect(controller_, &RelayController::comparisonFileDiffReady, compareDialog_,
+            [this](const QString& path, const QString& from, const QString& to, const QString& file, const QString& diff) {
+      if (repository_ && repository_->path == path) compareDialog_->showFileDiff(from, to, file, diff);
+    });
+  }
+  compareDialog_->setRepository(*repository_);
+  // Open on the branch being browsed in History, if it is another branch.
+  const auto browsed = historyBranch_->currentData().toString();
+  if (!browsed.isEmpty() && browsed != QStringLiteral("refs/heads/") + repository_->branch)
+    compareDialog_->selectBranches(QStringLiteral("refs/heads/") + repository_->branch, browsed);
+  compareDialog_->show();
+  compareDialog_->raise();
+  compareDialog_->activateWindow();
+}
+
+void MainWindow::requestPullRequest() {
+  if (!repository_) return;
+  // Ahead counts are only meaningful once the branch exists on origin; an
+  // unpublished branch gets the controller's "push first" message instead.
+  if (!originTrackingTip(*repository_).isEmpty() && repository_->ahead > 0) {
+    QMessageBox box(QMessageBox::Question, tr("Pull request"),
+        tr("%1 has %n commit(s) that are not on origin yet.", nullptr, repository_->ahead).arg(repository_->branch),
+        QMessageBox::Cancel, this);
+    box.setObjectName(QStringLiteral("pullRequestUnpushedDialog"));
+    box.setInformativeText(tr("The pull request will not include them until you push."));
+    auto* push = box.addButton(tr("Push first"), QMessageBox::AcceptRole);
+    auto* open = box.addButton(tr("Open without pushing"), QMessageBox::AcceptRole);
+    box.setDefaultButton(push);
+    box.exec();
+    if (box.clickedButton() == push) {
+      pullRequestAfterPush_ = repository_->path;
+      controller_->pushOrigin(currentAccountId());
+      return;
+    }
+    if (box.clickedButton() != open) return;
+  }
+  controller_->openPullRequest(currentAccountId());
+}
+
+void MainWindow::confirmDeleteOriginBranch() {
+  if (!repository_ || !busyOperations_.isEmpty()) return;
+  QStringList choices;
+  for (const auto& branch : repository_->remoteBranches)
+    if (branch.startsWith(QStringLiteral("origin/"))) choices.append(branch.mid(7));
+  if (choices.isEmpty()) { showNotice(tr("There are no fetched branches on origin.")); return; }
+  // Offer the remote branch being browsed in History first.
+  const auto browsed = historyBranch_->currentData().toString();
+  const auto preferred = browsed.startsWith(QStringLiteral("refs/remotes/origin/"))
+      ? choices.indexOf(browsed.mid(20)) : -1;
+  bool accepted = false;
+  const auto branch = QInputDialog::getItem(this, tr("Delete branch on origin"), tr("Branch on origin"),
+                                            choices, qMax(0, preferred), false, &accepted);
+  if (!accepted || !repository_) return;
+  const auto expected = originTrackingTip(*repository_, branch);
+  if (expected.isEmpty()) return;
+  QMessageBox box(QMessageBox::Warning, tr("Delete branch on origin"),
+      tr("Delete %1 on origin?").arg(branch), QMessageBox::Cancel, this);
+  box.setObjectName(QStringLiteral("deleteOriginBranchDialog"));
+  box.setTextFormat(Qt::PlainText);
+  box.setInformativeText(tr("The branch is removed from origin for everyone. Local branches, including your own %1, "
+                            "are kept. To restore it later, push a branch at its last commit:\n%2\n\n"
+                            "Relay refuses the deletion if origin/%1 has changed since your last fetch.")
+                             .arg(branch, expected));
+  auto* remove = box.addButton(tr("Delete on origin"), QMessageBox::DestructiveRole);
+  remove->setObjectName(QStringLiteral("deleteOriginBranchButton"));
+  box.setDefaultButton(QMessageBox::Cancel);
+  box.exec();
+  if (box.clickedButton() == remove && repository_)
+    controller_->deleteOriginBranch(currentAccountId(), branch, expected);
+}
+
+bool MainWindow::canForcePush() const {
+  return repository_ && busyOperations_.isEmpty() && !repository_->remote.isEmpty() &&
+         !originTrackingTip(*repository_).isEmpty();
+}
+
+void MainWindow::confirmForcePush() {
+  if (!canForcePush()) return;
+  const auto branch = repository_->branch;
+  const auto expected = originTrackingTip(*repository_);
+  QMessageBox box(QMessageBox::Warning, tr("Force push origin"),
+      tr("Replace origin/%1 with your local %1?").arg(branch), QMessageBox::Cancel, this);
+  box.setObjectName(QStringLiteral("forcePushDialog"));
+  box.setInformativeText(tr("Commits on origin/%1 that are not in your local branch will be removed from it, "
+                            "and anyone who already has them must reconcile their work. Relay refuses the push "
+                            "if origin/%1 is no longer at %2, the commit from your last fetch.")
+                             .arg(branch, expected.left(7)));
+  auto* force = box.addButton(tr("Force push"), QMessageBox::DestructiveRole);
+  force->setObjectName(QStringLiteral("forcePushButton"));
+  box.setDefaultButton(QMessageBox::Cancel);
+  box.exec();
+  if (box.clickedButton() == force && repository_ && repository_->branch == branch)
+    controller_->pushOrigin(currentAccountId(), expected);
 }
 
 }  // namespace relay

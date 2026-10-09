@@ -1,6 +1,7 @@
 #include "relay/github_api.hpp"
 
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QTest>
 
@@ -54,6 +55,38 @@ class GitHubApiTest final : public QObject {
     QVERIFY(relay::GitHubApi::isValidEmail(QStringLiteral("a@example.com")));
     QCOMPARE(relay::GitHubApi::resolveCommitEmail(account, {}),
              QStringLiteral("42+octo@users.noreply.github.com"));
+  }
+
+  void recognizesOnlyGitHubRemotes() {
+    using relay::GitHubApi;
+    for (const auto& remote : {QStringLiteral("https://github.com/octo/relay.git"), QStringLiteral("git@github.com:octo/relay.git"),
+                               QStringLiteral("ssh://git@github.com/octo/relay"), QStringLiteral("https://GitHub.com/octo/relay/")}) {
+      const auto parsed = GitHubApi::repositoryFromRemote(remote);
+      QVERIFY2(parsed.has_value(), qPrintable(remote));
+      QCOMPARE(parsed->owner.toLower(), QStringLiteral("octo"));
+      QCOMPARE(parsed->name, QStringLiteral("relay"));
+    }
+    for (const auto& remote : {QStringLiteral("https://notgithub.com/octo/relay.git"), QStringLiteral("https://github.com.evil/octo/relay"),
+                               QStringLiteral("https://user:secret@github.com/octo/relay"), QStringLiteral("http://github.com/octo/relay"),
+                               QStringLiteral("https://github.com/octo/relay/extra"), QStringLiteral("https://github.com/octo/.."),
+                               QStringLiteral("https://gitlab.com/octo/relay"), QString{}})
+      QVERIFY2(!GitHubApi::repositoryFromRemote(remote).has_value(), qPrintable(remote));
+  }
+
+  void buildsAndValidatesPullRequestUrls() {
+    using relay::GitHubApi;
+    const relay::GitHubRepositoryName repository{QStringLiteral("octo"), QStringLiteral("relay")};
+    QCOMPARE(GitHubApi::pullRequestCreationUrl(repository, QStringLiteral("feature/a#b c")),
+             QStringLiteral("https://github.com/octo/relay/compare/feature/a%23b%20c?expand=1"));
+    const auto list = [](const QString& url) {
+      return QJsonDocument(QJsonArray{QJsonObject{{QStringLiteral("html_url"), url}}});
+    };
+    QCOMPARE(GitHubApi::pullRequestUrlFromJson(list(QStringLiteral("https://github.com/octo/relay/pull/42")), repository),
+             QStringLiteral("https://github.com/octo/relay/pull/42"));
+    QVERIFY(GitHubApi::pullRequestUrlFromJson(QJsonDocument(QJsonArray{}), repository).isEmpty());
+    QVERIFY(GitHubApi::pullRequestUrlFromJson(list(QStringLiteral("https://github.com/other/relay/pull/42")), repository).isEmpty());
+    QVERIFY(GitHubApi::pullRequestUrlFromJson(list(QStringLiteral("https://github.com/octo/relay/pull/42/../x")), repository).isEmpty());
+    QVERIFY(GitHubApi::pullRequestUrlFromJson(list(QStringLiteral("javascript:alert(1)")), repository).isEmpty());
   }
 };
 

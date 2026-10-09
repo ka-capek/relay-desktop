@@ -2,6 +2,7 @@
 
 #include "relay/domain.hpp"
 #include "relay/github_api.hpp"
+#include "relay/external_apps.hpp"
 
 #include <QFutureWatcher>
 #include <QException>
@@ -94,10 +95,25 @@ class RelayController final : public QObject {
   void requestCommitDetail(const QString& hash);
   void requestCommitFileDiff(const QString& hash, const QString& filePath);
   void commit(const QStringList& files, const QString& summary, const QString& description,
-              const QString& accountId = {});
+              const QString& accountId = {}, const QString& coAuthors = {});
   void fetchOrigin(const QString& accountId = {}, bool allBranches = false);
-  void pushOrigin(const QString& accountId = {});
+  void pushOrigin(const QString& accountId = {}, const QString& forceExpected = {});
+  void deleteOriginBranch(const QString& accountId, const QString& branch, const QString& expected);
   void pullOrigin(const QString& accountId = {});
+  // Finds the current branch's open GitHub pull request, or GitHub's page
+  // for creating one, and emits pullRequestReady with that HTTPS URL.
+  void openPullRequest(const QString& accountId = {});
+  void requestUnpublishedCommits();
+  // Emits rebasePlanReady so the window can warn before published commits are rewritten.
+  void planRebase(const QString& onto);
+  void listOriginTags(const QString& accountId = {});
+  void pushOriginTag(const QString& accountId, const QString& tag);
+  void deleteOriginTag(const QString& accountId, const QString& tag, const QString& expected);
+  void openRepositoryIn(ExternalTarget target);
+  void detectEditors();
+  void compareBranches(const QString& base, const QString& compare);
+  void requestComparisonFileDiff(const QString& from, const QString& to, const QString& filePath);
+  void rewriteUnpublishedCommits(const QList<CommitRewriteStep>& steps);
   void executeRepositoryAction(relay::RepositoryAction action, const QString& target = {},
                                const QStringList& paths = {});
   void createLocalRepository(const QString& destinationPath);
@@ -129,6 +145,15 @@ class RelayController final : public QObject {
   // A pull found local and origin commits on both sides and changed nothing.
   // upstreamRef is the fetched refs/remotes/origin/... to merge or rebase onto.
   void pullDiverged(QString repositoryPath, QString upstreamRef);
+  void pullRequestReady(QString repositoryPath, QString url, bool existing);
+  void unpublishedCommitsReady(QString repositoryPath, QList<relay::UnpublishedCommit> commits);
+  void rebasePlanReady(QString repositoryPath, relay::RebasePlan plan);
+  void originTagsReady(QString repositoryPath, QList<QPair<QString, QString>> tags);
+  void originTagChanged(QString repositoryPath, QString message);
+  // Detected editors as id and display name; program paths stay here.
+  void editorsDetected(QList<QPair<QString, QString>> editors);
+  void comparisonReady(QString repositoryPath, relay::BranchComparison comparison);
+  void comparisonFileDiffReady(QString repositoryPath, QString from, QString to, QString filePath, QString diff);
   void commitUndone(QString repositoryPath, QString summary, QString description);
   void filePreviewReady(QString repositoryPath, QString filePath, relay::FilePreview preview);
   void commitFilePreviewReady(QString repositoryPath, QString hash, QString filePath, relay::FilePreview preview);
@@ -155,7 +180,7 @@ class RelayController final : public QObject {
                 std::function<bool()> isCurrent = {}) {
     const bool repositoryMutation = QStringList{QStringLiteral("commit"), QStringLiteral("fetch"),
         QStringLiteral("push"), QStringLiteral("pull"), QStringLiteral("switch-branch"),
-        QStringLiteral("create-branch"), QStringLiteral("repository-action"), QStringLiteral("publish-repository"), QStringLiteral("clone")}.contains(operation);
+        QStringLiteral("create-branch"), QStringLiteral("delete-remote-branch"), QStringLiteral("origin-tag"), QStringLiteral("repository-action"), QStringLiteral("publish-repository"), QStringLiteral("clone")}.contains(operation);
     const bool accountMutation = QStringList{QStringLiteral("connect-account"),
         QStringLiteral("active-account"), QStringLiteral("remove-account"),
         QStringLiteral("connect-forge-account")}.contains(operation);
@@ -236,6 +261,8 @@ class RelayController final : public QObject {
   quint64 historyGeneration_{};
   quint64 searchGeneration_{};
   quint64 detailGeneration_{};
+  quint64 comparisonGeneration_{};
+  quint64 comparisonDiffGeneration_{};
   quint64 commitDiffGeneration_{};
 };
 

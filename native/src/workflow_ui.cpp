@@ -1,5 +1,6 @@
 #include "relay/main_window.hpp"
 #include "relay/relay_controller.hpp"
+#include "relay/github_api.hpp"
 #include "relay/list_models.hpp"
 
 #include <QAction>
@@ -68,11 +69,26 @@ void MainWindow::buildWorkflowMenus(QMenu* file, QMenu* repositoryMenu) {
     if (target.startsWith(QStringLiteral("[remote] "))) target = QStringLiteral("refs/remotes/") + target.mid(9);
     if (action == RepositoryAction::deleteBranch && !confirm(this, title,
         tr("Delete local branch %1? Relay only deletes branches already merged into the current branch.").arg(target))) return;
-    if (action == RepositoryAction::rebaseBranch && !confirm(this, title,
-        tr("Replay the current branch’s unpublished commits on this branch? Commits known to remote branches will not be rewritten."))) return;
+    // Rebase asks first what it would replay, so published commits get a warning.
+    if (action == RepositoryAction::rebaseBranch) { controller_->planRebase(target); return; }
     controller_->executeRepositoryAction(action, target);
   };
+  openEditorAction_ = add(tr("Open in editor"), QStringLiteral("openEditorAction"), QStringLiteral("open"),
+      [this] { controller_->openRepositoryIn(ExternalTarget::editor); });
+  openEditorAction_->setShortcut(QKeySequence(tr("Ctrl+Shift+A")));
+  add(tr("Open in Terminal"), QStringLiteral("openTerminalAction"), QStringLiteral("open"),
+      [this] { controller_->openRepositoryIn(ExternalTarget::terminal); })->setShortcut(QKeySequence(tr("Ctrl+`")));
+#if defined(Q_OS_MACOS)
+  const auto showText = tr("Show in Finder");
+#else
+  const auto showText = tr("Show in Explorer");
+#endif
+  add(showText, QStringLiteral("showInFileManagerAction"), QStringLiteral("open"),
+      [this] { controller_->openRepositoryIn(ExternalTarget::fileManager); })->setShortcut(QKeySequence(tr("Ctrl+Shift+F")));
+  repositoryMenu->addSeparator();
   add(tr("Publish repository…"), QStringLiteral("publishRepositoryAction"), QStringLiteral("publish"), [this] { showPublishDialog(); });
+  add(tr("Create or open pull request"), QStringLiteral("pullRequestAction"), QStringLiteral("pullRequest"),
+      [this] { requestPullRequest(); });
   add(tr("Origin remote URL…"), QStringLiteral("originRemoteAction"), QStringLiteral("idle"), [this] {
     if (!repository_) return;
     bool accepted = false;
@@ -92,9 +108,13 @@ void MainWindow::buildWorkflowMenus(QMenu* file, QMenu* repositoryMenu) {
       [branchOperation] { branchOperation(RepositoryAction::deleteBranch, tr("Delete branch")); });
   add(tr("Check out remote branch…"), QStringLiteral("checkoutRemoteAction"), QStringLiteral("idle"),
       [branchOperation] { branchOperation(RepositoryAction::checkoutRemote, tr("Check out remote branch"), true); });
+  add(tr("Delete branch on origin…"), QStringLiteral("deleteOriginBranchAction"), QStringLiteral("originBranches"),
+      [this] { confirmDeleteOriginBranch(); });
+  add(tr("Compare branches…"), QStringLiteral("compareBranchesAction"), QStringLiteral("head"),
+      [this] { showCompareDialog(); });
   add(tr("Merge into current branch…"), QStringLiteral("mergeBranchAction"), QStringLiteral("head"),
       [branchOperation] { branchOperation(RepositoryAction::mergeBranch, tr("Merge into current branch")); });
-  add(tr("Rebase unpublished commits…"), QStringLiteral("rebaseBranchAction"), QStringLiteral("head"),
+  add(tr("Rebase current branch…"), QStringLiteral("rebaseBranchAction"), QStringLiteral("head"),
       [branchOperation] { branchOperation(RepositoryAction::rebaseBranch, tr("Rebase current branch")); });
   repositoryMenu->addSeparator();
   add(tr("Stash all changes…"), QStringLiteral("stashAction"), QStringLiteral("changes"), [this] {
@@ -112,6 +132,8 @@ void MainWindow::buildWorkflowMenus(QMenu* file, QMenu* repositoryMenu) {
       controller_->executeRepositoryAction(RepositoryAction::discardFiles, {}, paths);
   });
   repositoryMenu->addSeparator();
+  add(tr("Squash and reorder commits…"), QStringLiteral("rewriteCommitsAction"), QStringLiteral("head"),
+      [this] { controller_->requestUnpublishedCommits(); });
   add(tr("Undo latest unpushed commit…"), QStringLiteral("undoCommitAction"), QStringLiteral("head"), [this] {
     if (!repository_ || repository_->history.isEmpty()) return;
     const auto hash = repository_->history.first().fullHash;
@@ -140,6 +162,15 @@ void MainWindow::buildWorkflowMenus(QMenu* file, QMenu* repositoryMenu) {
     if (accepted && confirm(this, tr("Delete local tag"), tr("Delete tag %1 from this local repository? The remote tag will remain unchanged.").arg(tag)))
       controller_->executeRepositoryAction(RepositoryAction::deleteTag, tag);
   });
+  add(tr("Push tag to origin…"), QStringLiteral("pushTagAction"), QStringLiteral("originTags"), [this] {
+    if (!repository_ || repository_->tags.isEmpty()) return;
+    bool accepted = false;
+    const auto tag = QInputDialog::getItem(this, tr("Push tag to origin"), tr("Tag"), repository_->tags,
+                                           int(repository_->tags.size()) - 1, false, &accepted);
+    if (accepted) controller_->pushOriginTag(currentAccountId(), tag);
+  });
+  add(tr("Delete tag on origin…"), QStringLiteral("deleteOriginTagAction"), QStringLiteral("origin"),
+      [this] { controller_->listOriginTags(currentAccountId()); });
   add(tr("Revert selected commit…"), QStringLiteral("revertCommitAction"), QStringLiteral("commit"), [this] {
     if (!commitDetail_) return;
     const auto hash = currentCommitHash();
@@ -176,12 +207,20 @@ void MainWindow::updateWorkflowActions() {
     const auto rule = action->property("workflowRule").toString();
     bool enabled = available && !pending;
     if (rule == QStringLiteral("conflict")) enabled = available && pending;
+    else if (rule == QStringLiteral("open")) enabled = repository_.has_value();
     else if (rule == QStringLiteral("publish")) enabled = enabled && repository_->remote.isEmpty() && repository_->hasHead && !currentAccountId().isEmpty();
     else if (rule == QStringLiteral("head")) enabled = enabled && repository_->hasHead;
     else if (rule == QStringLiteral("changes")) enabled = enabled && repository_->hasHead && !repository_->files.isEmpty();
     else if (rule == QStringLiteral("stashes")) enabled = enabled && !repository_->stashes.isEmpty();
     else if (rule == QStringLiteral("commit")) enabled = enabled && commitDetail_.has_value();
     else if (rule == QStringLiteral("latest")) enabled = enabled && commitDetail_ && !repository_->history.isEmpty() && commitDetail_->fullHash == repository_->history.first().fullHash;
+    else if (rule == QStringLiteral("pullRequest")) enabled = available && repository_->hasHead &&
+        GitHubApi::repositoryFromRemote(repository_->remote).has_value();
+    else if (rule == QStringLiteral("originBranches")) enabled = enabled && !repository_->remote.isEmpty() &&
+        std::any_of(repository_->remoteBranches.cbegin(), repository_->remoteBranches.cend(),
+                    [](const QString& branch) { return branch.startsWith(QStringLiteral("origin/")); });
+    else if (rule == QStringLiteral("origin")) enabled = enabled && !repository_->remote.isEmpty();
+    else if (rule == QStringLiteral("originTags")) enabled = enabled && !repository_->remote.isEmpty() && !repository_->tags.isEmpty();
     else if (rule == QStringLiteral("tags")) enabled = enabled && !repository_->tags.isEmpty();
     action->setEnabled(enabled);
   }
