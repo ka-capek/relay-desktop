@@ -100,11 +100,19 @@ jobs:
             throw
           }
           if ($LASTEXITCODE -ne 0) { throw "Windows test launch failed: $LASTEXITCODE" }
+      # Defender scans every git.exe the Git fixtures start, which dominated the
+      # Windows test time. This affects only the disposable runner VM.
+      - name: Disable real-time scanning on the runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+      # Suites use their own temporary repositories and profiles, so they run
+      # side by side; wall time is then about the longest suite.
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
           RELAY_SCREENSHOT_DIR: ${{ github.workspace }}/build-native/screenshots
-        run: ctest --preset ${{ matrix.target }} --timeout 60
+        run: ctest --preset ${{ matrix.target }} --timeout 60 --parallel 4
       # Pinned versions and SHA-256 digests live in native/packaging/runtimes.json.
       - name: Fetch bundled Git and GitHub CLI
         shell: bash

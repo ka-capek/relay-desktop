@@ -1100,7 +1100,9 @@ Match verification effort to risk.
 - Pushing a pull request that touches `native/**`, `CMakeLists.txt`,
   `CMakePresets.json` or the workflow runs `.github/workflows/native.yml` on
   macOS arm64 and Windows x64 with Qt 6.11.1. That is the authoritative check;
-  Linux builds only supplement it.
+  Linux builds only supplement it. CI runs suites with `ctest --parallel 4`
+  and disables Defender real-time scanning on the disposable Windows runner,
+  so every test must keep using its own temporary directories and profiles.
 
 Git fixtures should cover, as relevant: clean, modified, untracked, binary,
 no commits, with and without `origin` and upstream, local and remote-only
