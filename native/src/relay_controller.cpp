@@ -111,6 +111,26 @@ std::optional<T> valueNamed(const QList<T>& values, const QString& id) {
   return iterator == values.cend() ? std::nullopt : std::optional<T>(*iterator);
 }
 
+// Resolved inside a worker: the token exists only for an HTTPS github.com
+// origin and only for the duration of the operation.
+struct OriginCredentials {
+  QString token;
+  QString handle;
+  QString sshCommand;
+};
+
+OriginCredentials originCredentials(const GitService& git, const GitHubAuth& auth, const SshService& ssh,
+                                    const QString& repositoryPath, const bool forPush,
+                                    const std::optional<Account>& account, const std::optional<SshProfile>& profile) {
+  const auto remote = git.originRemoteUrl(repositoryPath, forPush);
+  OriginCredentials result;
+  if (account) result.handle = account->handle;
+  if (account && remote.startsWith(QStringLiteral("https://github.com/"), Qt::CaseInsensitive))
+    result.token = auth.accountToken(account->handle);
+  if (profile) result.sshCommand = ssh.commandForRemote(*profile, remote);
+  return result;
+}
+
 }  // namespace
 
 RelayController::RelayController(RelayControllerConfig config, QObject* parent)
@@ -217,7 +237,10 @@ void RelayController::start() {
     publishState();
     emit repositoryClosed();
     if (!state_.forgeCredentialCleanup.isEmpty()) retryForgeCredentialCleanup();
-    if (config_.synchronizeAccountsOnStart) checkRuntimes();
+    if (config_.synchronizeAccountsOnStart) {
+      checkRuntimes();
+      detectEditors();
+    }
   } catch (const std::exception& error) {
     emit operationFailed(QStringLiteral("startup"), QString::fromUtf8(error.what()));
   }
@@ -684,7 +707,7 @@ Account RelayController::commitIdentity() const {
 }
 
 void RelayController::commit(const QStringList& files, const QString& summary,
-                             const QString& description, const QString& accountId) {
+                             const QString& description, const QString& accountId, const QString& coAuthorText) {
   if (!currentRepository_) return;
   if (repositoryMutationActive_) {
     emit operationFailed(QStringLiteral("commit"), QStringLiteral("Wait for the current Git operation to finish."));
@@ -696,6 +719,9 @@ void RelayController::commit(const QStringList& files, const QString& summary,
     emit operationFailed(QStringLiteral("commit"), tr("Set a Git name and email in Settings, or select a GitHub account before committing."));
     return;
   }
+  QStringList coAuthors;
+  try { coAuthors = GitService::parseCoAuthors(coAuthorText, selectedAccount.email); }
+  catch (const ProcessError& failure) { emit operationFailed(QStringLiteral("commit"), failure.qMessage()); return; }
   const auto repositoryPath = currentRepository_->path;
   const auto generation = ++repositoryGeneration_;
   invalidateRepositoryRequests();
@@ -703,10 +729,10 @@ void RelayController::commit(const QStringList& files, const QString& summary,
   const auto operationGate = config_.operationGate;
   runAsync<Repository>(QStringLiteral("commit"),
                        [git, operationGate, repositoryPath, files, summary, description,
-                        selectedAccount] {
+                        selectedAccount, coAuthors] {
                          invokeGate(operationGate, QStringLiteral("commit"), repositoryPath);
                          git->commitFiles(repositoryPath, files, summary, description,
-                                          selectedAccount);
+                                          selectedAccount, coAuthors);
                          return git->readRepository(repositoryPath);
                        },
                        [this, generation](Repository repository) {
@@ -808,7 +834,7 @@ void RelayController::pullOrigin(const QString& accountId) {
                        });
 }
 
-void RelayController::pushOrigin(const QString& accountId) {
+void RelayController::pushOrigin(const QString& accountId, const QString& forceExpected) {
   if (!currentRepository_) return;
   if (repositoryMutationActive_) {
     emit operationFailed(QStringLiteral("push"), QStringLiteral("Wait for the current Git operation to finish."));
@@ -826,7 +852,7 @@ void RelayController::pushOrigin(const QString& accountId) {
   const auto ssh = ssh_;
   const auto operationGate = config_.operationGate;
   runAsync<Repository>(QStringLiteral("push"),
-                       [git, auth, ssh, operationGate, repositoryPath, selectedAccount, profile] {
+                       [git, auth, ssh, operationGate, repositoryPath, selectedAccount, profile, forceExpected] {
                          invokeGate(operationGate, QStringLiteral("push"), repositoryPath);
                          const auto remote = git->originRemoteUrl(repositoryPath, true);
                          const auto token = selectedAccount && remote.startsWith(QStringLiteral("https://github.com/"), Qt::CaseInsensitive)
@@ -836,7 +862,240 @@ void RelayController::pushOrigin(const QString& accountId) {
                                                       : QString{};
                          git->pushOrigin(repositoryPath, token,
                                          selectedAccount ? selectedAccount->handle : QString{},
-                                         command);
+                                         command, forceExpected);
+                         return git->readRepository(repositoryPath);
+                       },
+                       [this, generation, repositoryPath](Repository repository) {
+                         if (generation != repositoryGeneration_ || !currentRepository_ ||
+                             currentRepository_->path != repositoryPath)
+                           return;
+                         currentRepository_ = std::make_unique<Repository>(repository);
+                         emit currentRepositoryChanged(repository);
+                         rememberRepository(repository);
+                       });
+}
+
+void RelayController::compareBranches(const QString& base, const QString& compare) {
+  if (!currentRepository_) return;
+  const auto path = currentRepository_->path;
+  const auto generation = ++comparisonGeneration_;
+  ++comparisonDiffGeneration_;
+  const auto git = git_;
+  runAsync<BranchComparison>(QStringLiteral("compare-branches"),
+      [git, path, base, compare] { return git->compareBranches(path, base, compare); },
+      [this, generation, path](BranchComparison comparison) {
+        if (generation != comparisonGeneration_ || !currentRepository_ || currentRepository_->path != path) return;
+        emit comparisonReady(path, std::move(comparison));
+      }, [this, generation] { return generation == comparisonGeneration_; });
+}
+
+void RelayController::requestComparisonFileDiff(const QString& from, const QString& to, const QString& filePath) {
+  if (!currentRepository_) return;
+  const auto path = currentRepository_->path;
+  const auto generation = ++comparisonDiffGeneration_;
+  const auto git = git_;
+  runAsync<QString>(QStringLiteral("compare-diff"),
+      [git, path, from, to, filePath] { return git->readComparisonFileDiff(path, from, to, filePath); },
+      [this, generation, path, from, to, filePath](QString diff) {
+        if (generation != comparisonDiffGeneration_ || !currentRepository_ || currentRepository_->path != path) return;
+        emit comparisonFileDiffReady(path, from, to, filePath, diff);
+      }, [this, generation] { return generation == comparisonDiffGeneration_; });
+}
+
+void RelayController::detectEditors() {
+  runAsync<QList<ExternalEditor>>(QStringLiteral("detect-editors"),
+      [] { return ExternalApps::detectEditors(); },
+      [this](QList<ExternalEditor> editors) {
+        QList<QPair<QString, QString>> names;
+        for (const auto& editor : editors) names.append({editor.id, editor.name});
+        emit editorsDetected(names);
+      });
+}
+
+void RelayController::openRepositoryIn(const ExternalTarget target) {
+  if (!currentRepository_) return;
+  const auto path = currentRepository_->path;
+  const auto id = state_.preferences.editorId;
+  const auto custom = state_.preferences.editorPath;
+  runAsync<bool>(QStringLiteral("open-external"),
+      [path, target, id, custom] {
+        switch (target) {
+          case ExternalTarget::editor:
+            ExternalApps::start(ExternalApps::editorLaunch(ExternalApps::resolveEditor(ExternalApps::detectEditors(), id, custom), path));
+            break;
+          case ExternalTarget::terminal: ExternalApps::start(ExternalApps::terminalLaunch(path)); break;
+          case ExternalTarget::fileManager: ExternalApps::start(ExternalApps::fileManagerLaunch(path)); break;
+        }
+        return true;
+      },
+      [](bool) {});
+}
+
+void RelayController::listOriginTags(const QString& accountId) {
+  if (!currentRepository_) return;
+  const auto path = currentRepository_->path;
+  const auto* selected = account(accountId, path);
+  const auto selectedAccount = selected ? std::optional<Account>(*selected) : std::nullopt;
+  const auto profile = valueNamed(state_.sshProfiles, resolvedSshProfileId(path));
+  const auto git = git_;
+  const auto auth = auth_;
+  const auto ssh = ssh_;
+  runAsync<QList<QPair<QString, QString>>>(QStringLiteral("list-origin-tags"),
+      [git, auth, ssh, path, selectedAccount, profile] {
+        const auto credentials = originCredentials(*git, *auth, *ssh, path, false, selectedAccount, profile);
+        return git->listOriginTags(path, credentials.token, credentials.handle, credentials.sshCommand);
+      },
+      [this, path](QList<QPair<QString, QString>> tags) { emit originTagsReady(path, tags); },
+      [this, path] { return currentRepository_ && currentRepository_->path == path; });
+}
+
+void RelayController::pushOriginTag(const QString& accountId, const QString& tag) {
+  if (!currentRepository_) return;
+  const auto path = currentRepository_->path;
+  const auto* selected = account(accountId, path);
+  const auto selectedAccount = selected ? std::optional<Account>(*selected) : std::nullopt;
+  const auto profile = valueNamed(state_.sshProfiles, resolvedSshProfileId(path));
+  const auto git = git_;
+  const auto auth = auth_;
+  const auto ssh = ssh_;
+  runAsync<bool>(QStringLiteral("origin-tag"),
+      [git, auth, ssh, path, selectedAccount, profile, tag] {
+        const auto credentials = originCredentials(*git, *auth, *ssh, path, true, selectedAccount, profile);
+        git->pushOriginTag(path, tag, credentials.token, credentials.handle, credentials.sshCommand);
+        return true;
+      },
+      [this, path, tag](bool) { emit originTagChanged(path, tr("Pushed tag %1 to origin.").arg(tag)); });
+}
+
+void RelayController::deleteOriginTag(const QString& accountId, const QString& tag, const QString& expected) {
+  if (!currentRepository_) return;
+  const auto path = currentRepository_->path;
+  const auto* selected = account(accountId, path);
+  const auto selectedAccount = selected ? std::optional<Account>(*selected) : std::nullopt;
+  const auto profile = valueNamed(state_.sshProfiles, resolvedSshProfileId(path));
+  const auto git = git_;
+  const auto auth = auth_;
+  const auto ssh = ssh_;
+  runAsync<bool>(QStringLiteral("origin-tag"),
+      [git, auth, ssh, path, selectedAccount, profile, tag, expected] {
+        const auto credentials = originCredentials(*git, *auth, *ssh, path, true, selectedAccount, profile);
+        git->deleteOriginTag(path, tag, expected, credentials.token, credentials.handle, credentials.sshCommand);
+        return true;
+      },
+      [this, path, tag](bool) { emit originTagChanged(path, tr("Deleted tag %1 on origin.").arg(tag)); });
+}
+
+void RelayController::planRebase(const QString& onto) {
+  if (!currentRepository_) return;
+  const auto path = currentRepository_->path;
+  const auto git = git_;
+  runAsync<RebasePlan>(QStringLiteral("plan-rebase"),
+      [git, path, onto] { return git->planRebase(path, onto); },
+      [this, path](RebasePlan plan) { emit rebasePlanReady(path, plan); },
+      [this, path] { return currentRepository_ && currentRepository_->path == path; });
+}
+
+void RelayController::requestUnpublishedCommits() {
+  if (!currentRepository_) return;
+  const auto path = currentRepository_->path;
+  const auto git = git_;
+  runAsync<QList<UnpublishedCommit>>(QStringLiteral("unpublished-commits"),
+      [git, path] { return git->readUnpublishedCommits(path); },
+      [this, path](QList<UnpublishedCommit> commits) { emit unpublishedCommitsReady(path, commits); },
+      [this, path] { return currentRepository_ && currentRepository_->path == path; });
+}
+
+void RelayController::rewriteUnpublishedCommits(const QList<CommitRewriteStep>& steps) {
+  if (!currentRepository_) return;
+  if (repositoryMutationActive_) {
+    emit operationFailed(QStringLiteral("repository-action"), tr("Wait for the current Git operation to finish."));
+    return;
+  }
+  const auto identity = commitIdentity();
+  if (identity.name.isEmpty() || identity.email.isEmpty()) {
+    emit operationFailed(QStringLiteral("repository-action"), tr("Set a Git name and email in Settings, or select a GitHub account before creating commits."));
+    return;
+  }
+  const auto path = currentRepository_->path;
+  const auto generation = ++repositoryGeneration_;
+  invalidateRepositoryRequests();
+  const auto git = git_;
+  const auto operationGate = config_.operationGate;
+  struct Result { Repository repository; QString error; };
+  runAsync<Result>(QStringLiteral("repository-action"),
+      [git, operationGate, path, steps, identity] {
+        invokeGate(operationGate, QStringLiteral("repository-action"), path);
+        QString error;
+        try { git->rewriteUnpublishedCommits(path, steps, identity); }
+        catch (const ProcessError& failure) { error = failure.qMessage(); }
+        // A conflict stops inside the rebase; publish that state either way.
+        return Result{git->readRepository(path), error};
+      }, [this, generation, path](Result result) {
+        if (!result.error.isEmpty()) emit operationFailed(QStringLiteral("repository-action"), tr("%1: %2").arg(result.repository.name, result.error));
+        if (generation != repositoryGeneration_ || !currentRepository_ || currentRepository_->path != path) return;
+        currentRepository_ = std::make_unique<Repository>(result.repository);
+        emit currentRepositoryChanged(result.repository);
+        rememberRepository(result.repository);
+      });
+}
+
+void RelayController::openPullRequest(const QString& accountId) {
+  if (!currentRepository_) return;
+  const auto repositoryPath = currentRepository_->path;
+  const auto branch = currentRepository_->branch;
+  const auto github = GitHubApi::repositoryFromRemote(currentRepository_->remote);
+  if (!github) {
+    emit operationFailed(QStringLiteral("pull-request"), tr("Pull requests need an origin remote on GitHub.com."));
+    return;
+  }
+  const auto refs = currentRepository_->historyRefState.split(u'\n', Qt::SkipEmptyParts);
+  const auto published = QStringLiteral("refs/remotes/origin/%1 ").arg(branch);
+  if (!currentRepository_->hasHead || branch == QStringLiteral("detached HEAD") ||
+      std::none_of(refs.cbegin(), refs.cend(), [&published](const QString& line) { return line.startsWith(published); })) {
+    emit operationFailed(QStringLiteral("pull-request"), tr("Push %1 to origin before opening a pull request.").arg(branch));
+    return;
+  }
+  const auto* selected = account(accountId, repositoryPath);
+  const auto selectedAccount = selected ? std::optional<Account>(*selected) : std::nullopt;
+  const auto auth = auth_;
+  const auto api = github_;
+  const auto repository = *github;
+  runAsync<QString>(QStringLiteral("pull-request"),
+      [auth, api, repository, branch, selectedAccount] {
+        // Without a GitHub account the creation page still works, and GitHub
+        // itself links to an existing pull request from it.
+        if (!selectedAccount) return QString{};
+        const auto token = auth->accountToken(selectedAccount->handle);
+        return api->openPullRequestUrl(token, selectedAccount->handle, repository, branch);
+      },
+      [this, repositoryPath, repository, branch](QString existing) {
+        if (existing.isEmpty()) emit pullRequestReady(repositoryPath, GitHubApi::pullRequestCreationUrl(repository, branch), false);
+        else emit pullRequestReady(repositoryPath, existing, true);
+      });
+}
+
+void RelayController::deleteOriginBranch(const QString& accountId, const QString& branch, const QString& expected) {
+  if (!currentRepository_) return;
+  if (repositoryMutationActive_) {
+    emit operationFailed(QStringLiteral("delete-remote-branch"), QStringLiteral("Wait for the current Git operation to finish."));
+    return;
+  }
+  const auto repositoryPath = currentRepository_->path;
+  const auto selected = account(accountId, repositoryPath);
+  const auto selectedAccount = selected ? std::optional<Account>(*selected) : std::nullopt;
+  const auto profile = valueNamed(state_.sshProfiles, resolvedSshProfileId(repositoryPath));
+  const auto generation = ++repositoryGeneration_;
+  invalidateRepositoryRequests();
+  const auto git = git_;
+  const auto auth = auth_;
+  const auto ssh = ssh_;
+  const auto operationGate = config_.operationGate;
+  runAsync<Repository>(QStringLiteral("delete-remote-branch"),
+                       [git, auth, ssh, operationGate, repositoryPath, selectedAccount, profile, branch, expected] {
+                         invokeGate(operationGate, QStringLiteral("delete-remote-branch"), repositoryPath);
+                         const auto credentials = originCredentials(*git, *auth, *ssh, repositoryPath, true, selectedAccount, profile);
+                         git->deleteOriginBranch(repositoryPath, branch, expected, credentials.token,
+                                                 credentials.handle, credentials.sshCommand);
                          return git->readRepository(repositoryPath);
                        },
                        [this, generation, repositoryPath](Repository repository) {
@@ -914,7 +1173,8 @@ void RelayController::executeRepositoryAction(const RepositoryAction action, con
   const auto identity = commitIdentity();
   const bool createsCommit = action == RepositoryAction::mergeBranch || action == RepositoryAction::revertCommit ||
       action == RepositoryAction::cherryPick || action == RepositoryAction::continueOperation ||
-      action == RepositoryAction::rebaseBranch || action == RepositoryAction::skipOperation || action == RepositoryAction::amendMessage;
+      action == RepositoryAction::rebaseBranch || action == RepositoryAction::rebasePublished ||
+      action == RepositoryAction::skipOperation || action == RepositoryAction::amendMessage;
   if (createsCommit && (identity.name.isEmpty() || identity.email.isEmpty())) {
     emit operationFailed(QStringLiteral("repository-action"), tr("Set a Git name and email in Settings, or select a GitHub account before creating commits."));
     return;

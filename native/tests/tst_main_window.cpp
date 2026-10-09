@@ -1,4 +1,5 @@
 #include "relay/main_window.hpp"
+#include "relay/compare_dialog.hpp"
 #include "relay/dialogs.hpp"
 #include "relay/relay_application.hpp"
 #include "relay/relay_controller.hpp"
@@ -22,14 +23,19 @@
 #include <QStatusBar>
 #include <QTimer>
 #include <QToolButton>
+#include <QInputDialog>
 #include <QMenu>
+#include <QMessageBox>
 #include <QSplitter>
+#include <QDesktopServices>
 #include <QDir>
+#include <QUrl>
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include <QListView>
+#include <QListWidget>
 #include <QProcess>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -45,6 +51,15 @@ void runGit(const QString& repository, const QStringList& arguments) {
   QVERIFY2(process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0,
            process.readAllStandardError().constData());
 }
+
+// Receives URLs that the window would open in the system browser.
+class UrlRecorder final : public QObject {
+  Q_OBJECT
+ public:
+  QList<QUrl> urls;
+ public slots:
+  void open(const QUrl& url) { urls.append(url); }
+};
 
 void createRepository(const QString& path) {
   runGit(path, {QStringLiteral("init"), QStringLiteral("--initial-branch=main")});
@@ -195,6 +210,505 @@ class MainWindowTest final : public QObject {
     checkout->click();
     QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->branch, QStringLiteral("review"), 10000);
     QCOMPARE(current->currentText(), QStringLiteral("review"));
+  }
+
+  void branchPickerChecksOutOriginOnlyBranch() {
+    QTemporaryDir temporary;
+    const auto seed = temporary.filePath(QStringLiteral("seed"));
+    const auto remote = temporary.filePath(QStringLiteral("remote.git"));
+    const auto local = temporary.filePath(QStringLiteral("local"));
+    QVERIFY(QDir{}.mkpath(seed));
+    createRepository(seed);
+    runGit(temporary.path(), {QStringLiteral("clone"), QStringLiteral("--bare"), seed, remote});
+    runGit(temporary.path(), {QStringLiteral("clone"), remote, local});
+    // Pushed after the clone: the local repository has no ref for it yet.
+    runGit(seed, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"), remote});
+    runGit(seed, {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("feature/origin-only")});
+    runGit(seed, {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Origin only")});
+    runGit(seed, {QStringLiteral("push"), QStringLiteral("origin"), QStringLiteral("feature/origin-only")});
+    relay::RelayControllerConfig config;
+    config.storeFile = temporary.filePath(QStringLiteral("state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show();
+    controller.start();
+    controller.openRepository(local);
+    auto* current = window.findChild<QComboBox*>(QStringLiteral("branchPicker"));
+    QVERIFY(current);
+    const auto ref = QStringLiteral("refs/remotes/origin/feature/origin-only");
+    const auto fetchItem = QStringLiteral("relay:fetch-origin-branches");
+    QTRY_VERIFY_WITH_TIMEOUT(current->findData(fetchItem) >= 0, 10000);
+    QTRY_VERIFY(current->isEnabled());
+    QCOMPARE(current->findData(ref), -1);
+    current->setCurrentIndex(current->findData(fetchItem));
+    QTRY_VERIFY_WITH_TIMEOUT(current->findData(ref) >= 0, 10000);
+    QCOMPARE(current->currentText(), QStringLiteral("main"));
+    QCOMPARE(controller.currentRepository()->branch, QStringLiteral("main"));
+    QTRY_VERIFY(current->isEnabled());
+    current->setCurrentIndex(current->findData(ref));
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->branch, QStringLiteral("feature/origin-only"), 10000);
+    QTRY_COMPARE(current->currentText(), QStringLiteral("feature/origin-only"));
+    QProcess upstream;
+    upstream.setWorkingDirectory(local);
+    upstream.start(QStringLiteral("git"), {QStringLiteral("rev-parse"), QStringLiteral("--abbrev-ref"), QStringLiteral("@{upstream}")});
+    QVERIFY(upstream.waitForFinished(10000));
+    QCOMPARE(QString::fromUtf8(upstream.readAllStandardOutput()).trimmed(), QStringLiteral("origin/feature/origin-only"));
+  }
+
+  void forcePushReplacesOriginAfterConfirmation() {
+    QTemporaryDir temporary;
+    const auto seed = temporary.filePath(QStringLiteral("seed"));
+    const auto remote = temporary.filePath(QStringLiteral("remote.git"));
+    const auto local = temporary.filePath(QStringLiteral("local"));
+    QVERIFY(QDir{}.mkpath(seed));
+    createRepository(seed);
+    runGit(temporary.path(), {QStringLiteral("clone"), QStringLiteral("--bare"), seed, remote});
+    runGit(temporary.path(), {QStringLiteral("clone"), remote, local});
+    runGit(local, {QStringLiteral("config"), QStringLiteral("user.name"), QStringLiteral("Relay Test")});
+    runGit(local, {QStringLiteral("config"), QStringLiteral("user.email"), QStringLiteral("relay@example.test")});
+    runGit(local, {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Published")});
+    runGit(local, {QStringLiteral("push"), QStringLiteral("origin"), QStringLiteral("main")});
+    runGit(local, {QStringLiteral("commit"), QStringLiteral("--amend"), QStringLiteral("--allow-empty"),
+                   QStringLiteral("-m"), QStringLiteral("Rewritten")});
+    const auto originSubject = [&remote] {
+      QProcess git;
+      git.start(QStringLiteral("git"), {QStringLiteral("-C"), remote, QStringLiteral("log"), QStringLiteral("-1"),
+                                        QStringLiteral("--format=%s"), QStringLiteral("main")});
+      git.waitForFinished(10000);
+      return QString::fromUtf8(git.readAllStandardOutput()).trimmed();
+    };
+    relay::RelayControllerConfig config;
+    config.storeFile = temporary.filePath(QStringLiteral("state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show();
+    controller.start();
+    controller.openRepository(local);
+    auto* force = window.findChild<QAction*>(QStringLiteral("forcePushAction"));
+    QVERIFY(force);
+    QTRY_VERIFY_WITH_TIMEOUT(force->isEnabled(), 10000);
+
+    // Cancel is the default and changes nothing.
+    QTimer::singleShot(0, &window, [&window] {
+      if (auto* box = window.findChild<QMessageBox*>(QStringLiteral("forcePushDialog"))) box->reject();
+    });
+    force->trigger();
+    QCOMPARE(originSubject(), QStringLiteral("Published"));
+
+    QTimer::singleShot(0, &window, [&window] {
+      auto* box = window.findChild<QMessageBox*>(QStringLiteral("forcePushDialog"));
+      QVERIFY(box);
+      QVERIFY(box->informativeText().contains(QStringLiteral("origin/main")));
+      if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+        QDir().mkpath(output);
+        box->grab().save(QDir(output).filePath(QStringLiteral("force-push.png")));
+      }
+      box->findChild<QPushButton*>(QStringLiteral("forcePushButton"))->click();
+    });
+    force->trigger();
+    QTRY_COMPARE_WITH_TIMEOUT(originSubject(), QStringLiteral("Rewritten"), 10000);
+  }
+
+  void deletesBranchOnOriginAfterConfirmation() {
+    QTemporaryDir temporary;
+    const auto seed = temporary.filePath(QStringLiteral("seed"));
+    const auto remote = temporary.filePath(QStringLiteral("remote.git"));
+    const auto local = temporary.filePath(QStringLiteral("local"));
+    QVERIFY(QDir{}.mkpath(seed));
+    createRepository(seed);
+    runGit(seed, {QStringLiteral("branch"), QStringLiteral("finished")});
+    runGit(temporary.path(), {QStringLiteral("clone"), QStringLiteral("--bare"), seed, remote});
+    runGit(temporary.path(), {QStringLiteral("clone"), remote, local});
+    const auto originHas = [&remote](const QString& branch) {
+      QProcess git;
+      git.start(QStringLiteral("git"), {QStringLiteral("-C"), remote, QStringLiteral("for-each-ref"), QStringLiteral("refs/heads/") + branch});
+      git.waitForFinished(10000);
+      return !git.readAllStandardOutput().trimmed().isEmpty();
+    };
+    relay::RelayControllerConfig config;
+    config.storeFile = temporary.filePath(QStringLiteral("state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show();
+    controller.start();
+    controller.openRepository(local);
+    auto* remove = window.findChild<QAction*>(QStringLiteral("deleteOriginBranchAction"));
+    QVERIFY(remove);
+    QTRY_VERIFY_WITH_TIMEOUT(remove->isEnabled(), 10000);
+
+    bool confirmed = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* chooser = window.findChild<QInputDialog*>();
+      QVERIFY(chooser);
+      QVERIFY(chooser->comboBoxItems().contains(QStringLiteral("finished")));
+      QTimer::singleShot(0, &window, [&] {
+        auto* box = window.findChild<QMessageBox*>(QStringLiteral("deleteOriginBranchDialog"));
+        QVERIFY(box);
+        QVERIFY(box->text().contains(QStringLiteral("finished")));
+        if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+          QDir().mkpath(output);
+          box->grab().save(QDir(output).filePath(QStringLiteral("delete-origin-branch.png")));
+        }
+        box->findChild<QPushButton*>(QStringLiteral("deleteOriginBranchButton"))->click();
+        confirmed = true;
+      });
+      chooser->setTextValue(QStringLiteral("finished"));
+      chooser->accept();
+    });
+    remove->trigger();
+    QVERIFY(confirmed);
+    QTRY_VERIFY_WITH_TIMEOUT(!originHas(QStringLiteral("finished")), 10000);
+    QVERIFY(originHas(QStringLiteral("main")));
+    QTRY_VERIFY(!controller.currentRepository()->remoteBranches.contains(QStringLiteral("origin/finished")));
+  }
+
+  void opensPullRequestPageForPublishedGitHubBranch() {
+    QTemporaryDir temporary;
+    createRepository(temporary.path());
+    runGit(temporary.path(), {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("feature/pr")});
+    runGit(temporary.path(), {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"),
+                              QStringLiteral("https://github.com/octo/relay.git")});
+    relay::RelayControllerConfig config;
+    config.storeFile = temporary.filePath(QStringLiteral("profile/state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show();
+    controller.start();
+    controller.openRepository(temporary.path());
+    auto* action = window.findChild<QAction*>(QStringLiteral("pullRequestAction"));
+    QVERIFY(action);
+    QTRY_VERIFY_WITH_TIMEOUT(action->isEnabled(), 10000);
+    UrlRecorder recorder;
+    QDesktopServices::setUrlHandler(QStringLiteral("https"), &recorder, "open");
+    QSignalSpy failures(&controller, &relay::RelayController::operationFailed);
+
+    // An unpublished branch has nothing on GitHub to compare yet.
+    action->trigger();
+    QTRY_COMPARE(failures.size(), 1);
+    QVERIFY(failures.first().at(1).toString().contains(QStringLiteral("Push feature/pr")));
+    QVERIFY(recorder.urls.isEmpty());
+
+    // Pushes go to a local bare repository; the fetch URL stays on GitHub.
+    const auto bare = temporary.filePath(QStringLiteral("pushed.git"));
+    runGit(temporary.path(), {QStringLiteral("init"), QStringLiteral("--bare"), bare});
+    runGit(temporary.path(), {QStringLiteral("remote"), QStringLiteral("set-url"), QStringLiteral("--push"), QStringLiteral("origin"), bare});
+    runGit(temporary.path(), {QStringLiteral("push"), QStringLiteral("--set-upstream"), QStringLiteral("origin"), QStringLiteral("feature/pr")});
+    runGit(temporary.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Unpushed")});
+    controller.refreshRepository();
+    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository()->ahead == 1, 10000);
+    QTRY_VERIFY(action->isEnabled());
+    bool prompted = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* box = window.findChild<QMessageBox*>(QStringLiteral("pullRequestUnpushedDialog"));
+      QVERIFY(box);
+      prompted = true;
+      box->defaultButton()->click();
+    });
+    action->trigger();
+    QVERIFY(prompted);
+    QTRY_COMPARE_WITH_TIMEOUT(recorder.urls.size(), 1, 10000);
+    QCOMPARE(controller.currentRepository()->ahead, 0);
+    QDesktopServices::unsetUrlHandler(QStringLiteral("https"));
+    QCOMPARE(recorder.urls.first(), QUrl(QStringLiteral("https://github.com/octo/relay/compare/feature/pr?expand=1")));
+  }
+
+  void squashesUnpublishedCommitsFromTheMenu() {
+    QTemporaryDir temporary;
+    createRepository(temporary.path());
+    runGit(temporary.path(), {QStringLiteral("update-ref"), QStringLiteral("refs/remotes/origin/main"), QStringLiteral("HEAD")});
+    runGit(temporary.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("First")});
+    runGit(temporary.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Second")});
+    QTemporaryDir profile;
+    relay::RelayControllerConfig config;
+    config.storeFile = profile.filePath(QStringLiteral("state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show();
+    controller.start();
+    controller.openRepository(temporary.path());
+    auto* action = window.findChild<QAction*>(QStringLiteral("rewriteCommitsAction"));
+    QVERIFY(action);
+    QTRY_VERIFY_WITH_TIMEOUT(action->isEnabled(), 10000);
+    // The dialog is modal and opens once the commits have been read.
+    bool shown = false;
+    QTimer poll;
+    connect(&poll, &QTimer::timeout, &window, [&] {
+      auto* dialog = window.findChild<relay::CommitRewriteDialog*>();
+      if (!dialog || !dialog->isVisible()) return;
+      poll.stop();
+      auto* list = dialog->findChild<QListWidget*>(QStringLiteral("rewriteList"));
+      QCOMPARE(list->count(), 2);
+      list->item(0)->setCheckState(Qt::Checked);
+      if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+        QDir().mkpath(output);
+        dialog->grab().save(QDir(output).filePath(QStringLiteral("rewrite-commits.png")));
+      }
+      shown = true;
+      dialog->findChild<QPushButton*>(QStringLiteral("rewriteAccept"))->click();
+    });
+    poll.start(50);
+    action->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(shown, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->history.value(0).title, QStringLiteral("First"), 10000);
+    QCOMPARE(controller.currentRepository()->history.value(1).title, QStringLiteral("Initial commit"));
+  }
+
+  void comparesBranchesAndMergesFromTheDialog() {
+    QTemporaryDir temporary;
+    createRepository(temporary.path());
+    runGit(temporary.path(), {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("feature")});
+    QFile file(temporary.filePath(QStringLiteral("feature.txt")));
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("feature\n");
+    file.close();
+    runGit(temporary.path(), {QStringLiteral("add"), QStringLiteral("feature.txt")});
+    runGit(temporary.path(), {QStringLiteral("commit"), QStringLiteral("-m"), QStringLiteral("Feature work")});
+    runGit(temporary.path(), {QStringLiteral("switch"), QStringLiteral("main")});
+    QTemporaryDir profile;
+    relay::RelayControllerConfig config;
+    config.storeFile = profile.filePath(QStringLiteral("state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show();
+    controller.start();
+    controller.openRepository(temporary.path());
+    auto* action = window.findChild<QAction*>(QStringLiteral("compareBranchesAction"));
+    QVERIFY(action);
+    QTRY_VERIFY_WITH_TIMEOUT(action->isEnabled(), 10000);
+    action->trigger();
+    auto* dialog = window.findChild<relay::CompareDialog*>();
+    QVERIFY(dialog && dialog->isVisible());
+    auto* base = dialog->findChild<QComboBox*>(QStringLiteral("compareBase"));
+    auto* head = dialog->findChild<QComboBox*>(QStringLiteral("compareHead"));
+    QCOMPARE(base->currentData().toString(), QStringLiteral("refs/heads/main"));
+    QCOMPARE(head->currentData().toString(), QStringLiteral("refs/heads/feature"));
+    auto* tabs = dialog->findChild<QTabWidget*>();
+    QTRY_COMPARE_WITH_TIMEOUT(tabs->tabText(0), QStringLiteral("1 only in feature"), 10000);
+    QCOMPARE(tabs->tabText(1), QStringLiteral("0 only in main"));
+    auto* diff = static_cast<relay::DiffView*>(dialog->findChild<QWidget*>(QStringLiteral("compareDiff")));
+    QVERIFY(diff);
+    QTRY_VERIFY_WITH_TIMEOUT(diff->diffModel()->rowCount() > 0, 10000);
+    tabs->setCurrentIndex(2);
+    if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+      QDir().mkpath(output);
+      dialog->grab().save(QDir(output).filePath(QStringLiteral("compare-branches.png")));
+    }
+    auto* merge = dialog->findChild<QPushButton*>(QStringLiteral("compareMerge"));
+    QVERIFY(merge->isVisible());
+    QTimer::singleShot(0, &window, [&dialog] {
+      if (auto* box = dialog->findChild<QMessageBox*>()) box->button(QMessageBox::Ok)->click();
+    });
+    merge->click();
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->history.value(0).title, QStringLiteral("Feature work"), 10000);
+    // The open dialog follows the repository: nothing is left to merge.
+    QTRY_COMPARE_WITH_TIMEOUT(tabs->tabText(0), QStringLiteral("0 only in feature"), 10000);
+    QVERIFY(!merge->isVisible());
+  }
+
+  void commitsWithARecentCoAuthor() {
+    QTemporaryDir temporary;
+    createRepository(temporary.path());
+    runGit(temporary.path(), {QStringLiteral("-c"), QStringLiteral("user.name=Ada Lovelace"), QStringLiteral("-c"),
+                              QStringLiteral("user.email=ada@example.com"), QStringLiteral("commit"), QStringLiteral("--allow-empty"),
+                              QStringLiteral("-m"), QStringLiteral("Ada's work")});
+    QFile readme(temporary.filePath(QStringLiteral("README.md")));
+    QVERIFY(readme.open(QIODevice::Append));
+    readme.write("more\n");
+    readme.close();
+    QTemporaryDir profile;
+    relay::RelayControllerConfig config;
+    config.storeFile = profile.filePath(QStringLiteral("state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show();
+    controller.start();
+    controller.openRepository(temporary.path());
+    auto* coAuthors = window.findChild<QLineEdit*>(QStringLiteral("commitCoAuthors"));
+    auto* recent = window.findChild<QToolButton*>(QStringLiteral("coAuthorButton"));
+    auto* summary = window.findChild<QLineEdit*>(QStringLiteral("commitSummary"));
+    auto* commit = window.findChild<QPushButton*>(QStringLiteral("commitButton"));
+    QVERIFY(coAuthors && recent && summary && commit);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository() && !controller.currentRepository()->files.isEmpty(), 10000);
+    emit recent->menu()->aboutToShow();
+    const auto actions = recent->menu()->actions();
+    const auto ada = std::find_if(actions.cbegin(), actions.cend(), [](QAction* action) { return action->text() == QStringLiteral("Ada Lovelace <ada@example.com>"); });
+    QVERIFY(ada != actions.cend());
+    (*ada)->trigger();
+    QCOMPARE(coAuthors->text(), QStringLiteral("Ada Lovelace <ada@example.com>"));
+    summary->setText(QStringLiteral("Pair on README"));
+    QTRY_VERIFY(commit->isEnabled());
+    if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+      QDir().mkpath(output);
+      window.grab().save(QDir(output).filePath(QStringLiteral("commit-co-authors.png")));
+    }
+    commit->click();
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->history.value(0).title, QStringLiteral("Pair on README"), 10000);
+    QVERIFY(coAuthors->text().isEmpty());
+    QProcess git;
+    git.start(QStringLiteral("git"), {QStringLiteral("-C"), temporary.path(), QStringLiteral("log"), QStringLiteral("-1"), QStringLiteral("--format=%B")});
+    QVERIFY(git.waitForFinished(10000));
+    QVERIFY(QString::fromUtf8(git.readAllStandardOutput()).contains(QStringLiteral("Co-authored-by: Ada Lovelace <ada@example.com>")));
+  }
+
+  void pushesAndDeletesTagsOnOrigin() {
+    QTemporaryDir temporary;
+    const auto seed = temporary.filePath(QStringLiteral("seed"));
+    const auto remote = temporary.filePath(QStringLiteral("remote.git"));
+    const auto local = temporary.filePath(QStringLiteral("local"));
+    QVERIFY(QDir{}.mkpath(seed));
+    createRepository(seed);
+    runGit(temporary.path(), {QStringLiteral("clone"), QStringLiteral("--bare"), seed, remote});
+    runGit(temporary.path(), {QStringLiteral("clone"), remote, local});
+    runGit(local, {QStringLiteral("tag"), QStringLiteral("v2.0")});
+    const auto originTags = [&remote] {
+      QProcess git;
+      git.start(QStringLiteral("git"), {QStringLiteral("-C"), remote, QStringLiteral("tag"), QStringLiteral("--list")});
+      git.waitForFinished(10000);
+      return QString::fromUtf8(git.readAllStandardOutput()).trimmed();
+    };
+    QTemporaryDir profile;
+    relay::RelayControllerConfig config;
+    config.storeFile = profile.filePath(QStringLiteral("state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show();
+    controller.start();
+    controller.openRepository(local);
+    auto* push = window.findChild<QAction*>(QStringLiteral("pushTagAction"));
+    auto* remove = window.findChild<QAction*>(QStringLiteral("deleteOriginTagAction"));
+    QVERIFY(push && remove);
+    QTRY_VERIFY_WITH_TIMEOUT(push->isEnabled() && remove->isEnabled(), 10000);
+
+    // Answers each modal dialog as it appears.
+    QStringList answered;
+    QTimer poll;
+    connect(&poll, &QTimer::timeout, &window, [&] {
+      if (auto* chooser = qobject_cast<QInputDialog*>(QApplication::activeModalWidget())) {
+        QVERIFY(chooser->comboBoxItems().contains(QStringLiteral("v2.0")));
+        chooser->setTextValue(QStringLiteral("v2.0"));
+        answered.append(chooser->windowTitle());
+        chooser->accept();
+      } else if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+                 box && box->objectName() == QStringLiteral("deleteOriginTagDialog")) {
+        answered.append(box->objectName());
+        box->findChild<QPushButton*>(QStringLiteral("deleteOriginTagButton"))->click();
+      }
+    });
+    poll.start(30);
+    push->trigger();
+    QTRY_COMPARE_WITH_TIMEOUT(originTags(), QStringLiteral("v2.0"), 10000);
+    QTRY_VERIFY(remove->isEnabled());
+    remove->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(originTags().isEmpty(), 10000);
+    QCOMPARE(answered, (QStringList{QStringLiteral("Push tag to origin"), QStringLiteral("Delete tag on origin"), QStringLiteral("deleteOriginTagDialog")}));
+    QVERIFY(controller.currentRepository()->tags.contains(QStringLiteral("v2.0")));
+  }
+
+  void rebasesPublishedCommitsThenOffersForcePush() {
+    QTemporaryDir temporary;
+    const auto seed = temporary.filePath(QStringLiteral("seed"));
+    const auto remote = temporary.filePath(QStringLiteral("remote.git"));
+    const auto local = temporary.filePath(QStringLiteral("local"));
+    QVERIFY(QDir{}.mkpath(seed));
+    createRepository(seed);
+    runGit(temporary.path(), {QStringLiteral("clone"), QStringLiteral("--bare"), seed, remote});
+    runGit(temporary.path(), {QStringLiteral("clone"), remote, local});
+    runGit(local, {QStringLiteral("config"), QStringLiteral("user.name"), QStringLiteral("Relay Test")});
+    runGit(local, {QStringLiteral("config"), QStringLiteral("user.email"), QStringLiteral("relay@example.test")});
+    runGit(local, {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("feature")});
+    runGit(local, {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Feature")});
+    runGit(local, {QStringLiteral("push"), QStringLiteral("-u"), QStringLiteral("origin"), QStringLiteral("feature")});
+    runGit(local, {QStringLiteral("switch"), QStringLiteral("main")});
+    runGit(local, {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Main moved")});
+    runGit(local, {QStringLiteral("switch"), QStringLiteral("feature")});
+    const auto originFeature = [&remote] {
+      QProcess git;
+      git.start(QStringLiteral("git"), {QStringLiteral("-C"), remote, QStringLiteral("log"), QStringLiteral("--format=%s"), QStringLiteral("feature")});
+      git.waitForFinished(10000);
+      return QString::fromUtf8(git.readAllStandardOutput()).trimmed();
+    };
+    QTemporaryDir profile;
+    relay::RelayControllerConfig config;
+    config.storeFile = profile.filePath(QStringLiteral("state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show();
+    controller.start();
+    controller.openRepository(local);
+    auto* rebase = window.findChild<QAction*>(QStringLiteral("rebaseBranchAction"));
+    QVERIFY(rebase);
+    QTRY_VERIFY_WITH_TIMEOUT(rebase->isEnabled(), 10000);
+    QStringList answered;
+    QTimer poll;
+    connect(&poll, &QTimer::timeout, &window, [&] {
+      auto* modal = QApplication::activeModalWidget();
+      if (auto* chooser = qobject_cast<QInputDialog*>(modal)) {
+        chooser->setTextValue(QStringLiteral("main"));
+        answered.append(QStringLiteral("chooser"));
+        chooser->accept();
+      } else if (auto* box = qobject_cast<QMessageBox*>(modal); box && box->objectName() == QStringLiteral("rebasePublishedDialog")) {
+        answered.append(box->objectName());
+        box->findChild<QPushButton*>(QStringLiteral("rebasePublishedButton"))->click();
+      } else if (box && box->objectName() == QStringLiteral("forcePushDialog")) {
+        answered.append(box->objectName());
+        box->findChild<QPushButton*>(QStringLiteral("forcePushButton"))->click();
+      }
+    });
+    poll.start(30);
+    rebase->trigger();
+    QTRY_COMPARE_WITH_TIMEOUT(originFeature(), QStringLiteral("Feature\nMain moved\nInitial commit"), 15000);
+    QCOMPARE(answered, (QStringList{QStringLiteral("chooser"), QStringLiteral("rebasePublishedDialog"), QStringLiteral("forcePushDialog")}));
+  }
+
+  void divergedPullRebasesWithoutAskingTwice() {
+    QTemporaryDir temporary;
+    const auto seed = temporary.filePath(QStringLiteral("seed"));
+    const auto remote = temporary.filePath(QStringLiteral("remote.git"));
+    const auto local = temporary.filePath(QStringLiteral("local"));
+    QVERIFY(QDir{}.mkpath(seed));
+    createRepository(seed);
+    runGit(temporary.path(), {QStringLiteral("clone"), QStringLiteral("--bare"), seed, remote});
+    runGit(temporary.path(), {QStringLiteral("clone"), remote, local});
+    runGit(local, {QStringLiteral("config"), QStringLiteral("user.name"), QStringLiteral("Relay Test")});
+    runGit(local, {QStringLiteral("config"), QStringLiteral("user.email"), QStringLiteral("relay@example.test")});
+    runGit(seed, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"), remote});
+    runGit(seed, {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Theirs")});
+    runGit(seed, {QStringLiteral("push"), QStringLiteral("origin"), QStringLiteral("main")});
+    runGit(local, {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), QStringLiteral("Mine")});
+    QTemporaryDir profile;
+    relay::RelayControllerConfig config;
+    config.storeFile = profile.filePath(QStringLiteral("state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show();
+    controller.start();
+    controller.openRepository(local);
+    auto* pull = window.findChild<QAction*>(QStringLiteral("pullAction"));
+    QTRY_VERIFY_WITH_TIMEOUT(pull->isEnabled(), 10000);
+    QStringList answered;
+    QTimer poll;
+    connect(&poll, &QTimer::timeout, &window, [&] {
+      auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      if (!box) return;
+      answered.append(box->objectName());
+      if (auto* rebase = box->findChild<QPushButton*>(QStringLiteral("pullRebaseButton"))) rebase->click();
+      else box->reject();
+    });
+    poll.start(30);
+    pull->trigger();
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->history.value(1).title, QStringLiteral("Theirs"), 15000);
+    QCOMPARE(controller.currentRepository()->history.value(0).title, QStringLiteral("Mine"));
+    QCOMPARE(answered, QStringList{QStringLiteral("pullDivergedDialog")});
   }
 
   void toolbarPullFetchesUnknownRemoteChanges() {

@@ -40,9 +40,15 @@ Relay provides these flows:
 - View working-tree changes, textual diffs and bounded image previews.
 - Browse history as a list or an all-branch graph, scoped to the current
   branch, all branches, or a chosen local or remote branch.
-- Commit selected files; fetch, pull (fast-forward) and push `origin`.
+- Commit selected files; fetch, pull (fast-forward), push and lease-protected
+  force push to `origin`; delete branches on `origin`.
+- Create or open the current branch's GitHub pull request in the browser.
+- Squash, reorder and reword commits that are not on any remote yet.
+- Compare two local or remote branches and merge the compared branch.
+- Open the repository in an external editor, Terminal, or Finder/Explorer.
+- Add co-authors to a commit; push tags to origin and delete tags on origin.
 - Switch to local or remote-tracking branches; create, rename and delete local
-  branches; merge, rebase unpublished commits, revert, cherry-pick (including
+  branches; merge, rebase (published commits only after a warning), revert, cherry-pick (including
   several commits), stash, recoverable discard, undo, amend, tags, and conflict
   resolution.
 - Select an SSH identity per repository for any SSH host, including GitHub.
@@ -92,8 +98,8 @@ must also be checked manually.
 - Public repository: <https://github.com/ka-capek/relay-desktop>
 - Default branch: `main`
 - Version: `project(RelayNative VERSION ...)` in `CMakeLists.txt`, currently
-  `0.5.3`. CI names installers from it.
-- Releases so far are prereleases (`v0.5.1`, `v0.5.2`, `v0.5.3`). They use
+  `0.5.4`. CI names installers from it.
+- Releases so far are prereleases (`v0.5.1` to `v0.5.4`). They use
   external Git/gh and do not satisfy the stable bundled-runtime distribution
   gate. `v0.5.0` was the last Electron release.
 - Release page: <https://github.com/ka-capek/relay-desktop/releases>
@@ -246,9 +252,10 @@ with the same controller/service boundary as existing operations.
 - Do not globally enable literal pathspecs for stash commands. Git's internal
   cleanup depends on generated magic pathspecs. Other user path arguments remain
   literal. Apply stashes with `--index`, and retain the stash until explicit drop.
-- Known published commits cannot be undone/amended/rebased here. Local branch
-  deletion additionally requires containment in the current branch. No force
-  push is offered. Merge commits revert/cherry-pick against their first parent.
+- Known published commits cannot be undone/amended here; rebasing them needs
+  the explicit `rebasePublished` confirmation (section 12.6). Local branch
+  deletion additionally requires containment in the current branch. Force
+  push exists only in its lease-protected form (section 12.6). Merge commits revert/cherry-pick against their first parent.
 - File previews are worker-produced `FilePreview` values. Widgets never read
   files. Raster images are bounded to 10 MiB encoded and 16 megapixels decoded.
   Symlinks do not dereference to target content. Decode failures must not be
@@ -656,6 +663,20 @@ It keeps only repositories the account can push to that are not archived, and
 the dialog says how many were hidden. Commit-email choices come from
 `GET /user/emails` when the `user:email` scope is available.
 
+### Pull requests
+
+**Repository → Create or open pull request** applies to a `github.com` origin
+(`GitHubApi::repositoryFromRemote()` anchors the whole host and validates
+owner/name). The branch must exist as `refs/remotes/origin/<branch>`. With
+unpushed commits the window offers **Push first** (then continues only if the
+push left `ahead == 0`) or opening anyway. With a GitHub account the worker
+calls `GET /repos/{owner}/{repo}/pulls?state=open&head={owner}:{branch}`;
+an existing PR's `html_url` is opened only if it is exactly
+`https://github.com/{owner}/{repo}/pull/<number>`. Otherwise, and without an
+account, `https://github.com/{owner}/{repo}/compare/<branch>?expand=1` opens.
+The URL reaches the window through `pullRequestReady`; tokens never do. A
+fork's pull request to its parent is chosen on GitHub's page.
+
 API requests run in controller workers. Never hand a token to a widget so it
 can call GitHub itself. Gitea/Forgejo/GitLab discovery is described in section
 18 ("Native multi-host and branch work").
@@ -809,6 +830,13 @@ Commit behavior is intentionally file-selective:
 
 Do not silently commit every working-tree change.
 
+Co-authors come from the commit box's field (`Name <email>`, comma- or
+line-separated; **Recent** offers up to 15 authors from the repository's
+latest history). `GitService::parseCoAuthors()` rejects anything else,
+including control characters and `:` in names, drops duplicates and the
+committer, and `commitFiles()` parses again before adding each one as
+`--trailer=Co-authored-by: Name <email>`.
+
 An account with a `signingKey` (a path to an SSH key, account menu → Commit
 signing) signs its commits, including merges, reverts, cherry-picks, rebases
 and amends. `GitService::addSigningConfiguration()` appends `gpg.format=ssh`,
@@ -820,6 +848,66 @@ configuration decides.
 
 - Fetch runs `git fetch origin --prune`.
 - Push runs `git push --set-upstream origin HEAD`.
+- Force push (Repository menu and the sync menu, **Force push origin…**) is
+  enabled when `refs/remotes/origin/<branch>` exists. The confirmation names
+  the last fetched origin tip; that full hash travels to the service, which
+  refuses if the tracking ref has moved since and then runs
+  `git push --set-upstream --force-with-lease=refs/heads/<b>:<hash> origin
+  HEAD:refs/heads/<b>`. Origin changed after the fetch is a "stale info"
+  rejection with an actionable message. Never use a bare `--force` or a lease
+  without an explicit expected hash: a background fetch would defeat it.
+- **Repository → Push tag to origin… / Delete tag on origin…** push one
+  local tag as `refs/tags/<t>:refs/tags/<t>` without force (a different tag
+  of that name on origin is reported, not replaced), or list origin's tags
+  with `ls-remote --tags --refs` and delete the chosen one with
+  `--force-with-lease=refs/tags/<t>:<listed id>`. Local tags are never
+  touched. All origin network operations share `GitService::originTransport()`
+  and the controller's worker-only `originCredentials()`.
+- **Repository → Open in <editor> / Open in Terminal / Show in Finder
+  (Explorer)** (`Ctrl+Shift+A`, ``Ctrl+` ``, `Ctrl+Shift+F`) go through
+  `RelayController::openRepositoryIn()` to `ExternalApps`
+  (`external_apps.cpp`) on a worker. Programs start detached with the
+  repository folder as a single argument and working directory, never through
+  a shell. macOS uses `/usr/bin/open -a <app|Terminal>` and `open <folder>`;
+  Windows uses the editor executable, Windows Terminal (`wt.exe -d`) or
+  `%ComSpec% /K` in the folder, and `explorer.exe`. Editors are detected in
+  standard install locations; `preferences.editorId` (detected id, `custom`,
+  or empty for the first detected) and `preferences.editorPath` (custom
+  absolute `.app` or executable) persist the choice. Widgets receive only
+  editor ids and names (`editorsDetected`); detection runs at startup with
+  the runtime check and again when Settings opens.
+- **Repository → Compare branches…** opens the non-modal `CompareDialog`
+  (`compare_dialog.cpp`). It only emits requests; `compareBranches()` accepts
+  `refs/heads/` and `refs/remotes/` refs, lists up to 500 commits on each side
+  and the files changed from the merge base (or the base tip for unrelated
+  histories) to the compared tip, like a pull request. File diffs come from
+  `readComparisonFileDiff()` with validated hashes. Results carry their refs
+  and own request generations, so stale ones are dropped. The dialog follows
+  repository refreshes, closes on a repository switch, preselects the
+  History scope's branch, and offers **Merge X into current** (the existing
+  merge action) when the base is the current branch.
+- **Repository → Squash and reorder commits…** reads commits in
+  `HEAD --not --remotes` (newest first, at most 100, no merges) through
+  `readUnpublishedCommits()`. `CommitRewriteDialog` reorders them (drag or
+  Move up/down), squashes a checked row into the row below, and edits the
+  group's message (default: the group's messages oldest first).
+  `rewriteUnpublishedCommits()` requires a clean worktree and a plan naming
+  exactly the unpublished commits once, then writes a `pick`/`fixup` todo
+  plus `exec git commit --amend --only -F <file>` for new messages under
+  `git-path relay-rewrite/`, and runs `git rebase --interactive --empty=keep`
+  with `GIT_SEQUENCE_EDITOR=cp '<todo>'` (POSIX-quoted; Git for Windows' sh
+  has `cp`), `rebase.updateRefs=false` and `rebase.autoSquash=false`, onto
+  the oldest commit's parent or `--root`. A conflict leaves an ordinary
+  rebase for the conflict dialog; `relay-rewrite/` is removed when the rebase
+  ends, including through continue/skip/abort. Identity and signing follow
+  other commit-producing actions.
+- **Repository → Delete branch on origin…** lists fetched `origin/*` branches
+  (the History scope's origin branch first), confirms with the tip's full
+  hash for recovery, and runs `git push --force-with-lease=refs/heads/<b>:<hash>
+  origin :refs/heads/<b>` with the same credential/SSH routing as push. The
+  service validates the name, requires the tracking ref to equal the
+  confirmed hash and refuses origin's default branch (`origin/HEAD`). Local
+  branches are never deleted by it. Other remotes are not offered.
 - Both accept an optional SSH command, applied only to an SSH remote.
 - Fetch/push require an `origin` remote.
 - Push requires a named local branch.
@@ -827,8 +915,16 @@ configuration decides.
   menu offers Fetch, Pull and Push directly. Pull fetches, then fast-forwards
   the origin upstream. When both sides have commits it changes nothing and
   emits `pullDiverged`; the window asks whether to merge or rebase, and the
-  answer runs the existing merge or rebase action (identity check,
-  unpublished-only rebase, conflict dialog).
+  answer runs the existing merge action, or plans the rebase (identity check,
+  published-commit warning, conflict dialog) without asking a second time.
+- **Repository → Rebase current branch…** first calls
+  `RelayController::planRebase()` (`GitService::planRebase()`: commits in
+  `HEAD --not <onto>`, and how many of them a remote branch contains). With no
+  published commits it asks once and runs `rebaseBranch`, which still refuses
+  published commits. Otherwise a warning offers Merge instead or
+  **Rebase and rewrite**, which runs `rebasePublished`; when that rebase ends
+  (also after conflicts) and the branch has diverged from origin, the window
+  offers the lease-protected force push once.
 
 ### 12.7 Clone
 
@@ -861,7 +957,10 @@ remote-tracking branches other than symbolic `HEAD` refs.
   namesake; the history scope still lists them.
 
 Remote branches are what the last fetch recorded. **Fetch all origin branches**
-fetches the full heads refspec for single-branch clones. Names starting with
+(History) and **Fetch all branches from origin** (last current-branch picker
+item, shown when `origin` exists) fetch the full heads refspec, also for
+single-branch clones, without switching branches. The picker item's data is
+`relay:fetch-origin-branches`, never a ref. Names starting with
 `-` are rejected, and the picker shows the actual branch until a switch
 succeeds.
 
@@ -1070,8 +1169,9 @@ Other remotes' already-fetched refs remain visible.
 Multiple selected history commits use one Git cherry-pick sequencer operation
 in displayed oldest-to-newest order, capped at 200; validate every object and
 duplicates before mutation. Continue/skip/abort preserve the full sequence.
-Merge picks use first parent. The owner leaves force push and remote branch
-deletion to the CLI. Existing merge/rebase/revert/stash/conflict actions remain.
+Merge picks use first parent. On 2026-10-09 the owner asked for every
+feature, adding lease-protected force push and origin branch deletion
+(section 12.6). Existing merge/rebase/revert/stash/conflict actions remain.
 
 New forge_service/forge_controller/forge_dialog files implement API discovery
 for Gitea/Forgejo and GitLab, including self-hosted HTTPS/subpath servers.
@@ -1211,9 +1311,10 @@ Do not swallow errors that make an operation look successful.
 
 - GitHub OAuth is GitHub.com only. Gitea/Forgejo/GitLab accounts are for API
   discovery; their Git transport is SSH or existing Git credentials.
-- No force push and no remote branch deletion (left to the CLI by the owner).
-- Rebase is limited to unpublished commits; published commits cannot be
-  undone or amended here.
+- Force push and remote branch deletion exist only in the lease-protected,
+  origin-only forms described in section 12.6.
+- Published commits can be rebased only after a warning, and cannot be undone
+  or amended here.
 - History beyond a cached window still uses `--skip`, so very deep history
   costs one Git walk per 2,000 or 5,000 commits. History search returns at most
   200 matches. Merges compare against the first parent.

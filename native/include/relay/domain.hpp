@@ -128,10 +128,51 @@ struct CommitDetail {
   bool isSigned{};
 };
 
+// Two branches compared the way a pull request compares them: commits only
+// on each side, and the files compare changed since their merge base.
+struct BranchComparison {
+  QString base;     // refs/heads/... or refs/remotes/...
+  QString compare;
+  QString baseHash;
+  QString compareHash;
+  QString mergeBase;  // empty for unrelated histories
+  QList<HistoryCommit> ahead;   // in compare, not in base; newest first
+  QList<HistoryCommit> behind;  // in base, not in compare
+  bool truncated{};             // either list stopped at its limit
+  QList<ChangedFile> files;
+  qsizetype added{};
+  qsizetype removed{};
+};
+
+// A commit on the current branch that no remote branch contains yet.
+struct UnpublishedCommit {
+  QString fullHash;
+  QString hash;
+  QString message;  // subject and body
+  bool merge{};
+};
+
+// One line of a rewrite, oldest first. A squash step joins the step before
+// it. message, when set on the first step of a group, replaces its message.
+struct CommitRewriteStep {
+  QString hash;
+  bool squash{};
+  QString message;
+};
+
 enum class RepositoryAction {
   renameBranch, deleteBranch, checkoutRemote, mergeBranch, rebaseBranch, abortOperation, skipOperation,
   continueOperation, resolveOurs, resolveTheirs, markResolved, stash,
-  applyStash, dropStash, discardFiles, revertCommit, cherryPick, undoCommit, setOrigin, amendMessage, createTag, deleteTag
+  applyStash, dropStash, discardFiles, revertCommit, cherryPick, undoCommit, setOrigin, amendMessage, createTag, deleteTag,
+  // A rebase the user confirmed although it rewrites commits on a remote branch.
+  rebasePublished
+};
+
+// What rebasing the current branch onto a ref would replay.
+struct RebasePlan {
+  QString onto;
+  int replayed{};
+  int published{};  // of those, commits some remote branch already contains
 };
 
 struct StashEntry {
@@ -175,6 +216,10 @@ struct Preferences {
   // Window geometry and splitter states, saved by the window itself. Only
   // RelayController::saveLayout() changes it.
   QJsonObject layout;
+  // External editor: a detected editor id, "custom" for editorPath, or empty
+  // for the first detected editor.
+  QString editorId;
+  QString editorPath;
 };
 
 struct AppState {
@@ -248,6 +293,9 @@ QJsonObject mergeAppStateIntoJson(const AppState& state, QJsonObject base = {});
 
 Q_DECLARE_METATYPE(relay::Repository)
 Q_DECLARE_METATYPE(relay::HistoryPage)
+Q_DECLARE_METATYPE(relay::RebasePlan)
+Q_DECLARE_METATYPE(relay::BranchComparison)
+Q_DECLARE_METATYPE(QList<relay::UnpublishedCommit>)
 Q_DECLARE_METATYPE(relay::HistoryCommit)
 Q_DECLARE_METATYPE(relay::CommitDetail)
 

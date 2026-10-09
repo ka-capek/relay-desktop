@@ -27,7 +27,159 @@
 
 namespace relay {
 
-SettingsDialog::SettingsDialog(Preferences preferences, QWidget* parent) : QDialog(parent) {
+CommitRewriteDialog::CommitRewriteDialog(QList<UnpublishedCommit> commits, QWidget* parent)
+    : QDialog(parent), commits_(std::move(commits)) {
+  setObjectName(QStringLiteral("commitRewriteDialog"));
+  setWindowTitle(tr("Squash and reorder commits"));
+  resize(620, 560);
+  auto* layout = new QVBoxLayout(this);
+  auto* intro = new QLabel(tr("Commits that are not on any remote yet, newest first. Drag or move them to reorder; "
+                              "check a commit to squash it into the one below."), this);
+  intro->setWordWrap(true);
+  layout->addWidget(intro);
+  list_ = new QListWidget(this);
+  list_->setObjectName(QStringLiteral("rewriteList"));
+  list_->setAccessibleName(tr("Unpublished commits"));
+  list_->setDragDropMode(QAbstractItemView::InternalMove);
+  list_->setDefaultDropAction(Qt::MoveAction);
+  for (const auto& commit : commits_) {
+    messages_.insert(commit.fullHash, commit.message);
+    auto* item = new QListWidgetItem(list_);
+    item->setData(Qt::UserRole, commit.fullHash);
+    item->setFlags(item->flags() | Qt::ItemIsUserCheckable | Qt::ItemIsDragEnabled);
+    item->setFlags(item->flags() & ~Qt::ItemIsDropEnabled);
+    item->setCheckState(Qt::Unchecked);
+    item->setToolTip(tr("Check to squash this commit into the commit below it"));
+  }
+  layout->addWidget(list_, 2);
+  auto* buttons = new QHBoxLayout;
+  up_ = new QPushButton(tr("Move up"), this);
+  up_->setObjectName(QStringLiteral("rewriteUp"));
+  down_ = new QPushButton(tr("Move down"), this);
+  down_->setObjectName(QStringLiteral("rewriteDown"));
+  buttons->addWidget(up_);
+  buttons->addWidget(down_);
+  buttons->addStretch();
+  layout->addLayout(buttons);
+  messageLabel_ = new QLabel(this);
+  layout->addWidget(messageLabel_);
+  message_ = new QPlainTextEdit(this);
+  message_->setObjectName(QStringLiteral("rewriteMessage"));
+  message_->setAccessibleName(tr("Commit message"));
+  layout->addWidget(message_, 1);
+  auto* box = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
+  accept_ = box->addButton(tr("Rewrite commits"), QDialogButtonBox::AcceptRole);
+  accept_->setObjectName(QStringLiteral("rewriteAccept"));
+  layout->addWidget(box);
+  connect(box, &QDialogButtonBox::accepted, this, &QDialog::accept);
+  connect(box, &QDialogButtonBox::rejected, this, &QDialog::reject);
+  connect(up_, &QPushButton::clicked, this, [this] { moveSelected(-1); });
+  connect(down_, &QPushButton::clicked, this, [this] { moveSelected(1); });
+  connect(list_, &QListWidget::itemChanged, this, [this] { if (!refreshing_) refresh(); });
+  connect(list_->model(), &QAbstractItemModel::rowsMoved, this, [this] { refresh(); });
+  connect(list_, &QListWidget::currentRowChanged, this, [this] { refresh(); });
+  connect(message_, &QPlainTextEdit::textChanged, this, [this] {
+    if (refreshing_ || list_->currentRow() < 0) return;
+    const auto hash = list_->item(headRow(list_->currentRow()))->data(Qt::UserRole).toString();
+    messages_.insert(hash, message_->toPlainText());
+    edited_.insert(hash);
+    refresh();
+  });
+  list_->setCurrentRow(0);
+  refresh();
+}
+
+int CommitRewriteDialog::headRow(int row) const {
+  while (row + 1 < list_->count() && list_->item(row)->checkState() == Qt::Checked) ++row;
+  return row;
+}
+
+QString CommitRewriteDialog::defaultMessage(const int head) const {
+  QStringList parts;
+  for (int row = head; row >= 0 && (row == head || list_->item(row)->checkState() == Qt::Checked); --row) {
+    const auto hash = list_->item(row)->data(Qt::UserRole).toString();
+    const auto original = std::find_if(commits_.cbegin(), commits_.cend(),
+                                       [&hash](const UnpublishedCommit& commit) { return commit.fullHash == hash; });
+    parts.append(row == head && edited_.contains(hash) ? messages_.value(hash) : original->message);
+  }
+  return parts.join(QStringLiteral("\n\n"));
+}
+
+void CommitRewriteDialog::moveSelected(const int offset) {
+  const auto row = list_->currentRow();
+  const auto target = row + offset;
+  if (row < 0 || target < 0 || target >= list_->count()) return;
+  auto* item = list_->takeItem(row);
+  list_->insertItem(target, item);
+  list_->setCurrentRow(target);
+  refresh();
+}
+
+void CommitRewriteDialog::refresh() {
+  const QSignalBlocker blocker(list_);
+  refreshing_ = true;
+  const auto last = list_->count() - 1;
+  for (int row = 0; row <= last; ++row) {
+    auto* item = list_->item(row);
+    // The oldest commit has nothing below it to join.
+    if (row == last) {
+      item->setData(Qt::CheckStateRole, QVariant{});
+      item->setFlags(item->flags() & ~Qt::ItemIsUserCheckable);
+    } else {
+      item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+      if (!item->data(Qt::CheckStateRole).isValid()) item->setCheckState(Qt::Unchecked);
+    }
+    const auto hash = item->data(Qt::UserRole).toString();
+    const auto original = std::find_if(commits_.cbegin(), commits_.cend(),
+                                       [&hash](const UnpublishedCommit& commit) { return commit.fullHash == hash; });
+    const auto squash = item->checkState() == Qt::Checked;
+    const auto subject = (row == headRow(row) ? messages_.value(hash) : original->message).section(u'\n', 0, 0);
+    item->setText((squash ? QStringLiteral("    ↳ ") : QString{}) + original->hash + QStringLiteral("  ") + subject);
+  }
+  const auto current = list_->currentRow();
+  up_->setEnabled(current > 0);
+  down_->setEnabled(current >= 0 && current < last);
+  if (current >= 0) {
+    const auto head = headRow(current);
+    const auto hash = list_->item(head)->data(Qt::UserRole).toString();
+    const bool grouped = head > 0 && list_->item(head - 1)->checkState() == Qt::Checked;
+    messageLabel_->setText(grouped ? tr("Message of the squashed commit") : tr("Commit message"));
+    const auto text = grouped && !edited_.contains(hash) ? defaultMessage(head) : messages_.value(hash);
+    if (message_->toPlainText() != text) {
+      const QSignalBlocker messageBlocker(message_);
+      message_->setPlainText(text);
+    }
+  }
+  const auto planned = steps();
+  bool changed = false;
+  for (qsizetype index = 0; index < planned.size(); ++index) {
+    const auto& original = commits_.at(commits_.size() - 1 - index);
+    changed = changed || planned.at(index).hash != original.fullHash || planned.at(index).squash || !planned.at(index).message.isEmpty();
+  }
+  accept_->setEnabled(changed);
+  refreshing_ = false;
+}
+
+QList<CommitRewriteStep> CommitRewriteDialog::steps() const {
+  QList<CommitRewriteStep> result;
+  for (int row = list_->count() - 1; row >= 0; --row) {
+    const auto* item = list_->item(row);
+    const auto hash = item->data(Qt::UserRole).toString();
+    const bool squash = item->checkState() == Qt::Checked && row != list_->count() - 1;
+    CommitRewriteStep step{hash, squash, {}};
+    if (!squash) {
+      const bool grouped = row > 0 && list_->item(row - 1)->checkState() == Qt::Checked;
+      const auto original = std::find_if(commits_.cbegin(), commits_.cend(),
+                                         [&hash](const UnpublishedCommit& commit) { return commit.fullHash == hash; });
+      const auto text = grouped && !edited_.contains(hash) ? defaultMessage(row) : messages_.value(hash);
+      if (grouped || text.trimmed() != original->message.trimmed()) step.message = text;
+    }
+    result.append(step);
+  }
+  return result;
+}
+
+SettingsDialog::SettingsDialog(Preferences preferences, QWidget* parent) : QDialog(parent), original_(preferences) {
   setWindowTitle(tr("Settings"));
   setObjectName(QStringLiteral("settingsDialog"));
   resize(640, 520);
@@ -50,6 +202,34 @@ SettingsDialog::SettingsDialog(Preferences preferences, QWidget* parent) : QDial
   graphHistory_->setObjectName(QStringLiteral("graphHistory"));
   graphHistory_->setChecked(preferences.graphHistory);
   form->addRow(graphHistory_);
+  editor_ = new QComboBox(general);
+  editor_->setObjectName(QStringLiteral("externalEditor"));
+  editorPath_ = new QLineEdit(preferences.editorPath, general);
+  editorPath_->setObjectName(QStringLiteral("externalEditorPath"));
+  editorPath_->setPlaceholderText(tr("Application or program path"));
+  editorBrowse_ = new QPushButton(tr("Choose…"), general);
+  auto* editorRow = new QHBoxLayout;
+  editorRow->addWidget(editorPath_, 1);
+  editorRow->addWidget(editorBrowse_);
+  form->addRow(tr("External editor"), editor_);
+  form->addRow(QString{}, editorRow);
+  setEditors({});
+  connect(editor_, &QComboBox::currentIndexChanged, this, [this] {
+    const bool custom = editor_->currentData().toString() == QStringLiteral("custom");
+    editorPath_->setEnabled(custom);
+    editorBrowse_->setEnabled(custom);
+  });
+  connect(editorBrowse_, &QPushButton::clicked, this, [this] {
+#if defined(Q_OS_MACOS)
+    const auto start = QStringLiteral("/Applications");
+    const auto filter = tr("Applications (*.app)");
+#else
+    const auto start = QString{};
+    const auto filter = tr("Programs (*.exe)");
+#endif
+    const auto path = QFileDialog::getOpenFileName(this, tr("Choose an editor"), start, filter);
+    if (!path.isEmpty()) editorPath_->setText(path);
+  });
   tabs->addTab(general, tr("General"));
   auto* appearance = new QWidget(tabs);
   auto* appearanceLayout = new QVBoxLayout(appearance);
@@ -156,10 +336,36 @@ SettingsDialog::SettingsDialog(Preferences preferences, QWidget* parent) : QDial
   layout->addWidget(buttons);
 }
 
+void SettingsDialog::setEditors(const QList<QPair<QString, QString>>& editors) {
+  const QSignalBlocker blocker(editor_);
+  editor_->clear();
+  editor_->addItem(editors.isEmpty() ? tr("Automatic (none found)") : tr("Automatic (%1)").arg(editors.first().second), QString{});
+  for (const auto& editor : editors) editor_->addItem(editor.second, editor.first);
+  editor_->addItem(tr("Other application…"), QStringLiteral("custom"));
+  auto index = editor_->findData(original_.editorId);
+  // A chosen editor that is no longer detected stays selected by id.
+  if (index < 0) {
+    editor_->insertItem(1, tr("%1 (not found)").arg(original_.editorId), original_.editorId);
+    index = 1;
+  }
+  editor_->setCurrentIndex(index);
+  const bool custom = editor_->currentData().toString() == QStringLiteral("custom");
+  editorPath_->setEnabled(custom);
+  editorBrowse_->setEnabled(custom);
+}
+
 Preferences SettingsDialog::preferences() const {
-  return {refreshOnFocus_->isChecked(), diffFontSize_->value(), commitName_->text().trimmed(),
-          commitEmail_->text().trimmed(), graphHistory_->isChecked(),
-          themeId_->currentData().toString(), QJsonDocument::fromJson(themeJson_->toPlainText().toUtf8()).object()};
+  auto result = original_;
+  result.refreshOnFocus = refreshOnFocus_->isChecked();
+  result.diffFontSize = diffFontSize_->value();
+  result.commitName = commitName_->text().trimmed();
+  result.commitEmail = commitEmail_->text().trimmed();
+  result.graphHistory = graphHistory_->isChecked();
+  result.themeId = themeId_->currentData().toString();
+  result.customTheme = QJsonDocument::fromJson(themeJson_->toPlainText().toUtf8()).object();
+  result.editorId = editor_->currentData().toString();
+  result.editorPath = result.editorId == QStringLiteral("custom") ? editorPath_->text().trimmed() : QString{};
+  return result;
 }
 
 namespace {

@@ -3,6 +3,8 @@
 #include "relay/domain.hpp"
 
 #include <QDialog>
+#include <QHash>
+#include <QSet>
 #include <QList>
 #include <QString>
 
@@ -20,14 +22,45 @@ class QPlainTextEdit;
 
 namespace relay {
 
+// Reorders, squashes and rewords unpublished commits, shown newest first like
+// History. A checked row joins the commit below it.
+class CommitRewriteDialog final : public QDialog {
+  Q_OBJECT
+ public:
+  explicit CommitRewriteDialog(QList<UnpublishedCommit> commits, QWidget* parent = nullptr);
+  // Oldest first, ready for RelayController::rewriteUnpublishedCommits().
+  [[nodiscard]] QList<CommitRewriteStep> steps() const;
+  void moveSelected(int offset);
+ private:
+  void refresh();
+  [[nodiscard]] int headRow(int row) const;
+  [[nodiscard]] QString defaultMessage(int head) const;
+  QList<UnpublishedCommit> commits_;
+  QHash<QString, QString> messages_;
+  QSet<QString> edited_;
+  QListWidget* list_{};
+  QPlainTextEdit* message_{};
+  QLabel* messageLabel_{};
+  QPushButton* up_{};
+  QPushButton* down_{};
+  QPushButton* accept_{};
+  bool refreshing_{};
+};
+
 class SettingsDialog final : public QDialog {
   Q_OBJECT
  public:
   explicit SettingsDialog(Preferences preferences, QWidget* parent = nullptr);
   [[nodiscard]] Preferences preferences() const;
+  // Detected editors as id and display name.
+  void setEditors(const QList<QPair<QString, QString>>& editors);
  signals:
   void manageAccountsRequested();
  private:
+  Preferences original_;
+  QComboBox* editor_{};
+  QLineEdit* editorPath_{};
+  QPushButton* editorBrowse_{};
   QCheckBox* refreshOnFocus_{};
   QSpinBox* diffFontSize_{};
   QLineEdit* commitName_{};

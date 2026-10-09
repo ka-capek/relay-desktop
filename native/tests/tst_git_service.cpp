@@ -802,6 +802,230 @@ class GitServiceTest final : public QObject {
     QVERIFY(!relay::GitService::isSshRemote(QStringLiteral("https://example.com/repo.git")));
     QVERIFY(!relay::GitService::isSshRemote(QStringLiteral("C:\\repo")));
   }
+
+  void forcePushesOnlyOverTheReviewedOriginTip() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QDir base(root.path());
+    const auto server = base.filePath(QStringLiteral("server.git"));
+    runGit(root.path(), {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("--bare"),
+                         QStringLiteral("-b"), QStringLiteral("main"), server});
+    const auto other = base.filePath(QStringLiteral("other"));
+    QVERIFY(QDir().mkpath(other));
+    initRepository(other);
+    writeFile(QDir(other).filePath(QStringLiteral("file.txt")), QByteArrayLiteral("first\n"));
+    commitAll(other, QStringLiteral("Initial"));
+    runGit(other, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"), server});
+    runGit(other, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("origin"), QStringLiteral("main")});
+
+    const relay::GitService service;
+    const auto clone = base.filePath(QStringLiteral("clone"));
+    static_cast<void>(service.cloneRepository(server, clone));
+    // Someone else's commit reaches origin and our fetch records it.
+    writeFile(QDir(other).filePath(QStringLiteral("file.txt")), QByteArrayLiteral("theirs\n"));
+    commitAll(other, QStringLiteral("Their commit"));
+    runGit(other, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("origin"), QStringLiteral("main")});
+    service.fetchOrigin(clone);
+    const auto reviewed = runGit(clone, {QStringLiteral("rev-parse"), QStringLiteral("refs/remotes/origin/main")});
+    writeFile(QDir(clone).filePath(QStringLiteral("file.txt")), QByteArrayLiteral("ours\n"));
+    commitAll(clone, QStringLiteral("Our rewrite"));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.pushOrigin(clone));
+
+    // A hash other than the current tracking tip is refused before pushing.
+    const auto initial = runGit(clone, {QStringLiteral("rev-parse"), QStringLiteral("HEAD~1")});
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.pushOrigin(clone, {}, {}, {}, initial));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.pushOrigin(clone, {}, {}, {}, QStringLiteral("--force")));
+
+    // Origin moved after the fetch: the lease refuses and nothing changes.
+    writeFile(QDir(other).filePath(QStringLiteral("file.txt")), QByteArrayLiteral("later\n"));
+    commitAll(other, QStringLiteral("Later commit"));
+    runGit(other, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("origin"), QStringLiteral("main")});
+    const auto later = runGit(server, {QStringLiteral("rev-parse"), QStringLiteral("main")});
+    try {
+      service.pushOrigin(clone, {}, {}, {}, reviewed);
+      QFAIL("A stale lease must not force push.");
+    } catch (const relay::ProcessError& failure) {
+      QVERIFY(failure.qMessage().contains(QStringLiteral("new commits since your last fetch")));
+    }
+    QCOMPARE(runGit(server, {QStringLiteral("rev-parse"), QStringLiteral("main")}), later);
+
+    // Rebased on what is now origin's tip, then forced over exactly it.
+    runGit(other, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("--force"), QStringLiteral("origin"),
+                   reviewed + QStringLiteral(":refs/heads/main")});
+    service.pushOrigin(clone, {}, {}, {}, reviewed);
+    QCOMPARE(runGit(server, {QStringLiteral("rev-parse"), QStringLiteral("main")}),
+             runGit(clone, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")}));
+    QCOMPARE(runGit(clone, {QStringLiteral("rev-parse"), QStringLiteral("--abbrev-ref"), QStringLiteral("@{upstream}")}),
+             QStringLiteral("origin/main"));
+  }
+
+  void deletesOriginBranchOnlyAtTheReviewedTip() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QDir base(root.path());
+    const auto server = base.filePath(QStringLiteral("server.git"));
+    runGit(root.path(), {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("--bare"),
+                         QStringLiteral("-b"), QStringLiteral("main"), server});
+    const auto other = base.filePath(QStringLiteral("other"));
+    QVERIFY(QDir().mkpath(other));
+    initRepository(other);
+    writeFile(QDir(other).filePath(QStringLiteral("file.txt")), QByteArrayLiteral("first\n"));
+    commitAll(other, QStringLiteral("Initial"));
+    runGit(other, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"), server});
+    runGit(other, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("origin"), QStringLiteral("main"),
+                   QStringLiteral("main:refs/heads/topic/old"), QStringLiteral("main:refs/heads/moving")});
+
+    const relay::GitService service;
+    const auto clone = base.filePath(QStringLiteral("clone"));
+    static_cast<void>(service.cloneRepository(server, clone));
+    const auto tip = runGit(clone, {QStringLiteral("rev-parse"), QStringLiteral("refs/remotes/origin/topic/old")});
+    const auto exists = [&server](const QString& branch) {
+      return !runGit(server, {QStringLiteral("for-each-ref"), QStringLiteral("refs/heads/") + branch}).isEmpty();
+    };
+
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.deleteOriginBranch(clone, QStringLiteral("main"), tip));
+    QVERIFY(exists(QStringLiteral("main")));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.deleteOriginBranch(clone, QStringLiteral("--all"), tip));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.deleteOriginBranch(clone, QStringLiteral("missing"), tip));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.deleteOriginBranch(clone, QStringLiteral("topic/old"), QStringLiteral("HEAD")));
+
+    // Someone pushes to the branch after our fetch: the lease refuses.
+    writeFile(QDir(other).filePath(QStringLiteral("file.txt")), QByteArrayLiteral("more\n"));
+    commitAll(other, QStringLiteral("More work"));
+    runGit(other, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("origin"), QStringLiteral("main:refs/heads/moving")});
+    try {
+      service.deleteOriginBranch(clone, QStringLiteral("moving"), tip);
+      QFAIL("A stale lease must not delete the branch.");
+    } catch (const relay::ProcessError& failure) {
+      QVERIFY(failure.qMessage().contains(QStringLiteral("new commits since your last fetch")));
+    }
+    QVERIFY(exists(QStringLiteral("moving")));
+
+    service.deleteOriginBranch(clone, QStringLiteral("topic/old"), tip);
+    QVERIFY(!exists(QStringLiteral("topic/old")));
+    QVERIFY(runGit(clone, {QStringLiteral("for-each-ref"), QStringLiteral("refs/remotes/origin/topic/old")}).isEmpty());
+  }
+
+  void comparesBranchesLikeAPullRequest() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const auto repository = root.path();
+    initRepository(repository);
+    writeFile(QDir(repository).filePath(QStringLiteral("shared.txt")), QByteArrayLiteral("base\n"));
+    commitAll(repository, QStringLiteral("Base"));
+    runGit(repository, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("-c"), QStringLiteral("feature")});
+    writeFile(QDir(repository).filePath(QStringLiteral("feature.txt")), QByteArrayLiteral("one\ntwo\n"));
+    commitAll(repository, QStringLiteral("Feature one"));
+    writeFile(QDir(repository).filePath(QStringLiteral("shared.txt")), QByteArrayLiteral("feature\n"));
+    commitAll(repository, QStringLiteral("Feature two"));
+    runGit(repository, {QStringLiteral("switch"), QStringLiteral("-q"), QStringLiteral("main")});
+    writeFile(QDir(repository).filePath(QStringLiteral("main.txt")), QByteArrayLiteral("main\n"));
+    commitAll(repository, QStringLiteral("Main moved on"));
+    runGit(repository, {QStringLiteral("update-ref"), QStringLiteral("refs/remotes/origin/feature"), QStringLiteral("feature~1")});
+
+    const relay::GitService service;
+    const auto comparison = service.compareBranches(repository, QStringLiteral("refs/heads/main"), QStringLiteral("refs/heads/feature"));
+    QCOMPARE(comparison.ahead.size(), 2);
+    QCOMPARE(comparison.ahead.first().title, QStringLiteral("Feature two"));
+    QCOMPARE(comparison.behind.size(), 1);
+    QCOMPARE(comparison.behind.first().title, QStringLiteral("Main moved on"));
+    QVERIFY(!comparison.truncated);
+    // Files changed on feature since it left main; main's own change is not one.
+    QCOMPARE(comparison.files.size(), 2);
+    QCOMPARE(comparison.added, 3);
+    QVERIFY(std::none_of(comparison.files.cbegin(), comparison.files.cend(),
+                         [](const relay::ChangedFile& file) { return file.path == QStringLiteral("main.txt"); }));
+    const auto diff = service.readComparisonFileDiff(repository, comparison.mergeBase, comparison.compareHash, QStringLiteral("shared.txt"));
+    QVERIFY(diff.contains(QStringLiteral("-base")));
+    QVERIFY(diff.contains(QStringLiteral("+feature")));
+
+    const auto remote = service.compareBranches(repository, QStringLiteral("refs/remotes/origin/feature"), QStringLiteral("refs/heads/feature"));
+    QCOMPARE(remote.ahead.size(), 1);
+    QVERIFY(remote.behind.isEmpty());
+
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, static_cast<void>(service.compareBranches(repository, QStringLiteral("main"), QStringLiteral("refs/heads/feature"))));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, static_cast<void>(service.compareBranches(repository, QStringLiteral("refs/heads/missing"), QStringLiteral("refs/heads/feature"))));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, static_cast<void>(service.compareBranches(repository, QStringLiteral("refs/tags/x"), QStringLiteral("refs/heads/feature"))));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, static_cast<void>(service.readComparisonFileDiff(repository, QStringLiteral("--output=x"), comparison.compareHash, QStringLiteral("shared.txt"))));
+  }
+
+  void commitsWithValidatedCoAuthorTrailers() {
+    using relay::GitService;
+    QCOMPARE(GitService::parseCoAuthors(QStringLiteral(" Ada Lovelace <ada@example.com>,\nGrace <grace@example.com>, ada <ADA@example.com>"),
+                                        QStringLiteral("me@example.com")),
+             (QStringList{QStringLiteral("Ada Lovelace <ada@example.com>"), QStringLiteral("Grace <grace@example.com>")}));
+    QVERIFY(GitService::parseCoAuthors(QStringLiteral("Me <ME@example.com>"), QStringLiteral("me@example.com")).isEmpty());
+    for (const auto& invalid : {QStringLiteral("ada@example.com"), QStringLiteral("<ada@example.com>"), QStringLiteral("Ada <not-an-email>"),
+                                QStringLiteral("Ada <a@b.c> extra"), QStringLiteral("Ada <a@b.c>\x01"), QStringLiteral("Ada <a b@c.d>")})
+      QVERIFY_THROWS_EXCEPTION(relay::ProcessError, static_cast<void>(GitService::parseCoAuthors(invalid)));
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    initRepository(root.path());
+    writeFile(QDir(root.path()).filePath(QStringLiteral("file.txt")), QByteArrayLiteral("one\n"));
+    relay::Account account;
+    account.name = QStringLiteral("Committer");
+    account.email = QStringLiteral("committer@example.com");
+    const GitService service;
+    service.commitFiles(root.path(), {QStringLiteral("file.txt")}, QStringLiteral("Pair work"), QStringLiteral("Body"), account,
+                        {QStringLiteral("Ada <ada@example.com>"), QStringLiteral("Committer <committer@example.com>")});
+    QCOMPARE(runGit(root.path(), {QStringLiteral("log"), QStringLiteral("-1"), QStringLiteral("--format=%B")}),
+             QStringLiteral("Pair work\n\nBody\n\nCo-authored-by: Ada <ada@example.com>"));
+    writeFile(QDir(root.path()).filePath(QStringLiteral("file.txt")), QByteArrayLiteral("two\n"));
+    // A caller bypassing the parser still cannot inject another trailer.
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.commitFiles(root.path(), {QStringLiteral("file.txt")}, QStringLiteral("x"), {}, account,
+                                                                      {QStringLiteral("Ada <ada@example.com>\nSigned-off-by: Eve <eve@example.com>")}) );
+  }
+
+  void pushesListsAndDeletesTagsOnOrigin() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QDir base(root.path());
+    const auto server = base.filePath(QStringLiteral("server.git"));
+    runGit(root.path(), {QStringLiteral("init"), QStringLiteral("-q"), QStringLiteral("--bare"), QStringLiteral("-b"), QStringLiteral("main"), server});
+    const auto local = base.filePath(QStringLiteral("local"));
+    QVERIFY(QDir().mkpath(local));
+    initRepository(local);
+    writeFile(QDir(local).filePath(QStringLiteral("file.txt")), QByteArrayLiteral("one\n"));
+    commitAll(local, QStringLiteral("One"));
+    runGit(local, {QStringLiteral("remote"), QStringLiteral("add"), QStringLiteral("origin"), server});
+    runGit(local, {QStringLiteral("push"), QStringLiteral("-q"), QStringLiteral("origin"), QStringLiteral("main")});
+    runGit(local, {QStringLiteral("tag"), QStringLiteral("v1.0")});
+    runGit(local, {QStringLiteral("tag"), QStringLiteral("-a"), QStringLiteral("v1.1"), QStringLiteral("-m"), QStringLiteral("Annotated")});
+
+    const relay::GitService service;
+    QVERIFY(service.listOriginTags(local).isEmpty());
+    service.pushOriginTag(local, QStringLiteral("v1.0"));
+    service.pushOriginTag(local, QStringLiteral("v1.1"));
+    auto tags = service.listOriginTags(local);
+    QCOMPARE(tags.size(), 2);
+    QCOMPARE(tags.first().first, QStringLiteral("v1.0"));
+    QCOMPARE(tags.first().second, runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("v1.0")}));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.pushOriginTag(local, QStringLiteral("missing")));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.pushOriginTag(local, QStringLiteral("--force")));
+
+    // A different local v1.0 does not replace origin's.
+    writeFile(QDir(local).filePath(QStringLiteral("file.txt")), QByteArrayLiteral("two\n"));
+    commitAll(local, QStringLiteral("Two"));
+    runGit(local, {QStringLiteral("tag"), QStringLiteral("--force"), QStringLiteral("v1.0")});
+    try {
+      service.pushOriginTag(local, QStringLiteral("v1.0"));
+      QFAIL("A different tag must not replace origin's.");
+    } catch (const relay::ProcessError& failure) {
+      QVERIFY(failure.qMessage().contains(QStringLiteral("already has a different tag")));
+    }
+    QCOMPARE(service.listOriginTags(local).first().second, tags.first().second);
+
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.deleteOriginTag(local, QStringLiteral("v1.0"),
+        runGit(local, {QStringLiteral("rev-parse"), QStringLiteral("HEAD")})));
+    QCOMPARE(service.listOriginTags(local).size(), 2);
+    service.deleteOriginTag(local, QStringLiteral("v1.0"), tags.first().second);
+    tags = service.listOriginTags(local);
+    QCOMPARE(tags.size(), 1);
+    QCOMPARE(tags.first().first, QStringLiteral("v1.1"));
+    // Local tags are untouched.
+    QVERIFY(!runGit(local, {QStringLiteral("tag"), QStringLiteral("--list"), QStringLiteral("v1.0")}).isEmpty());
+  }
 };
 
 QTEST_APPLESS_MAIN(GitServiceTest)

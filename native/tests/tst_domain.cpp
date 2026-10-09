@@ -14,6 +14,12 @@ class DomainTest final : public QObject {
     QCOMPARE(loaded.preferences.themeId, state.preferences.themeId);
     QCOMPARE(loaded.preferences.customTheme, state.preferences.customTheme);
     QCOMPARE(relay::appStateFromJson({}).preferences.themeId, QStringLiteral("light"));
+    state.preferences.editorId = QStringLiteral("custom");
+    state.preferences.editorPath = QStringLiteral("/Applications/Editor.app");
+    const auto editor = relay::appStateFromJson(relay::mergeAppStateIntoJson(state, {}));
+    QCOMPARE(editor.preferences.editorId, QStringLiteral("custom"));
+    QCOMPARE(editor.preferences.editorPath, QStringLiteral("/Applications/Editor.app"));
+    QVERIFY(relay::appStateFromJson({}).preferences.editorId.isEmpty());
   }
 
   void mapsGitStatuses() {

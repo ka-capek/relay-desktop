@@ -57,18 +57,52 @@ class GitService final {
 
   [[nodiscard]] FilePreview readFilePreview(const QString& repositoryPath, const QString& filePath, const QString& commit = {}) const;
 
+  // coAuthors are "Name <email>" values, added as Co-authored-by trailers.
   void commitFiles(const QString& repositoryPath, const QStringList& files,
                    const QString& summary, const QString& description,
-                   const Account& account) const;
+                   const Account& account, const QStringList& coAuthors = {}) const;
+  // Splits comma- or newline-separated "Name <email>" values, rejecting
+  // anything else; duplicates and the committer are dropped.
+  [[nodiscard]] static QStringList parseCoAuthors(const QString& text, const QString& committerEmail = {});
   void fetchOrigin(const QString& repositoryPath, const QString& token = {},
                    const QString& handle = {}, const QString& sshCommand = {}, bool allBranches = false) const;
+  // A non-empty forceExpected force-pushes over origin's branch, but only
+  // while origin still has that commit (the user's last fetched tip).
   void pushOrigin(const QString& repositoryPath, const QString& token = {},
-                  const QString& handle = {}, const QString& sshCommand = {}) const;
+                  const QString& handle = {}, const QString& sshCommand = {},
+                  const QString& forceExpected = {}) const;
+  // Deletes a branch on origin while it still points at expected, the tip
+  // the user reviewed. Refuses origin's default branch.
+  void deleteOriginBranch(const QString& repositoryPath, const QString& branch, const QString& expected,
+                          const QString& token = {}, const QString& handle = {},
+                          const QString& sshCommand = {}) const;
   // Fetches, then fast-forwards to the origin upstream. Returns the upstream
   // ref (refs/remotes/origin/...) when local and origin have diverged and
   // nothing was changed; an empty string otherwise.
   [[nodiscard]] QString pullOrigin(const QString& repositoryPath, const QString& token = {},
                                    const QString& handle = {}, const QString& sshCommand = {}) const;
+  // Tags on origin as name and object id, read with ls-remote.
+  [[nodiscard]] QList<QPair<QString, QString>> listOriginTags(const QString& repositoryPath, const QString& token = {},
+                                                             const QString& handle = {}, const QString& sshCommand = {}) const;
+  // Pushes one local tag; a different tag of that name on origin is not replaced.
+  void pushOriginTag(const QString& repositoryPath, const QString& tag, const QString& token = {},
+                     const QString& handle = {}, const QString& sshCommand = {}) const;
+  // Deletes a tag on origin while it still has the object id the user saw.
+  void deleteOriginTag(const QString& repositoryPath, const QString& tag, const QString& expected,
+                       const QString& token = {}, const QString& handle = {}, const QString& sshCommand = {}) const;
+  // Up to 500 commits per side. Refs must be local or remote-tracking branches.
+  [[nodiscard]] BranchComparison compareBranches(const QString& repositoryPath, const QString& base,
+                                                 const QString& compare) const;
+  // One file's diff from a comparison's merge base (or base) to its compare tip.
+  [[nodiscard]] QString readComparisonFileDiff(const QString& repositoryPath, const QString& from,
+                                               const QString& to, const QString& filePath) const;
+  [[nodiscard]] RebasePlan planRebase(const QString& repositoryPath, const QString& onto) const;
+  // Newest first, at most 100; empty when HEAD is on a remote branch.
+  [[nodiscard]] QList<UnpublishedCommit> readUnpublishedCommits(const QString& repositoryPath) const;
+  // Reorders, squashes and rewords exactly the unpublished commits with an
+  // interactive rebase; conflicts leave a normal rebase to continue or abort.
+  void rewriteUnpublishedCommits(const QString& repositoryPath, const QList<CommitRewriteStep>& steps,
+                                 const Account& account) const;
   void performAction(const QString& repositoryPath, RepositoryAction action,
                      const QString& target = {}, const QStringList& paths = {},
                      const Account& account = {}) const;
@@ -95,6 +129,15 @@ class GitService final {
   [[nodiscard]] static QList<HistoryCommit> parseHistoryPage(const QString& logText);
 
  private:
+  // refs/heads/<target> or a refs/remotes/ ref that exists; throws otherwise.
+  [[nodiscard]] QString branchRef(const QString& root, const QString& target) const;
+  // Command prefix and environment for a network command against origin:
+  // the command-scoped GitHub helper for HTTPS github.com, the SSH command for
+  // SSH, and never an interactive prompt.
+  [[nodiscard]] QStringList originTransport(const QString& remote, const QString& token, const QString& handle,
+                                            const QString& sshCommand, QProcessEnvironment& environment) const;
+  [[nodiscard]] QList<ChangedFile> changedFiles(const QString& root, const QStringList& compareArguments,
+                                                qsizetype& added, qsizetype& removed) const;
   [[nodiscard]] QString runGit(const QString& repositoryPath, const QStringList& arguments,
                                const QProcessEnvironment& overrides = {}, bool preserveOutput = false, bool literalPaths = true, const QByteArray& standardInput = {}) const;
   [[nodiscard]] QString runGitWithoutRepository(

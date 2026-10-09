@@ -705,6 +705,86 @@ GitService::SearchResult GitService::searchHistory(const QString& repositoryPath
   return result;
 }
 
+QList<ChangedFile> GitService::changedFiles(const QString& root, const QStringList& compareArguments,
+                                            qsizetype& added, qsizetype& removed) const {
+  auto numstatArguments = compareArguments;
+  numstatArguments.append({QStringLiteral("--numstat"), QStringLiteral("-z"), QStringLiteral("--")});
+  auto nameStatusArguments = compareArguments;
+  nameStatusArguments.append({QStringLiteral("--name-status"), QStringLiteral("-z"), QStringLiteral("--")});
+  const auto statuses = parseNameStatus(runGitOrEmpty(root, nameStatusArguments));
+  QList<ChangedFile> files;
+  added = 0;
+  removed = 0;
+  for (const auto& record : numstatRecords(runGitOrEmpty(root, numstatArguments))) {
+    const auto& filePath = record.path;
+    files.push_back({filePath, QFileInfo(filePath).fileName(), displayDirectory(filePath),
+                     statuses.value(filePath, FileStatus::modified), record.added, record.removed, record.binary});
+    added += record.added;
+    removed += record.removed;
+  }
+  return files;
+}
+
+BranchComparison GitService::compareBranches(const QString& repositoryPath, const QString& base,
+                                             const QString& compare) const {
+  const auto root = runGit(repositoryPath, {QStringLiteral("rev-parse"), QStringLiteral("--show-toplevel")});
+  const auto resolve = [this, &root](const QString& ref) {
+    if (!ref.startsWith(QStringLiteral("refs/heads/")) && !ref.startsWith(QStringLiteral("refs/remotes/")))
+      throw ProcessError(QStringLiteral("Choose an existing local or remote branch."));
+    try {
+      static_cast<void>(runGit(root, {QStringLiteral("show-ref"), QStringLiteral("--verify"), QStringLiteral("--quiet"), ref}));
+      return runGit(root, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), ref + QStringLiteral("^{commit}")});
+    } catch (const ProcessError&) {
+      throw ProcessError(QStringLiteral("Choose an existing local or remote branch."));
+    }
+  };
+  BranchComparison result;
+  result.base = base;
+  result.compare = compare;
+  result.baseHash = resolve(base);
+  result.compareHash = resolve(compare);
+  result.mergeBase = runGitOrEmpty(root, {QStringLiteral("merge-base"), result.baseHash, result.compareHash});
+  constexpr int limit = 500;
+  const auto side = [&](const QString& include, const QString& exclude) {
+    const auto text = runGit(root, {QStringLiteral("log"), QStringLiteral("-n"), QString::number(limit + 1),
+        QStringLiteral("--pretty=format:%H%x1f%h%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%aI%x1f%D%x1e"),
+        include, QStringLiteral("^") + exclude, QStringLiteral("--")});
+    auto commits = parseHistoryPage(text);
+    if (commits.size() > limit) {
+      commits.resize(limit);
+      result.truncated = true;
+    }
+    return commits;
+  };
+  result.ahead = side(result.compareHash, result.baseHash);
+  result.behind = side(result.baseHash, result.compareHash);
+  // As in a pull request: what compare changed since it left base.
+  result.files = changedFiles(root, {QStringLiteral("-c"), QStringLiteral("core.quotepath=false"), QStringLiteral("diff"), QStringLiteral("-M"),
+      result.mergeBase.isEmpty() ? result.baseHash : result.mergeBase, result.compareHash}, result.added, result.removed);
+  return result;
+}
+
+QString GitService::readComparisonFileDiff(const QString& repositoryPath, const QString& from,
+                                           const QString& to, const QString& filePath) const {
+  const auto root = runGit(repositoryPath, {QStringLiteral("rev-parse"), QStringLiteral("--show-toplevel")});
+  const auto fromHash = assertCommitInRepository(root, from);
+  const auto toHash = assertCommitInRepository(root, to);
+  if (filePath.isEmpty()) throw ProcessError(QStringLiteral("Choose a file to compare."));
+  QStringList paths{filePath};
+  for (const auto& record : numstatRecords(runGit(root, {QStringLiteral("-c"), QStringLiteral("core.quotepath=false"),
+           QStringLiteral("diff"), QStringLiteral("-M"), QStringLiteral("--numstat"), QStringLiteral("-z"), fromHash, toHash, QStringLiteral("--")})))
+    if (record.path == filePath && !record.oldPath.isEmpty()) paths.push_back(record.oldPath);
+  QStringList arguments{QStringLiteral("-c"), QStringLiteral("core.quotepath=false"), QStringLiteral("diff"), QStringLiteral("-M"),
+                        QStringLiteral("--no-ext-diff"), QStringLiteral("--unified=3"), fromHash, toHash, QStringLiteral("--")};
+  arguments.append(paths);
+  try {
+    return runGit(root, arguments, {}, true);
+  } catch (const ProcessError& error) {
+    if (error.isOutputLimit()) return diffTooLargeMessage();
+    throw;
+  }
+}
+
 CommitDetail GitService::readCommitDetail(const QString& repositoryPath,
                                           const QString& requestedHash) const {
   const auto root = runGit(repositoryPath,
@@ -731,25 +811,9 @@ CommitDetail GitService::readCommitDetail(const QString& repositoryPath,
                         fullHash};
   }
 
-  auto numstatArguments = compareArguments;
-  numstatArguments.append({QStringLiteral("--numstat"), QStringLiteral("-z"), QStringLiteral("--")});
-  auto nameStatusArguments = compareArguments;
-  nameStatusArguments.append({QStringLiteral("--name-status"), QStringLiteral("-z"), QStringLiteral("--")});
-  const auto numstatText = runGitOrEmpty(root, numstatArguments);
-  const auto nameStatusText = runGitOrEmpty(root, nameStatusArguments);
-  const auto statuses = parseNameStatus(nameStatusText);
-
-  QList<ChangedFile> files;
   qsizetype totalAdded = 0;
   qsizetype totalRemoved = 0;
-  for (const auto& record : numstatRecords(numstatText)) {
-    const auto& filePath = record.path;
-    const auto status = statuses.value(filePath, FileStatus::modified);
-    files.push_back({filePath, QFileInfo(filePath).fileName(), displayDirectory(filePath), status,
-                     record.added, record.removed, record.binary});
-    totalAdded += record.added;
-    totalRemoved += record.removed;
-  }
+  auto files = changedFiles(root, compareArguments, totalAdded, totalRemoved);
 
   // The raw commit header shows a signature without asking GPG or SSH to
   // verify it, which would need the user's keyring and trust settings.
@@ -961,10 +1025,32 @@ QStringList GitService::expandedChangedPaths(const QString& root, const QStringL
   return expanded;
 }
 
+QStringList GitService::parseCoAuthors(const QString& text, const QString& committerEmail) {
+  static const QRegularExpression separator(QStringLiteral("[,\\n\\r]"));
+  static const QRegularExpression pattern(QStringLiteral(R"(^([^<>@:\x00-\x1f]+?)\s*<([^<>\s@\x00-\x1f]+@[^<>\s@\x00-\x1f]+)>$)"));
+  QStringList result;
+  QStringList emails;
+  for (auto entry : text.split(separator, Qt::SkipEmptyParts)) {
+    entry = entry.trimmed();
+    if (entry.isEmpty()) continue;
+    const auto match = pattern.match(entry);
+    if (!match.hasMatch() || match.captured(1).trimmed().isEmpty())
+      throw ProcessError(QStringLiteral("Write each co-author as Name <email>: %1").arg(entry.left(80)));
+    const auto email = match.captured(2).toLower();
+    if (email == committerEmail.toLower() || emails.contains(email)) continue;
+    emails.append(email);
+    result.append(QStringLiteral("%1 <%2>").arg(match.captured(1).trimmed(), match.captured(2)));
+  }
+  return result;
+}
+
 void GitService::commitFiles(const QString& repositoryPath, const QStringList& files,
                              const QString& summary, const QString& description,
-                             const Account& account) const {
+                             const Account& account, const QStringList& coAuthors) const {
   requireIdle(repositoryPath);
+  // Values arrive already parsed; parse again so no caller can add a
+  // malformed or multi-line trailer.
+  const auto trailers = parseCoAuthors(coAuthors.join(u','), account.email);
   if (files.isEmpty()) throw ProcessError(QStringLiteral("Select at least one changed file."));
   if (summary.trimmed().isEmpty()) throw ProcessError(QStringLiteral("Enter a commit summary."));
 
@@ -998,6 +1084,7 @@ void GitService::commitFiles(const QString& repositoryPath, const QStringList& f
   if (!description.trimmed().isEmpty()) {
     arguments.append({QStringLiteral("-m"), description.trimmed()});
   }
+  for (const auto& coAuthor : trailers) arguments.append(QStringLiteral("--trailer=Co-authored-by: ") + coAuthor);
   arguments.push_back(QStringLiteral("--"));
   arguments.append(selectedPaths);
 
@@ -1069,7 +1156,8 @@ void GitService::fetchOrigin(const QString& repositoryPath, const QString& token
 }
 
 void GitService::pushOrigin(const QString& repositoryPath, const QString& token,
-                            const QString& handle, const QString& sshCommand) const {
+                            const QString& handle, const QString& sshCommand,
+                            const QString& forceExpected) const {
   const auto remote = originRemoteUrl(repositoryPath, true);
   if (remote.isEmpty()) {
     throw ProcessError(QStringLiteral("This repository does not have an origin remote."));
@@ -1077,6 +1165,16 @@ void GitService::pushOrigin(const QString& repositoryPath, const QString& token,
   const auto branch =
       runGit(repositoryPath, {QStringLiteral("branch"), QStringLiteral("--show-current")});
   if (branch.isEmpty()) throw ProcessError(QStringLiteral("Switch to a branch before pushing."));
+  if (!forceExpected.isEmpty()) {
+    static const QRegularExpression fullHash(QStringLiteral(R"(^([0-9a-f]{40}|[0-9a-f]{64})$)"));
+    if (!fullHash.match(forceExpected).hasMatch()) throw ProcessError(QStringLiteral("Invalid commit hash."));
+    // The lease is the tip the user reviewed. If a fetch has moved the
+    // tracking branch since, they have not seen what would be overwritten.
+    const auto tracking = runGitOrEmpty(repositoryPath, {QStringLiteral("rev-parse"), QStringLiteral("--verify"),
+        QStringLiteral("--quiet"), QStringLiteral("refs/remotes/origin/") + branch});
+    if (tracking != forceExpected)
+      throw ProcessError(QStringLiteral("origin/%1 changed since you confirmed. Review it and force push again.").arg(branch));
+  }
 
   QStringList arguments;
   auto environment = sshEnvironment(sshCommand, remote);
@@ -1091,9 +1189,135 @@ void GitService::pushOrigin(const QString& repositoryPath, const QString& token,
     environment.insert(QStringLiteral("RELAY_GIT_TOKEN"), token);
     environment.insert(QStringLiteral("RELAY_GIT_USERNAME"), username);
   }
-  arguments.append({QStringLiteral("push"), QStringLiteral("--set-upstream"),
-                    QStringLiteral("origin"), QStringLiteral("HEAD")});
-  static_cast<void>(runGit(repositoryPath, arguments, environment));
+  arguments.append({QStringLiteral("push"), QStringLiteral("--set-upstream")});
+  if (forceExpected.isEmpty()) {
+    arguments.append({QStringLiteral("origin"), QStringLiteral("HEAD")});
+    static_cast<void>(runGit(repositoryPath, arguments, environment));
+    return;
+  }
+  const auto target = QStringLiteral("refs/heads/") + branch;
+  arguments.append({QStringLiteral("--force-with-lease=%1:%2").arg(target, forceExpected),
+                    QStringLiteral("origin"), QStringLiteral("HEAD:") + target});
+  try {
+    static_cast<void>(runGit(repositoryPath, arguments, environment));
+  } catch (const ProcessError& failure) {
+    if (!failure.qMessage().contains(QStringLiteral("stale info")) &&
+        !failure.result().standardError.contains("stale info")) throw;
+    throw ProcessError(QStringLiteral("origin/%1 has new commits since your last fetch. Fetch origin and review them before force pushing.").arg(branch));
+  }
+}
+
+QStringList GitService::originTransport(const QString& remote, const QString& token, const QString& handle,
+                                        const QString& sshCommand, QProcessEnvironment& environment) const {
+  environment = sshEnvironment(sshCommand, remote);
+  environment.insert(QStringLiteral("GIT_TERMINAL_PROMPT"), QStringLiteral("0"));
+  static const QRegularExpression githubHttps(QStringLiteral(R"(^https://github\.com/)"),
+                                               QRegularExpression::CaseInsensitiveOption);
+  if (token.isEmpty() || !githubHttps.match(remote).hasMatch()) return {};
+  environment.insert(QStringLiteral("RELAY_GIT_TOKEN"), token);
+  environment.insert(QStringLiteral("RELAY_GIT_USERNAME"), handle.isEmpty() ? QStringLiteral("x-access-token") : handle);
+  return {QStringLiteral("-c"), QStringLiteral("credential.helper="), QStringLiteral("-c"),
+          QStringLiteral("credential.helper=") + githubCredentialHelper()};
+}
+
+namespace {
+void requireTagName(const QString& tag) {
+  static const QRegularExpression invalid(QStringLiteral(R"([\x00-\x20~^:?*\[\\]|\.\.|@\{|^-|^/|/$|\.lock$|^\.|/\.)"));
+  if (tag.isEmpty() || invalid.match(tag).hasMatch()) throw ProcessError(QStringLiteral("Choose a valid tag name."));
+}
+}  // namespace
+
+QList<QPair<QString, QString>> GitService::listOriginTags(const QString& repositoryPath, const QString& token,
+                                                          const QString& handle, const QString& sshCommand) const {
+  const auto remote = originRemoteUrl(repositoryPath);
+  if (remote.isEmpty()) throw ProcessError(QStringLiteral("This repository does not have an origin remote."));
+  QProcessEnvironment environment;
+  auto arguments = originTransport(remote, token, handle, sshCommand, environment);
+  arguments.append({QStringLiteral("ls-remote"), QStringLiteral("--tags"), QStringLiteral("--refs"), QStringLiteral("origin")});
+  QList<QPair<QString, QString>> tags;
+  static const QRegularExpression line(QStringLiteral(R"(^([0-9a-f]{40}|[0-9a-f]{64})\trefs/tags/(.+)$)"));
+  for (const auto& entry : runGit(repositoryPath, arguments, environment).split(u'\n', Qt::SkipEmptyParts)) {
+    const auto match = line.match(entry);
+    if (match.hasMatch()) tags.append({match.captured(2), match.captured(1)});
+  }
+  std::sort(tags.begin(), tags.end());
+  return tags;
+}
+
+void GitService::pushOriginTag(const QString& repositoryPath, const QString& tag, const QString& token,
+                               const QString& handle, const QString& sshCommand) const {
+  requireTagName(tag);
+  const auto remote = originRemoteUrl(repositoryPath, true);
+  if (remote.isEmpty()) throw ProcessError(QStringLiteral("This repository does not have an origin remote."));
+  if (runGitOrEmpty(repositoryPath, {QStringLiteral("rev-parse"), QStringLiteral("--verify"), QStringLiteral("--quiet"),
+                                     QStringLiteral("refs/tags/") + tag}).isEmpty())
+    throw ProcessError(QStringLiteral("Choose an existing local tag."));
+  QProcessEnvironment environment;
+  auto arguments = originTransport(remote, token, handle, sshCommand, environment);
+  const auto ref = QStringLiteral("refs/tags/") + tag;
+  arguments.append({QStringLiteral("push"), QStringLiteral("origin"), ref + u':' + ref});
+  try {
+    static_cast<void>(runGit(repositoryPath, arguments, environment));
+  } catch (const ProcessError& failure) {
+    if (!failure.qMessage().contains(QStringLiteral("already exists")) && !failure.result().standardError.contains("already exists")) throw;
+    throw ProcessError(QStringLiteral("Origin already has a different tag %1. Delete it on origin first if it should be replaced.").arg(tag));
+  }
+}
+
+void GitService::deleteOriginTag(const QString& repositoryPath, const QString& tag, const QString& expected,
+                                 const QString& token, const QString& handle, const QString& sshCommand) const {
+  requireTagName(tag);
+  static const QRegularExpression fullHash(QStringLiteral(R"(^([0-9a-f]{40}|[0-9a-f]{64})$)"));
+  if (!fullHash.match(expected).hasMatch()) throw ProcessError(QStringLiteral("Invalid object id."));
+  const auto remote = originRemoteUrl(repositoryPath, true);
+  if (remote.isEmpty()) throw ProcessError(QStringLiteral("This repository does not have an origin remote."));
+  QProcessEnvironment environment;
+  auto arguments = originTransport(remote, token, handle, sshCommand, environment);
+  const auto ref = QStringLiteral("refs/tags/") + tag;
+  arguments.append({QStringLiteral("push"), QStringLiteral("--force-with-lease=%1:%2").arg(ref, expected),
+                    QStringLiteral("origin"), u':' + ref});
+  try {
+    static_cast<void>(runGit(repositoryPath, arguments, environment));
+  } catch (const ProcessError& failure) {
+    if (!failure.qMessage().contains(QStringLiteral("stale info")) && !failure.result().standardError.contains("stale info")) throw;
+    throw ProcessError(QStringLiteral("Tag %1 changed on origin since it was listed. List the tags again before deleting it.").arg(tag));
+  }
+}
+
+void GitService::deleteOriginBranch(const QString& repositoryPath, const QString& branch, const QString& expected,
+                                    const QString& token, const QString& handle, const QString& sshCommand) const {
+  const auto remote = originRemoteUrl(repositoryPath, true);
+  if (remote.isEmpty()) throw ProcessError(QStringLiteral("This repository does not have an origin remote."));
+  static const QRegularExpression fullHash(QStringLiteral(R"(^([0-9a-f]{40}|[0-9a-f]{64})$)"));
+  if (!fullHash.match(expected).hasMatch()) throw ProcessError(QStringLiteral("Invalid commit hash."));
+  const auto tracking = QStringLiteral("refs/remotes/origin/") + branch;
+  if (branch.isEmpty() || branch.startsWith(u'-')) throw ProcessError(QStringLiteral("Choose an existing branch on origin."));
+  try {
+    static_cast<void>(runGit(repositoryPath, {QStringLiteral("check-ref-format"), QStringLiteral("refs/heads/") + branch}));
+  } catch (const ProcessError&) {
+    throw ProcessError(QStringLiteral("Choose an existing branch on origin."));
+  }
+  const auto tip = runGitOrEmpty(repositoryPath, {QStringLiteral("rev-parse"), QStringLiteral("--verify"),
+                                                  QStringLiteral("--quiet"), tracking});
+  if (tip.isEmpty()) throw ProcessError(QStringLiteral("Choose an existing branch on origin."));
+  if (tip != expected)
+    throw ProcessError(QStringLiteral("origin/%1 changed since you confirmed. Review it and delete it again.").arg(branch));
+  if (runGitOrEmpty(repositoryPath, {QStringLiteral("symbolic-ref"), QStringLiteral("--quiet"),
+                                     QStringLiteral("refs/remotes/origin/HEAD")}) == tracking)
+    throw ProcessError(QStringLiteral("%1 is origin's default branch. Change the default on the server before deleting it.").arg(branch));
+
+  QProcessEnvironment environment;
+  auto arguments = originTransport(remote, token, handle, sshCommand, environment);
+  const auto target = QStringLiteral("refs/heads/") + branch;
+  arguments.append({QStringLiteral("push"), QStringLiteral("--force-with-lease=%1:%2").arg(target, expected),
+                    QStringLiteral("origin"), QStringLiteral(":") + target});
+  try {
+    static_cast<void>(runGit(repositoryPath, arguments, environment));
+  } catch (const ProcessError& failure) {
+    if (!failure.qMessage().contains(QStringLiteral("stale info")) &&
+        !failure.result().standardError.contains("stale info")) throw;
+    throw ProcessError(QStringLiteral("origin/%1 has new commits since your last fetch. Fetch origin and review them before deleting it.").arg(branch));
+  }
 }
 
 Repository GitService::cloneRepository(const QString& remoteUrl, const QString& destinationPath,
