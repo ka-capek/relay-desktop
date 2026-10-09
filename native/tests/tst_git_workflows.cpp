@@ -1,7 +1,9 @@
 #include "relay/git_service.hpp"
 #include "relay/process_runner.hpp"
 #include "relay/relay_controller.hpp"
+#include "test_shard.hpp"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QSignalSpy>
@@ -567,5 +569,9 @@ class GitWorkflowsTest final : public QObject {
     QCOMPARE(read(root, QStringLiteral("file.txt")), QByteArray("two\n"));
   }
 };
-QTEST_GUILESS_MAIN(GitWorkflowsTest)
+int main(int argc, char** argv) {
+  QCoreApplication application(argc, argv);
+  GitWorkflowsTest test;
+  return relay::test::execSharded(&test, argc, argv);
+}
 #include "tst_git_workflows.moc"

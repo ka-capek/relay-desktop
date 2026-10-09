@@ -1103,6 +1103,10 @@ Match verification effort to risk.
   Linux builds only supplement it. CI runs suites with `ctest --parallel 4`
   and disables Defender real-time scanning on the disposable Windows runner,
   so every test must keep using its own temporary directories and profiles.
+  `git_workflows` runs as `git_workflows_1` and `git_workflows_2`:
+  `tests/test_shard.hpp` gives each `RELAY_TEST_SHARD=i/n` every n-th test
+  function in declaration order, so new functions are never left out. Use it
+  for another suite that becomes the longest one on Windows.
 
 Git fixtures should cover, as relevant: clean, modified, untracked, binary,
 no commits, with and without `origin` and upstream, local and remote-only
@@ -1201,7 +1205,7 @@ platforms, connect/browse/restart/disconnect UI, failed metadata/vault writes,
 controller shutdown, stale requests, branch browsing without checkout and
 multi-commit conflict continuation. Private real-server authentication remains
 an installed-platform manual check; do not claim fixtures prove it.
-Windows Git service/workflow suite budgets are 180/300 seconds: run
+Windows Git service/workflow suite budgets are 180/300 seconds (per workflow shard): run
 36154921968 passed the new cases but exhausted the former total suite limits
 near the final fixtures. Individual process limits remain unchanged. Gitea PAT
 requests use Authorization: token; GitLab uses Bearer. Discovery has a 64 MiB

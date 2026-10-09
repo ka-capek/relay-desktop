@@ -6,18 +6,28 @@ foreach(test_name IN ITEMS forge_integration forge_service app_paths avatar_cach
   set_target_properties(tst_${test_name} PROPERTIES WIN32_EXECUTABLE FALSE)
   target_link_libraries(tst_${test_name} PRIVATE relay_native_core Qt6::Test)
   target_compile_definitions(tst_${test_name} PRIVATE QT_NO_CAST_FROM_ASCII QT_NO_CAST_TO_ASCII)
-  add_test(NAME ${test_name} COMMAND tst_${test_name}
-    -o -,txt -o "${CMAKE_CURRENT_BINARY_DIR}/${test_name}.txt,txt")
+  if(test_name STREQUAL "git_workflows")
+    # The slowest suite on Windows runs as two halves that CTest can run in
+    # parallel; see test_shard.hpp.
+    foreach(shard IN ITEMS 1 2)
+      add_test(NAME ${test_name}_${shard} COMMAND tst_${test_name}
+        -o -,txt -o "${CMAKE_CURRENT_BINARY_DIR}/${test_name}_${shard}.txt,txt")
+      set_tests_properties(${test_name}_${shard} PROPERTIES ENVIRONMENT "RELAY_TEST_SHARD=${shard}/2")
+    endforeach()
+  else()
+    add_test(NAME ${test_name} COMMAND tst_${test_name}
+      -o -,txt -o "${CMAKE_CURRENT_BINARY_DIR}/${test_name}.txt,txt")
+  endif()
 endforeach()
 
 # Git for Windows process startup makes this multi-repository integration suite
 # substantially slower than the individual unit/UI suites.
-set_tests_properties(git_workflows PROPERTIES TIMEOUT 180)
+set_tests_properties(git_workflows_1 git_workflows_2 PROPERTIES TIMEOUT 180)
 if(WIN32)
   # Run 36154921968 passed the new branch/cherry-pick cases, then exhausted
   # suite limits near the final fixtures. Git process startup dominates here.
   set_tests_properties(git_service PROPERTIES TIMEOUT 180)
-  set_tests_properties(git_workflows PROPERTIES TIMEOUT 300)
+  set_tests_properties(git_workflows_1 git_workflows_2 PROPERTIES TIMEOUT 300)
   # The UI suite also creates real Git repositories. With the toolbar pull,
   # resize and SSH-binding fixtures, Windows process startup can exceed the
   # workflow's 60-second default even while every individual test passes.
