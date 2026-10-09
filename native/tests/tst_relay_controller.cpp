@@ -13,6 +13,9 @@
 #include <QScopeGuard>
 
 namespace {
+// Upper bound for one step that starts Git processes. Windows CI runs four
+// suites at once, and opening a repository there starts dozens of git.exe.
+constexpr int gitTimeoutMs = 30000;
 
 void writeFile(const QString& path, const QByteArray& contents) {
   QFile file(path);
@@ -167,12 +170,12 @@ esac
     controller.start();
     QSignalSpy opened(&controller, &relay::RelayController::currentRepositoryChanged);
     controller.openRepository(first);
-    QVERIFY(opened.wait(5000));
+    QVERIFY(opened.wait(gitTimeoutMs));
     QVERIFY(QFile::remove(config.storeFile));
     QVERIFY(QDir().mkdir(config.storeFile));
     QSignalSpy failed(&controller, &relay::RelayController::operationFailed);
     controller.openRepository(second);
-    QVERIFY(failed.wait(5000));
+    QVERIFY(failed.wait(gitTimeoutMs));
     QCOMPARE(controller.currentRepository()->path, QFileInfo(first).canonicalFilePath());
     QCOMPARE(opened.size(), 1);
   }
@@ -217,16 +220,16 @@ esac
     QSignalSpy changed(&controller, &relay::RelayController::currentRepositoryChanged);
     QSignalSpy busy(&controller, &relay::RelayController::busyChanged);
     controller.openRepository(root.path());
-    QVERIFY(changed.wait(5000));
+    QVERIFY(changed.wait(gitTimeoutMs));
     changed.clear(); busy.clear();
     const auto cleanup = qScopeGuard([&] { release.release(); });
     controller.createBranch(QStringLiteral("feature"));
-    QVERIFY(started.tryAcquire(1, 5000));
+    QVERIFY(started.tryAcquire(1, gitTimeoutMs));
     controller.refreshRepository();
     // Refresh must not start or invalidate the mutation's eventual snapshot.
     QCOMPARE(busy.size(), 1);
     release.release();
-    QVERIFY(changed.wait(5000));
+    QVERIFY(changed.wait(gitTimeoutMs));
     QCOMPARE(controller.currentRepository()->branch, QStringLiteral("feature"));
   }
 
@@ -248,11 +251,11 @@ esac
     QSignalSpy busy(&controller, &relay::RelayController::busyChanged);
     const auto cleanup = qScopeGuard([&] { release.release(); });
     controller.openRepository(root.filePath(QStringLiteral("missing")));
-    QVERIFY(started.tryAcquire(1, 5000));
+    QVERIFY(started.tryAcquire(1, gitTimeoutMs));
     controller.openRepository(root.path());
-    QVERIFY(changed.wait(5000));
+    QVERIFY(changed.wait(gitTimeoutMs));
     release.release();
-    QTRY_COMPARE_WITH_TIMEOUT(busy.size(), 4, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(busy.size(), 4, gitTimeoutMs);
     QVERIFY(failures.isEmpty());
     QCOMPARE(controller.currentRepository()->path, QFileInfo(root.path()).canonicalFilePath());
   }
@@ -292,7 +295,7 @@ esac
     QSignalSpy busy(&controller, &relay::RelayController::busyChanged);
     const auto cleanup = qScopeGuard([&] { release.release(); });
     controller.cloneRepository(QStringLiteral("git@github.com:relay-test/source"), root.path(), QStringLiteral("clone"), work.id);
-    QVERIFY(started.tryAcquire(1, 5000));
+    QVERIFY(started.tryAcquire(1, gitTimeoutMs));
     controller.setActiveAccount(work.id);
     QCOMPARE(failures.size(), 1);
     QCOMPARE(controller.state().activeAccountId, personal.id);
@@ -301,9 +304,9 @@ esac
     QVERIFY(!QFileInfo::exists(root.filePath(QStringLiteral("blocked-create"))));
     failures.clear();
     controller.openRepository(source);
-    QVERIFY(changed.wait(5000));
+    QVERIFY(changed.wait(gitTimeoutMs));
     release.release();
-    QTRY_COMPARE_WITH_TIMEOUT(busy.size(), 4, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(busy.size(), 4, gitTimeoutMs);
     QVERIFY2(failures.isEmpty(), failures.isEmpty() ? "" : qPrintable(failures.first().at(1).toString()));
     QCOMPARE(controller.currentRepository()->path, QFileInfo(source).canonicalFilePath());
     const auto clone = root.filePath(QStringLiteral("clone"));
@@ -465,10 +468,10 @@ esac
     QSignalSpy changed(&controller, &relay::RelayController::currentRepositoryChanged);
     QSignalSpy failures(&controller, &relay::RelayController::operationFailed);
     controller.openRepository(path);
-    QVERIFY(changed.wait(5000));
+    QVERIFY(changed.wait(gitTimeoutMs));
     changed.clear();
     controller.commit({QStringLiteral("first.txt")}, QStringLiteral("Work commit"), {});
-    QVERIFY(changed.wait(5000));
+    QVERIFY(changed.wait(gitTimeoutMs));
     QVERIFY(failures.isEmpty());
     relay::ProcessRequest log{QStringLiteral("git"),
         {QStringLiteral("-C"), path, QStringLiteral("log"), QStringLiteral("-1"),
@@ -481,7 +484,7 @@ esac
     controller.setRepositoryAccount(path, {});
     changed.clear();
     controller.commit({QStringLiteral("second.txt")}, QStringLiteral("Personal commit"), {});
-    QVERIFY(changed.wait(5000));
+    QVERIFY(changed.wait(gitTimeoutMs));
     QVERIFY(failures.isEmpty());
     QCOMPARE(QString::fromUtf8(relay::ProcessRunner::run(log).standardOutput).trimmed(),
              QStringLiteral("Personal Identity|personal@example.test|Personal Identity|personal@example.test"));
@@ -550,7 +553,7 @@ esac
     QSignalSpy diverged(&controller, &relay::RelayController::pullDiverged);
     QSignalSpy failures(&controller, &relay::RelayController::operationFailed);
     controller.openRepository(local);
-    QVERIFY(changed.wait(5000));
+    QVERIFY(changed.wait(gitTimeoutMs));
     const auto before = controller.currentRepository()->history.value(0).hash;
     controller.pullOrigin();
     QTRY_VERIFY_WITH_TIMEOUT(!diverged.isEmpty() || !failures.isEmpty(), 10000);
@@ -597,7 +600,7 @@ esac
     QSignalSpy changed(&controller, &relay::RelayController::currentRepositoryChanged);
     QSignalSpy failures(&controller, &relay::RelayController::operationFailed);
     controller.openRepository(path);
-    QVERIFY(changed.wait(5000));
+    QVERIFY(changed.wait(gitTimeoutMs));
     QVERIFY(controller.state().repositoryAccounts.isEmpty());
 
     // The dialog's default is the local folder name, which here has a space.
@@ -645,12 +648,12 @@ esac
     QSignalSpy busy(&controller, &relay::RelayController::busyChanged);
     controller.requestGitHubRepositories(first.id);
     const auto cleanup = qScopeGuard([&] { release.release(); });
-    QVERIFY(started.tryAcquire(1, 5000));
+    QVERIFY(started.tryAcquire(1, gitTimeoutMs));
     controller.requestGitHubRepositories(second.id);
-    QTRY_COMPARE_WITH_TIMEOUT(failures.size(), 1, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(failures.size(), 1, gitTimeoutMs);
     QCOMPARE(failures.first().at(1).toString(), second.handle);
     release.release();
-    QTRY_COMPARE_WITH_TIMEOUT(busy.size(), 4, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(busy.size(), 4, gitTimeoutMs);
     QCOMPARE(failures.size(), 1);
   }
 
@@ -707,7 +710,7 @@ esac
     controller.start();
     QSignalSpy opened(&controller, &relay::RelayController::currentRepositoryChanged);
     controller.openRepository(repositoryPath);
-    QVERIFY(opened.wait(5000));
+    QVERIFY(opened.wait(gitTimeoutMs));
     QVERIFY(controller.currentRepository() != nullptr);
 
     QSignalSpy closed(&controller, &relay::RelayController::repositoryClosed);
@@ -758,15 +761,15 @@ esac
     QSignalSpy repositories(&controller, &relay::RelayController::currentRepositoryChanged);
     QSignalSpy busy(&controller, &relay::RelayController::busyChanged);
     controller.openRepository(slow);
-    QVERIFY(slowStarted.tryAcquire(1, 5000));
+    QVERIFY(slowStarted.tryAcquire(1, gitTimeoutMs));
     controller.openRepository(fast);
-    QVERIFY(repositories.wait(5000));
+    QVERIFY(repositories.wait(gitTimeoutMs));
     QCOMPARE(repositories.size(), 1);
     QVERIFY(controller.currentRepository() != nullptr);
     QCOMPARE(controller.currentRepository()->path, QFileInfo(fast).canonicalFilePath());
 
     releaseSlow.release();
-    QTRY_VERIFY_WITH_TIMEOUT(busy.size() >= 4, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(busy.size() >= 4, gitTimeoutMs);
     QCOMPARE(repositories.size(), 1);
     QCOMPARE(controller.currentRepository()->path, QFileInfo(fast).canonicalFilePath());
   }
@@ -796,20 +799,20 @@ esac
     controller.start();
     QSignalSpy opened(&controller, &relay::RelayController::currentRepositoryChanged);
     controller.openRepository(repositoryPath);
-    QVERIFY(opened.wait(5000));
+    QVERIFY(opened.wait(gitTimeoutMs));
 
     QSignalSpy diffs(&controller, &relay::RelayController::fileDiffReady);
     QSignalSpy busy(&controller, &relay::RelayController::busyChanged);
     controller.requestFileDiff(QStringLiteral("slow.txt"));
-    QVERIFY(slowStarted.tryAcquire(1, 5000));
+    QVERIFY(slowStarted.tryAcquire(1, gitTimeoutMs));
     controller.requestFileDiff(QStringLiteral("fast.txt"));
-    QVERIFY(diffs.wait(5000));
+    QVERIFY(diffs.wait(gitTimeoutMs));
     QCOMPARE(diffs.size(), 1);
     QCOMPARE(diffs.constFirst().at(1).toString(), QStringLiteral("fast.txt"));
     QVERIFY(diffs.constFirst().at(2).toString().contains(QStringLiteral("+fast")));
 
     releaseSlow.release();
-    QTRY_VERIFY_WITH_TIMEOUT(busy.size() >= 4, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(busy.size() >= 4, gitTimeoutMs);
     QCOMPARE(diffs.size(), 1);
   }
 

@@ -1106,7 +1106,9 @@ Match verification effort to risk.
   `git_workflows` runs as `git_workflows_1` and `git_workflows_2`:
   `tests/test_shard.hpp` gives each `RELAY_TEST_SHARD=i/n` every n-th test
   function in declaration order, so new functions are never left out. Use it
-  for another suite that becomes the longest one on Windows.
+  for another suite that becomes the longest one on Windows. Steps that start
+  Git wait up to `gitTimeoutMs` (30 s) in the controller and main-window
+  suites: the v0.5.4 tag build failed a 5-second wait under parallel load.
 
 Git fixtures should cover, as relevant: clean, modified, untracked, binary,
 no commits, with and without `origin` and upstream, local and remote-only
