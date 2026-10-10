@@ -18,6 +18,7 @@ class QListView;
 class QMenu;
 class QPlainTextEdit;
 class QPushButton;
+class QScrollArea;
 class QCloseEvent;
 class QSplitter;
 class QStackedWidget;
@@ -137,6 +138,7 @@ class MainWindow final : public QMainWindow {
   QLabel* historyTitle_{};
   QLabel* historyMetadata_{};
   QLabel* historyBody_{};
+  QScrollArea* historyBodyArea_{};
   QPushButton* copyHashButton_{};
   QPushButton* openGitHubButton_{};
   QLabel* statusIdentity_{};

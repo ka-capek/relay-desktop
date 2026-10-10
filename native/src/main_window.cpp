@@ -25,6 +25,8 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QInputDialog>
+#include <QPainter>
+#include <QScrollArea>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
@@ -93,6 +95,24 @@ QString githubCommitUrl(QString remote, const QString& hash) {
   return QStringLiteral("https://github.com/%1/%2/commit/%3")
       .arg(match.captured(1), match.captured(2), hash);
 }
+
+// One line that ends in "…" instead of wrapping; the full text is the tooltip.
+class ElidedLabel final : public QLabel {
+ public:
+  using QLabel::QLabel;
+  [[nodiscard]] QSize minimumSizeHint() const override { return {0, QLabel::minimumSizeHint().height()}; }
+  [[nodiscard]] QSize sizeHint() const override { return {0, QLabel::sizeHint().height()}; }
+
+ protected:
+  void paintEvent(QPaintEvent*) override {
+    QPainter painter(this);
+    painter.setPen(palette().color(foregroundRole()));
+    painter.setFont(font());
+    const auto rect = contentsRect();
+    painter.drawText(rect, Qt::AlignLeft | Qt::AlignVCenter,
+                     fontMetrics().elidedText(text(), Qt::ElideRight, rect.width()));
+  }
+};
 
 QLabel* sectionLabel(const QString& text, QWidget* parent) {
   auto* label = new QLabel(text, parent);
@@ -867,9 +887,10 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   auto* rightLayout = new QVBoxLayout(details);
   rightLayout->setContentsMargins(10, 5, 6, 6);
   auto* headingRow = new QHBoxLayout;
-  historyTitle_ = new QLabel(tr("Select a commit"), right);
+  // Title and metadata stay one line each so the header keeps its height and
+  // stays on the grid; the message body scrolls in a bounded area.
+  historyTitle_ = new ElidedLabel(tr("Select a commit"), right);
   historyTitle_->setProperty("role", QStringLiteral("large"));
-  historyTitle_->setWordWrap(true);
   historyTitle_->setTextFormat(Qt::PlainText);
   copyHashButton_ = new QPushButton(tr("Copy hash"), right);
   copyHashButton_->setEnabled(false);
@@ -878,14 +899,23 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   headingRow->addWidget(historyTitle_, 1);
   headingRow->addWidget(copyHashButton_);
   headingRow->addWidget(openGitHubButton_);
-  historyMetadata_ = new QLabel(right);
+  historyMetadata_ = new ElidedLabel(right);
   historyMetadata_->setProperty("role", QStringLiteral("meta"));
-  historyMetadata_->setWordWrap(true);
   historyMetadata_->setTextFormat(Qt::PlainText);
   historyBody_ = new QLabel(right);
   historyBody_->setProperty("role", QStringLiteral("body"));
   historyBody_->setWordWrap(true);
   historyBody_->setTextFormat(Qt::PlainText);
+  historyBody_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  historyBody_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+  historyBodyArea_ = new QScrollArea(right);
+  historyBodyArea_->setObjectName(QStringLiteral("historyBodyArea"));
+  historyBodyArea_->setWidget(historyBody_);
+  historyBodyArea_->setWidgetResizable(true);
+  historyBodyArea_->setFrameShape(QFrame::NoFrame);
+  historyBodyArea_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  historyBodyArea_->setMaximumHeight(72);
+  historyBodyArea_->setVisible(false);
   commitFileModel_ = new CommitFileListModel(this);
   commitFileList_ = new QListView(right);
   commitFileList_->setObjectName(QStringLiteral("commitFileList"));
@@ -895,7 +925,7 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   historyDiff_ = new DiffView(right);
   rightLayout->addLayout(headingRow);
   rightLayout->addWidget(historyMetadata_);
-  rightLayout->addWidget(historyBody_);
+  rightLayout->addWidget(historyBodyArea_);
   rightLayout->addWidget(sectionLabel(tr("Changed files"), right));
   rightLayout->addWidget(commitFileList_);
   right->addWidget(details);
@@ -1179,6 +1209,8 @@ void MainWindow::connectController() {
                      QLocale().toString(detail.committerDate.toLocalTime(), QLocale::ShortFormat))
                 + (detail.isSigned ? tr(" · Signed") : QString{}));
             historyBody_->setText(detail.body);
+            historyBodyArea_->setVisible(!detail.body.trimmed().isEmpty());
+            historyTitle_->setToolTip(detail.title);
             commitFileModel_->setFiles(detail.files);
             copyHashButton_->setEnabled(true);
             openGitHubButton_->setEnabled(!githubCommitUrl(repository_->remote, detail.fullHash).isEmpty());
@@ -1407,6 +1439,7 @@ void MainWindow::applyRepository(const Repository& repository) {
     historyTitle_->setText(tr("Select a commit"));
     historyMetadata_->clear();
     historyBody_->clear();
+    historyBodyArea_->setVisible(false);
     copyHashButton_->setEnabled(false);
     openGitHubButton_->setEnabled(false);
   }
@@ -1548,6 +1581,7 @@ void MainWindow::clearCommitDetail() {
   historyTitle_->setText(tr("Select a commit"));
   historyMetadata_->clear();
   historyBody_->clear();
+  historyBodyArea_->setVisible(false);
   commitFileModel_->setFiles({});
   historyDiff_->clearDiff();
   copyHashButton_->setEnabled(false);
