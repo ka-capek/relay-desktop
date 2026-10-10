@@ -23,6 +23,7 @@
 #include <QFormLayout>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QInputDialog>
 #include <QItemSelectionModel>
 #include <QLabel>
@@ -132,6 +133,14 @@ MainWindow::MainWindow(RelayController* controller, QWidget* parent)
   connect(qApp, &QCoreApplication::aboutToQuit, this, &MainWindow::saveLayout);
   connectController();
   theme::apply(*qApp);
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+  // The sidebar heading takes the tab bar's exact height, so the line under
+  // both is one straight line whatever the font or platform.
+  if (contentTabs_ && watched == contentTabs_->tabBar() && event->type() == QEvent::Resize && sidebarHeading_)
+    sidebarHeading_->setFixedHeight(contentTabs_->tabBar()->height());
+  return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -314,6 +323,9 @@ void MainWindow::buildShell() {
   branchPicker_->setAccessibleName(tr("Current branch"));
   branchPicker_->setObjectName(QStringLiteral("branchPicker"));
   branchPicker_->setMinimumWidth(150);
+  branchPicker_->setMaximumWidth(320);
+  // Wide enough for the current branch name, up to the maximum.
+  branchPicker_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
   branchPicker_->addItem(tr("No branch"));
   syncButton_ = new QToolButton(actionRow);
   syncButton_->setObjectName(QStringLiteral("syncButton"));
@@ -393,6 +405,7 @@ void MainWindow::buildShell() {
   contentTabs_->setObjectName(QStringLiteral("contentTabs"));
   contentTabs_->addTab(buildChangesPage(contentTabs_), tr("Changes"));
   contentTabs_->addTab(buildHistoryPage(contentTabs_), tr("History"));
+  contentTabs_->tabBar()->installEventFilter(this);
   workspaceStack_->addWidget(contentTabs_);
   workspace->addWidget(workspaceStack_);
   workspace->setSizes({270, 1150});
@@ -433,10 +446,18 @@ QWidget* MainWindow::buildSidebar(QWidget* parent) {
   sidebar->setObjectName(QStringLiteral("sidebar"));
   sidebar->setMinimumWidth(225);
   sidebar->setMaximumWidth(340);
+  // The sidebar shares the content grid: its heading is as tall as the tab
+  // bar (one continuous line under both), and its two control rows sit on
+  // the same lines as the History header's two rows.
   auto* layout = new QVBoxLayout(sidebar);
-  layout->setContentsMargins(10, 12, 10, 8);
-  layout->setSpacing(8);
-  auto* headingRow = new QHBoxLayout;
+  layout->setContentsMargins(0, 0, 0, 0);
+  layout->setSpacing(0);
+  auto* heading = sidebarHeading_ = new QWidget(sidebar);
+  heading->setFixedHeight(31);  // until the tab bar reports its real height
+  heading->setObjectName(QStringLiteral("sidebarHeading"));
+  heading->setAttribute(Qt::WA_StyledBackground);
+  auto* headingRow = new QHBoxLayout(heading);
+  headingRow->setContentsMargins(10, 0, 6, 0);
   headingRow->addWidget(sectionLabel(tr("Repositories"), sidebar));
   headingRow->addStretch();
   auto* add = new QToolButton(sidebar);
@@ -450,16 +471,21 @@ QWidget* MainWindow::buildSidebar(QWidget* parent) {
   add->setMenu(addMenu);
   add->setPopupMode(QToolButton::InstantPopup);
   headingRow->addWidget(add);
-  layout->addLayout(headingRow);
+  layout->addWidget(heading);
 
+  auto* filterRow = new QHBoxLayout;
+  filterRow->setContentsMargins(6, 5, 6, 5);
   repositoryFilter_ = new QLineEdit(sidebar);
   repositoryFilter_->setObjectName(QStringLiteral("repositoryFilter"));
   repositoryFilter_->setPlaceholderText(tr("Filter repositories"));
   repositoryFilter_->setClearButtonEnabled(true);
   repositoryFilter_->setAccessibleName(tr("Filter repositories"));
-  layout->addWidget(repositoryFilter_);
+  filterRow->addWidget(repositoryFilter_);
+  layout->addLayout(filterRow);
 
   auto* orderRow = new QHBoxLayout;
+  orderRow->setContentsMargins(6, 0, 6, 5);
+  orderRow->setSpacing(4);
   repositoryOrder_ = new QComboBox(sidebar);
   repositoryOrder_->addItem(tr("Manual"), static_cast<int>(RepositoryOrderMode::manual));
   repositoryOrder_->addItem(tr("Age"), static_cast<int>(RepositoryOrderMode::age));
@@ -570,7 +596,9 @@ QWidget* MainWindow::buildChangesPage(QWidget* parent) {
   leftLayout->setSpacing(0);
   auto* fileHeader = new QFrame(left);
   auto* fileHeaderLayout = new QHBoxLayout(fileHeader);
-  fileHeaderLayout->setContentsMargins(10, 6, 10, 6);
+  // Same 5px rhythm as the History header, so row 1 lines up across tabs;
+  // the checkbox sits over the file rows' checkboxes.
+  fileHeaderLayout->setContentsMargins(8, 5, 6, 5);
   selectAllFiles_ = new SelectAllCheckBox(tr("Select all changes"), fileHeader);
   selectAllFiles_->setTristate(true);
   fileHeaderLayout->addWidget(selectAllFiles_);
@@ -594,7 +622,8 @@ QWidget* MainWindow::buildChangesPage(QWidget* parent) {
   auto* commitBox = new QFrame(left);
   commitBox->setObjectName(QStringLiteral("commitBox"));
   auto* commitLayout = new QVBoxLayout(commitBox);
-  commitLayout->setContentsMargins(10, 10, 10, 10);
+  commitLayout->setContentsMargins(6, 6, 6, 6);
+  commitLayout->setSpacing(5);
   commitIdentity_ = new QLabel(tr("Connect an account before committing"), commitBox);
   commitIdentity_->setProperty("role", QStringLiteral("meta"));
   commitIdentity_->setWordWrap(true);
@@ -652,7 +681,10 @@ QWidget* MainWindow::buildChangesPage(QWidget* parent) {
   auto* rightLayout = new QVBoxLayout(right);
   rightLayout->setContentsMargins(0, 0, 0, 0);
   auto* diffTitle = sectionLabel(tr("Diff"), right);
-  diffTitle->setContentsMargins(12, 10, 12, 8);
+  // A 34px header row, centred on the same line as the file list header.
+  diffTitle->setContentsMargins(10, 0, 10, 0);
+  diffTitle->setFixedHeight(34);
+  diffTitle->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
   workingDiff_ = new DiffView(right);
   rightLayout->addWidget(diffTitle);
   rightLayout->addWidget(workingDiff_, 1);
@@ -693,9 +725,10 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   auto* left = new QWidget(splitter);
   auto* leftLayout = new QVBoxLayout(left);
   leftLayout->setContentsMargins(0, 0, 0, 0);
+  leftLayout->setSpacing(0);  // gaps come from row margins, as in the sidebar
   // Two dense rows: what to show, then what to find in it.
   auto* scopeRow = new QHBoxLayout;
-  scopeRow->setContentsMargins(6, 5, 6, 3);
+  scopeRow->setContentsMargins(6, 5, 6, 5);
   scopeRow->setSpacing(4);
   historyBranch_ = new QComboBox(left);
   historyBranch_->setObjectName(QStringLiteral("historyBranch"));
@@ -757,15 +790,18 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   historyMatches_->setProperty("role", QStringLiteral("meta"));
   historyMatches_->setMinimumWidth(48);
   historyMatches_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-  auto* previousMatch = new QToolButton(left);
+  // Square buttons with the bundled chevrons; icons follow the theme.
+  auto* previousMatch = historyPreviousMatch_ = new QToolButton(left);
   previousMatch->setObjectName(QStringLiteral("historyPreviousMatch"));
-  previousMatch->setText(tr("▲"));
-  previousMatch->setFixedWidth(24);
+  previousMatch->setProperty("kind", QStringLiteral("square"));
+  previousMatch->setIconSize(QSize(12, 12));
+  previousMatch->setToolTip(tr("Previous match (Shift+Enter)"));
   previousMatch->setAccessibleName(tr("Previous match"));
-  auto* nextMatch = new QToolButton(left);
+  auto* nextMatch = historyNextMatch_ = new QToolButton(left);
   nextMatch->setObjectName(QStringLiteral("historyNextMatch"));
-  nextMatch->setText(tr("▼"));
-  nextMatch->setFixedWidth(24);
+  nextMatch->setProperty("kind", QStringLiteral("square"));
+  nextMatch->setIconSize(QSize(12, 12));
+  nextMatch->setToolTip(tr("Next match (Enter)"));
   nextMatch->setAccessibleName(tr("Next match"));
   searchRow->addWidget(historySearchField_);
   searchRow->addWidget(historySearch_, 1);
@@ -816,6 +852,8 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   connect(historyList_->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this] { updateWorkflowActions(); });
   historyList_->setItemDelegate(new HistoryCommitItemDelegate(historyList_));
   historyList_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+  // Rows elide to the view; they never need sideways scrolling.
+  historyList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   historyList_->setAccessibleName(tr("Commit history"));
   leftLayout->addWidget(historyList_, 1);
 
@@ -827,7 +865,7 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   auto* details = new QWidget(right);
   details->setMinimumHeight(100);
   auto* rightLayout = new QVBoxLayout(details);
-  rightLayout->setContentsMargins(10, 8, 8, 6);
+  rightLayout->setContentsMargins(10, 5, 6, 6);
   auto* headingRow = new QHBoxLayout;
   historyTitle_ = new QLabel(tr("Select a commit"), right);
   historyTitle_->setProperty("role", QStringLiteral("large"));
@@ -1292,6 +1330,11 @@ void MainWindow::applyState(const AppState& state) {
   workingDiff_->setCodeFontSize(state.preferences.diffFontSize);
   historyDiff_->setCodeFontSize(state.preferences.diffFontSize);
   if (compareDialog_) compareDialog_->setDiffFontSize(state.preferences.diffFontSize);
+  {
+    const bool dark = theme::colors().panel.lightness() < 128;
+    historyPreviousMatch_->setIcon(QIcon(dark ? QStringLiteral(":/relay/chevron-up-dark.svg") : QStringLiteral(":/relay/chevron-up-light.svg")));
+    historyNextMatch_->setIcon(QIcon(dark ? QStringLiteral(":/relay/chevron-dark.svg") : QStringLiteral(":/relay/chevron-light.svg")));
+  }
   updateEditorAction();
   repositoryModel_->setRepositories(state.repositories);
   repositoryModel_->setOrder(state.repositoryOrder, state.manualOrder);

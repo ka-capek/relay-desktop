@@ -43,6 +43,7 @@ class MainWindow final : public QMainWindow {
  protected:
   bool event(QEvent* event) override;
   void closeEvent(QCloseEvent* event) override;
+  bool eventFilter(QObject* watched, QEvent* event) override;
 
  private:
   void buildMenus();
@@ -120,6 +121,9 @@ class MainWindow final : public QMainWindow {
   QToolButton* historyHighlight_{};
   QLabel* historyMatches_{};
   QToolButton* historyFocus_{};
+  QWidget* sidebarHeading_{};
+  QToolButton* historyPreviousMatch_{};
+  QToolButton* historyNextMatch_{};
   QWidget* historyDetails_{};
   bool focusRestoreMaximized_{};
   // Moves the history selection to the next (+1) or previous (-1) match.

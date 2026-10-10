@@ -336,7 +336,8 @@ void HistoryCommitItemDelegate::paint(QPainter* painter,
 
   int graphWidth = 0;
   if (graph) {
-    graphWidth = graph->width * historyLaneWidth + 12;
+    // One graph column for all rows, so every message starts at the same x.
+    graphWidth = std::max(model->graphLanes(), graph->width) * historyLaneWidth + 12;
     const auto x = [&commitRect](int lane) { return commitRect.left() + 12 + lane * historyLaneWidth; };
     const auto y = commitRect.center().y();
     painter->setRenderHint(QPainter::Antialiasing);
@@ -429,7 +430,7 @@ QSize HistoryCommitItemDelegate::sizeHint(const QStyleOptionViewItem& option,
   const auto* model = dynamic_cast<const HistoryCommitListModel*>(index.model());
   const auto* graph = model ? model->graphRowAt(index.row()) : nullptr;
   const bool startsDay = !graph && index.data(HistoryCommitListModel::startsDayGroupRole).toBool();
-  return {graph ? std::max(option.rect.width(), graph->width * historyLaneWidth + 320) : option.rect.width(),
+  return {graph ? std::max(option.rect.width(), model->graphLanes() * historyLaneWidth + 320) : option.rect.width(),
           (startsDay ? dayHeaderHeight : 0) + historyRowHeight};
 }
 

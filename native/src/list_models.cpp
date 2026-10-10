@@ -601,6 +601,7 @@ void HistoryCommitListModel::resetHistory(QList<HistoryCommit> commits, QString 
   graphRows_.clear();
   graphLanes_.clear();
   graphColors_.clear();
+  maxGraphWidth_ = 0;
   visibleIndices_.clear();
   hashes_.clear();
   searchResults_ = false;
@@ -716,6 +717,7 @@ void HistoryCommitListModel::setGraphEnabled(bool enabled) {
   graphRows_.clear();
   graphLanes_.clear();
   graphColors_.clear();
+  maxGraphWidth_ = 0;
   if (enabled) for (const auto& commit : commits_) appendGraph(commit);
   endResetModel();
 }
@@ -769,6 +771,7 @@ void HistoryCommitListModel::appendGraph(const HistoryCommit& commit) {
     row.parentColors.append(row.parentColors.isEmpty() ? color : graphColors_.value(parent));
   }
   graphColors_.remove(commit.fullHash);
+  maxGraphWidth_ = std::max(maxGraphWidth_, row.width);
   graphRows_.append(std::move(row));
 }
 

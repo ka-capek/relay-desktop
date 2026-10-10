@@ -173,6 +173,12 @@ QString styleSheet() {
       font-size: 11px;
     }
     QStatusBar::item { border: 0; }
+    /* Status bar buttons read as status text: same size and centre line. */
+    QStatusBar QPushButton, QStatusBar QToolButton {
+      min-height: 18px; max-height: 18px; padding: 0 6px; border: 0;
+      background: transparent; color: @muted@; font-size: 11px;
+    }
+    QStatusBar QPushButton:hover, QStatusBar QToolButton:hover { background: @soft@; color: @ink@; }
     #sectionHeading {
       color: @muted@;
       font-size: 10px;
@@ -189,9 +195,12 @@ QString styleSheet() {
     QLabel[role="title"] { font-size: 17px; font-weight: 700; }
     QLabel[role="code"] { font-family: "Geist Mono", "SFMono-Regular", Consolas, monospace; font-size: 11px; }
 
+    /* One control height (22px content + 1px borders = 24px) and no vertical
+       padding, so every button, field and combo shares a centre line. */
     QPushButton, QToolButton {
       min-height: 22px;
-      padding: 1px 8px;
+      max-height: 22px;
+      padding: 0 8px;
       border: 1px solid @line@;
       border-radius: 0;
       background: @panel@;
@@ -203,13 +212,13 @@ QString styleSheet() {
     QPushButton:disabled, QToolButton:disabled { color: @muted@; background: @canvas@; }
     QPushButton:focus, QToolButton:focus { border: 1px solid @green@; }
     QPushButton[kind="primary"], QToolButton[kind="primary"] {
-      border: 0;
+      border: 1px solid @green@;
       background: @green@;
       color: @onAccent@;
       font-weight: 650;
     }
-    QPushButton[kind="primary"]:hover, QToolButton[kind="primary"]:hover { background: @greenDeep@; }
-    QPushButton[kind="primary"]:disabled, QToolButton[kind="primary"]:disabled { background: @line@; }
+    QPushButton[kind="primary"]:hover, QToolButton[kind="primary"]:hover { background: @greenDeep@; border-color: @greenDeep@; }
+    QPushButton[kind="primary"]:disabled, QToolButton[kind="primary"]:disabled { background: @line@; border-color: @line@; }
     QPushButton[kind="flat"], QToolButton[kind="flat"],
     QPushButton[kind="icon"], QToolButton[kind="icon"] {
       border: 0;
@@ -219,8 +228,9 @@ QString styleSheet() {
     QPushButton[kind="icon"]:hover, QToolButton[kind="icon"]:hover { background: @soft@; }
     QPushButton[kind="danger"], QToolButton[kind="danger"] { color: @removed@; }
 
-    QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox {
-      min-height: 24px;
+    QLineEdit, QComboBox, QSpinBox {
+      min-height: 22px;
+      max-height: 22px;
       border: 1px solid @line@;
       border-radius: 0;
       padding: 0 6px;
@@ -228,7 +238,15 @@ QString styleSheet() {
       color: @ink@;
       font-size: 12px;
     }
-    QTextEdit, QPlainTextEdit { padding: 4px 6px; }
+    QTextEdit, QPlainTextEdit {
+      border: 1px solid @line@;
+      border-radius: 0;
+      padding: 4px 6px;
+      background: @panel@;
+      color: @ink@;
+      font-size: 12px;
+    }
+    QToolButton[kind="square"] { min-width: 22px; max-width: 22px; padding: 0; }
     QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus {
       border: 1px solid @green@;
       background: @panel@;
@@ -281,9 +299,13 @@ QString styleSheet() {
     #changedFileList::item, #commitFileList::item, #historyList::item { border: 0; }
 
     QTabBar { background: @panel@; }
+    /* The tab bar and the sidebar heading are both 30px with one hairline
+       under them, so the line runs straight across the window. */
+    #sidebarHeading { border-bottom: 1px solid @line@; background: @canvas@; }
     QTabBar::tab {
       min-width: 0;
       min-height: 28px;
+      max-height: 28px;
       padding: 0 14px;
       border: 0;
       border-bottom: 2px solid transparent;

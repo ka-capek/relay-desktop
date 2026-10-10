@@ -306,7 +306,15 @@ Since 0.5.5 the design is square and dense: no rounded corners anywhere
 (the theme test rejects any non-zero `border-radius`), hairline borders,
 12px body text, 24px single-line rows for files, commits and repositories,
 square badges and commit marks. Splitters keep a 5px grab area drawn as a 1px
-line. Repository selection stays a tint without a left-edge marker. Every item
+line. Every button, field and combo is exactly 24px with no vertical padding.
+Panels share one grid: the sidebar heading copies the tab bar's height
+(`MainWindow::eventFilter`), header rows use 5px margins with zero layout
+spacing, so the sidebar's filter/order rows, the History header rows, the
+Changes header, the Diff label and the commit detail header sit on the same
+lines. The history graph uses one column as wide as the widest loaded row, so
+every message starts at the same x; the list never scrolls sideways. An empty
+`DiffView` takes no width and shows nothing; only a file without a text diff
+shows the notice. Repository selection stays a tint without a left-edge marker. Every item
 view has mouse tracking so delegates' hover state follows the pointer.
 
 History is a one-line-per-commit table: graph, ref chips, subject, then fixed

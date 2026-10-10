@@ -187,6 +187,8 @@ class HistoryCommitListModel final : public QAbstractListModel {
   [[nodiscard]] bool showingSearchResults() const noexcept;
   void setGraphEnabled(bool enabled);
   [[nodiscard]] const HistoryGraphRow* graphRowAt(int row) const;
+  // Lanes in the widest loaded row, so every row's text starts at one column.
+  [[nodiscard]] int graphLanes() const noexcept { return graphEnabled_ ? maxGraphWidth_ : 0; }
   void setPagingState(QString anchor, bool endOfHistory);
 
   [[nodiscard]] const HistoryCommit* commitAt(int row) const noexcept;
@@ -212,6 +214,7 @@ class HistoryCommitListModel final : public QAbstractListModel {
   void extendBranchReach(const HistoryCommit& commit);
   QStringList graphLanes_;
   QList<HistoryGraphRow> graphRows_;
+  int maxGraphWidth_{};
   QHash<QString, int> graphColors_;
   QList<HistoryCommit> commits_;
   QList<int> visibleIndices_;

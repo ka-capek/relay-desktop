@@ -11,6 +11,7 @@
 #include <QItemSelectionModel>
 #include <QKeySequence>
 #include <QPainter>
+#include <QResizeEvent>
 #include <QPaintEvent>
 #include <QScrollBar>
 #include <QSet>
@@ -165,8 +166,14 @@ void DiffView::setDiff(QString diff) {
   after_ = {};
   clearSpans();
   model_->setDiff(std::move(diff));
+  emptyText_ = tr("No textual diff available for this file.");
   rebuildSpansAndWidths();
   scrollToTop();
+}
+
+void DiffView::resizeEvent(QResizeEvent* event) {
+  QTableView::resizeEvent(event);
+  rebuildSpansAndWidths();
 }
 
 void DiffView::setPreview(const FilePreview& preview) {
@@ -181,7 +188,11 @@ void DiffView::setPreview(const FilePreview& preview) {
   viewport()->update();
 }
 
-void DiffView::clearDiff() { setDiff({}); }
+void DiffView::clearDiff() {
+  setDiff({});
+  emptyText_.clear();
+  viewport()->update();
+}
 
 DiffModel* DiffView::diffModel() noexcept { return model_; }
 
@@ -244,8 +255,7 @@ void DiffView::paintEvent(QPaintEvent* event) {
   painter.setPen(theme::colors().muted);
   painter.setFont(font());
   painter.drawText(viewport()->rect().adjusted(18, 18, -18, -18),
-                   Qt::AlignLeft | Qt::AlignTop,
-                   tr("No textual diff available for this file."));
+                   Qt::AlignLeft | Qt::AlignTop, emptyText_);
 }
 
 void DiffView::rebuildSpansAndWidths() {
@@ -270,9 +280,12 @@ void DiffView::rebuildSpansAndWidths() {
   const int contentWidth = static_cast<int>(std::clamp<qint64>(
       requestedWidth, minimumTextWidth, static_cast<qint64>(QWIDGETSIZE_MAX)));
 
-  setColumnWidth(DiffModel::oldLineColumn, oldGutter);
-  setColumnWidth(DiffModel::newLineColumn, newGutter);
-  setColumnWidth(DiffModel::textColumn, contentWidth);
+  // Text fills the visible width (so row backgrounds reach the edge) and
+  // scrolls only when lines are wider; an empty diff takes no width at all.
+  const bool empty = model_->rowCount() == 0;
+  setColumnWidth(DiffModel::oldLineColumn, empty ? 0 : oldGutter);
+  setColumnWidth(DiffModel::newLineColumn, empty ? 0 : newGutter);
+  setColumnWidth(DiffModel::textColumn, empty ? 0 : std::max(contentWidth, viewport()->width() - oldGutter - newGutter));
   copyAction_->setEnabled(selectionModel()->hasSelection());
   viewport()->update();
 }
