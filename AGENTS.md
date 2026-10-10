@@ -98,8 +98,8 @@ must also be checked manually.
 - Public repository: <https://github.com/ka-capek/relay-desktop>
 - Default branch: `main`
 - Version: `project(RelayNative VERSION ...)` in `CMakeLists.txt`, currently
-  `0.5.4`. CI names installers from it.
-- Releases so far are prereleases (`v0.5.1` to `v0.5.4`). They use
+  `0.5.5`. CI names installers from it.
+- Releases so far are prereleases (`v0.5.1` to `v0.5.5`). They use
   external Git/gh and do not satisfy the stable bundled-runtime distribution
   gate. `v0.5.0` was the last Electron release.
 - Release page: <https://github.com/ka-capek/relay-desktop/releases>
