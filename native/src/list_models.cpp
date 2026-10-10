@@ -566,7 +566,10 @@ QVariant HistoryCommitListModel::data(const QModelIndex& index, int role) const 
     case dayLabelRole:
       return dayLabel(*commit);
     case startsDayGroupRole:
-      return !(graphEnabled_ && search_.isEmpty()) && (index.row() == 0 || dayLabel(*commit) != dayLabel(*commitAt(index.row() - 1)));
+      return !(graphEnabled_ && !filtering()) && (index.row() == 0 || dayLabel(*commit) != dayLabel(*commitAt(index.row() - 1)));
+    case highlightRole:
+      if (search_.isEmpty() || filtering() || searchResults_) return noHighlight;
+      return matches(*commit) ? matchHighlight : dimmedHighlight;
     default:
       return {};
   }
@@ -632,6 +635,7 @@ qsizetype HistoryCommitListModel::appendCommits(QList<HistoryCommit> commits) {
   if (unique.isEmpty()) return 0;
 
   qsizetype visibleToAdd = 0;
+  for (const HistoryCommit& commit : unique) extendBranchReach(commit);
   for (const HistoryCommit& commit : unique) {
     if (matchesSearch(commit)) ++visibleToAdd;
   }
@@ -667,6 +671,34 @@ void HistoryCommitListModel::setSearch(QString search) {
   endResetModel();
 }
 
+void HistoryCommitListModel::setSearchField(const SearchField field) {
+  if (searchField_ == field) return;
+  beginResetModel();
+  searchField_ = field;
+  rebuildVisible();
+  endResetModel();
+}
+
+void HistoryCommitListModel::setSearchMode(const SearchMode mode) {
+  if (searchMode_ == mode) return;
+  beginResetModel();
+  searchMode_ = mode;
+  rebuildVisible();
+  endResetModel();
+}
+
+bool HistoryCommitListModel::filtering() const noexcept {
+  return !search_.isEmpty() && searchMode_ == SearchMode::filter;
+}
+
+QList<int> HistoryCommitListModel::matchingRows() const {
+  QList<int> rows;
+  if (search_.isEmpty()) return rows;
+  for (qsizetype row = 0; row < visibleIndices_.size(); ++row)
+    if (searchResults_ || matches(commits_.at(visibleIndices_.at(row)))) rows.append(static_cast<int>(row));
+  return rows;
+}
+
 void HistoryCommitListModel::showSearchResults(QList<HistoryCommit> commits) {
   resetHistory(std::move(commits), {}, true);
   beginResetModel();
@@ -689,7 +721,7 @@ void HistoryCommitListModel::setGraphEnabled(bool enabled) {
 }
 
 const HistoryGraphRow* HistoryCommitListModel::graphRowAt(int row) const {
-  if (!graphEnabled_ || !search_.isEmpty() || row < 0 || row >= visibleIndices_.size()) return nullptr;
+  if (!graphEnabled_ || filtering() || searchResults_ || row < 0 || row >= visibleIndices_.size()) return nullptr;
   return &graphRows_.at(visibleIndices_.at(row));
 }
 
@@ -760,11 +792,24 @@ const QString& HistoryCommitListModel::anchor() const noexcept { return anchor_;
 
 bool HistoryCommitListModel::endOfHistory() const noexcept { return endOfHistory_; }
 
+bool HistoryCommitListModel::matches(const HistoryCommit& commit) const {
+  if (search_.isEmpty()) return false;
+  const auto has = [this](const QString& value) { return value.contains(search_, Qt::CaseInsensitive); };
+  const auto onBranch = [&] { return std::any_of(commit.refs.cbegin(), commit.refs.cend(), has); };
+  switch (searchField_) {
+    case SearchField::message: return has(commit.title);
+    case SearchField::author: return has(commit.author) || has(commit.email);
+    case SearchField::branch: return branchReach_.contains(commit.fullHash);
+    case SearchField::hash: return commit.fullHash.startsWith(search_, Qt::CaseInsensitive);
+    case SearchField::any: break;
+  }
+  return has(commit.title) || has(commit.author) || has(commit.email) || commit.fullHash.startsWith(search_, Qt::CaseInsensitive) || onBranch();
+}
+
 bool HistoryCommitListModel::matchesSearch(const HistoryCommit& commit) const {
-  if (search_.isEmpty() || searchResults_) return true;
-  const QString searchable = commit.title + QChar{u' '} + commit.author + QChar{u' '} +
-                             commit.email + QChar{u' '} + commit.fullHash;
-  return searchable.contains(search_, Qt::CaseInsensitive);
+  // Whole-history results were matched by Git, including message bodies.
+  if (!filtering() || searchResults_) return true;
+  return matches(commit);
 }
 
 QString HistoryCommitListModel::dayLabel(const HistoryCommit& commit) const {
@@ -772,7 +817,18 @@ QString HistoryCommitListModel::dayLabel(const HistoryCommit& commit) const {
   return QLocale{}.toString(commit.date.toLocalTime().date(), QLocale::LongFormat);
 }
 
+void HistoryCommitListModel::extendBranchReach(const HistoryCommit& commit) {
+  if (searchField_ != SearchField::branch || search_.isEmpty()) return;
+  const bool tip = std::any_of(commit.refs.cbegin(), commit.refs.cend(),
+                               [this](const QString& ref) { return ref.contains(search_, Qt::CaseInsensitive); });
+  if (!tip && !branchReach_.contains(commit.fullHash)) return;
+  branchReach_.insert(commit.fullHash);
+  for (const auto& parent : commit.parents) branchReach_.insert(parent);
+}
+
 void HistoryCommitListModel::rebuildVisible() {
+  branchReach_.clear();
+  for (const auto& commit : commits_) extendBranchReach(commit);
   visibleIndices_.clear();
   visibleIndices_.reserve(commits_.size());
   for (qsizetype sourceIndex = 0; sourceIndex < commits_.size(); ++sourceIndex) {

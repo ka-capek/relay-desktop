@@ -220,7 +220,7 @@ still need installed-platform testing against your own server.
 ## Themes and branch graph
 
 Open Settings (`⌘,` on macOS) → **Appearance** to choose **Light**, **Dark**,
-**Catppuccin Latte**, or **Catppuccin Mocha**. Save applies the theme immediately
+**Catppuccin Latte**, **Catppuccin Mocha**, **Mono Light** or **Mono Dark**. Save applies the theme immediately
 and remembers it across restarts. Menus, controls, lists, diffs and the graph
 share the same palette.
 
@@ -244,12 +244,19 @@ a dependency on the source file or execute theme code. Colors use `#RRGGBB`;
 The [bundled palettes](native/resources/themes) are additional examples.
 Choose contrasting text/background and accent/onAccent pairs for custom themes.
 
-In History, select **Graph** beside the search field to show all branches.
+History shows the all-branch graph by default, one commit per line with its
+branches, author, hash and age. **Focus** fills the screen with the history
+(Esc returns). Choose what to search (everything, message, author, branch or
+hash) and type: **Highlight** keeps the graph, brightens matches and dims the
+rest; Enter and Shift+Enter step through them. Turn Highlight off to show only
+matches, which also searches history that is not loaded yet. Searching a
+branch highlights every loaded commit on it.
+
 Parallel lines retain their colors when lanes move or another branch ends,
 including across loaded pages. Commit dots and ref labels use the same colors;
 merge dots are hollow. Colors are reused after a line ends and repeat if more
-lines are active than the palette has colors. Search temporarily hides graph
-connections so filtered-out commits cannot imply a false connection. Return to
+lines are active than the palette has colors. Filtering hides graph
+connections so filtered-out commits cannot imply a false connection. Choose
 **List** for the ordinary current-branch history.
 
 Catppuccin presets adapt the [Catppuccin palette](https://github.com/catppuccin/catppuccin),

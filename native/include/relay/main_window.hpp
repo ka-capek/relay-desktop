@@ -116,6 +116,16 @@ class MainWindow final : public QMainWindow {
   QPushButton* commitButton_{};
   QLineEdit* historySearch_{};
   QComboBox* historyMode_{};
+  QComboBox* historySearchField_{};
+  QToolButton* historyHighlight_{};
+  QLabel* historyMatches_{};
+  QToolButton* historyFocus_{};
+  QWidget* historyDetails_{};
+  bool focusRestoreMaximized_{};
+  // Moves the history selection to the next (+1) or previous (-1) match.
+  void stepHistoryMatch(int direction);
+  void updateHistoryMatches();
+  void setHistoryFocus(bool focused);
   QComboBox* historyBranch_{};
   QPushButton* checkoutHistoryBranch_{};
   QPushButton* createHistoryBranch_{};

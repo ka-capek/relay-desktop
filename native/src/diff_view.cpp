@@ -24,7 +24,7 @@
 namespace relay {
 namespace {
 
-constexpr int lineHeight = 26;
+constexpr int lineHeight = 20;
 constexpr int gutterWidth = 40;
 constexpr int minimumTextWidth = 610;
 
@@ -96,7 +96,7 @@ class DiffDelegate final : public QStyledItemDelegate {
   }
 
   QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override {
-    return {minimumTextWidth, std::max(lineHeight, QFontMetrics(font_).height() + 8)};
+    return {minimumTextWidth, std::max(lineHeight, QFontMetrics(font_).height() + 4)};
   }
 
  private:
@@ -156,7 +156,7 @@ void DiffView::setCodeFontSize(int pixels) {
   if (codeFont_.pixelSize() == pixels) return;
   codeFont_.setPixelSize(pixels);
   static_cast<DiffDelegate*>(itemDelegate())->setCodeFont(codeFont_);
-  verticalHeader()->setDefaultSectionSize(std::max(lineHeight, QFontMetrics(codeFont_).height() + 8));
+  verticalHeader()->setDefaultSectionSize(std::max(lineHeight, QFontMetrics(codeFont_).height() + 4));
   rebuildSpansAndWidths();
 }
 

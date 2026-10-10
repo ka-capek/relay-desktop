@@ -2,6 +2,7 @@
 #include "relay/list_models.hpp"
 #include "relay/theme.hpp"
 
+#include <QRegularExpression>
 #include <QTest>
 
 class ThemeTest final : public QObject {
@@ -58,17 +59,19 @@ class ThemeTest final : public QObject {
 
   void styleSheetContainsTypographyScale() {
     const QString sheet = relay::theme::styleSheet();
+    // The dense 0.5.5 scale: 12px body text.
     for (const QString& size : {QStringLiteral("font-size: 10px"),
                                 QStringLiteral("font-size: 11px"),
                                 QStringLiteral("font-size: 12px"),
-                                QStringLiteral("font-size: 13px"),
+                                QStringLiteral("font-size: 14px"),
                                 QStringLiteral("font-size: 15px"),
-                                QStringLiteral("font-size: 17px"),
-                                QStringLiteral("font-size: 20px")}) {
+                                QStringLiteral("font-size: 17px")}) {
       QVERIFY2(sheet.contains(size), qPrintable(size));
     }
+    QVERIFY(!sheet.contains(QStringLiteral("border-radius: 1")));
+    QVERIFY(!sheet.contains(QRegularExpression(QStringLiteral(R"(border-radius: [1-9])"))));
     QCOMPARE(relay::theme::Metrics::textBadge, 10);
-    QCOMPARE(relay::theme::Metrics::textBody, 13);
+    QCOMPARE(relay::theme::Metrics::textBody, 12);
     QCOMPARE(relay::theme::Metrics::textCode, 12);
   }
 

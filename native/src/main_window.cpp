@@ -110,6 +110,9 @@ MainWindow::MainWindow(RelayController* controller, QWidget* parent)
   buildMenus();
   buildShell();
   for (auto* label : findChildren<QLabel*>()) label->setTextFormat(Qt::PlainText);
+  // Row delegates paint a hover state; without tracking it only appeared
+  // when something else (such as scrolling) repainted the row.
+  for (auto* view : findChildren<QAbstractItemView*>()) view->setMouseTracking(true);
   noticeTimer_ = new QTimer(this);
   noticeTimer_->setSingleShot(true);
   connect(noticeTimer_, &QTimer::timeout, this, &MainWindow::updateStatus);
@@ -382,7 +385,7 @@ void MainWindow::buildShell() {
   auto* workspace = new QSplitter(Qt::Horizontal, root);
   workspace->setObjectName(QStringLiteral("workspaceSplitter"));
   workspace->setChildrenCollapsible(false);
-  workspace->setHandleWidth(7);
+  workspace->setHandleWidth(5);
   workspace->addWidget(buildSidebar(workspace));
   workspaceStack_ = new QStackedWidget(workspace);
   workspaceStack_->addWidget(buildEmptyState(workspaceStack_));
@@ -560,7 +563,7 @@ QWidget* MainWindow::buildChangesPage(QWidget* parent) {
   auto* splitter = new QSplitter(Qt::Horizontal, parent);
   splitter->setObjectName(QStringLiteral("changesSplitter"));
   splitter->setChildrenCollapsible(false);
-  splitter->setHandleWidth(7);
+  splitter->setHandleWidth(5);
   auto* left = new QWidget(splitter);
   auto* leftLayout = new QVBoxLayout(left);
   leftLayout->setContentsMargins(0, 0, 0, 0);
@@ -686,51 +689,110 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
   auto* splitter = new QSplitter(Qt::Horizontal, parent);
   splitter->setObjectName(QStringLiteral("historySplitter"));
   splitter->setChildrenCollapsible(false);
-  splitter->setHandleWidth(7);
+  splitter->setHandleWidth(5);
   auto* left = new QWidget(splitter);
   auto* leftLayout = new QVBoxLayout(left);
   leftLayout->setContentsMargins(0, 0, 0, 0);
-  historySearch_ = new QLineEdit(left);
-  historySearch_->setPlaceholderText(tr("Search history"));
-  historySearch_->setClearButtonEnabled(true);
-  historySearch_->setAccessibleName(tr("Search commits"));
-  auto* historyTools = new QHBoxLayout;
-  historyTools->setContentsMargins(8, 6, 8, 6);
+  // Two dense rows: what to show, then what to find in it.
+  auto* scopeRow = new QHBoxLayout;
+  scopeRow->setContentsMargins(6, 5, 6, 3);
+  scopeRow->setSpacing(4);
+  historyBranch_ = new QComboBox(left);
+  historyBranch_->setObjectName(QStringLiteral("historyBranch"));
+  historyBranch_->setAccessibleName(tr("Browse branch history without checkout"));
+  historyBranch_->setToolTip(tr("Browse local and fetched remote branches without changing your working files."));
   historyMode_ = new QComboBox(left);
   historyMode_->setObjectName(QStringLiteral("historyMode"));
   historyMode_->setAccessibleName(tr("History display"));
   historyMode_->addItem(tr("List"));
   historyMode_->addItem(tr("Graph"));
   historyMode_->setToolTip(tr("Graph shows parallel work and merges across all branches."));
-  historyTools->addWidget(historyMode_);
-  historyTools->addWidget(historySearch_, 1);
-  leftLayout->addLayout(historyTools);
+  checkoutHistoryBranch_ = new QPushButton(tr("Check out"), left);
+  checkoutHistoryBranch_->setObjectName(QStringLiteral("checkoutHistoryBranch"));
+  checkoutHistoryBranch_->setToolTip(tr("Check out the branch shown here"));
+  createHistoryBranch_ = new QPushButton(tr("Branch from…"), left);
+  createHistoryBranch_->setObjectName(QStringLiteral("createHistoryBranch"));
+  createHistoryBranch_->setToolTip(tr("Create and check out a new branch from the branch shown here"));
+  fetchHistoryBranches_ = new QPushButton(tr("Fetch all"), left);
+  fetchHistoryBranches_->setObjectName(QStringLiteral("fetchHistoryBranches"));
+  fetchHistoryBranches_->setToolTip(tr("Discover every branch on origin, including in single-branch clones. Does not change your checked-out branch or files."));
+  historyFocus_ = new QToolButton(left);
+  historyFocus_->setObjectName(QStringLiteral("historyFocus"));
+  historyFocus_->setText(tr("Focus"));
+  historyFocus_->setCheckable(true);
+  historyFocus_->setToolTip(tr("Show only the history, full screen (Esc to leave)"));
+  historyFocus_->setAccessibleName(tr("Full-screen history"));
+  scopeRow->addWidget(historyBranch_, 1);
+  scopeRow->addWidget(historyMode_);
+  scopeRow->addWidget(checkoutHistoryBranch_);
+  scopeRow->addWidget(createHistoryBranch_);
+  scopeRow->addWidget(fetchHistoryBranches_);
+  scopeRow->addWidget(historyFocus_);
+  leftLayout->addLayout(scopeRow);
+
+  auto* searchRow = new QHBoxLayout;
+  searchRow->setContentsMargins(6, 0, 6, 5);
+  searchRow->setSpacing(4);
+  historySearchField_ = new QComboBox(left);
+  historySearchField_->setObjectName(QStringLiteral("historySearchField"));
+  historySearchField_->setAccessibleName(tr("Search in"));
+  historySearchField_->addItem(tr("All"), static_cast<int>(HistoryCommitListModel::SearchField::any));
+  historySearchField_->addItem(tr("Message"), static_cast<int>(HistoryCommitListModel::SearchField::message));
+  historySearchField_->addItem(tr("Author"), static_cast<int>(HistoryCommitListModel::SearchField::author));
+  historySearchField_->addItem(tr("Branch"), static_cast<int>(HistoryCommitListModel::SearchField::branch));
+  historySearchField_->addItem(tr("Hash"), static_cast<int>(HistoryCommitListModel::SearchField::hash));
+  historySearch_ = new QLineEdit(left);
+  historySearch_->setObjectName(QStringLiteral("historySearch"));
+  historySearch_->setPlaceholderText(tr("Find in history  (Enter next, Shift+Enter previous)"));
+  historySearch_->setClearButtonEnabled(true);
+  historySearch_->setAccessibleName(tr("Search commits"));
+  historyHighlight_ = new QToolButton(left);
+  historyHighlight_->setObjectName(QStringLiteral("historyHighlight"));
+  historyHighlight_->setText(tr("Highlight"));
+  historyHighlight_->setCheckable(true);
+  historyHighlight_->setChecked(true);
+  historyHighlight_->setToolTip(tr("Highlight matches and dim the rest, keeping the graph. Turn off to show only matches and search all history."));
+  historyMatches_ = new QLabel(left);
+  historyMatches_->setObjectName(QStringLiteral("historyMatches"));
+  historyMatches_->setProperty("role", QStringLiteral("meta"));
+  historyMatches_->setMinimumWidth(48);
+  historyMatches_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  auto* previousMatch = new QToolButton(left);
+  previousMatch->setObjectName(QStringLiteral("historyPreviousMatch"));
+  previousMatch->setText(tr("▲"));
+  previousMatch->setFixedWidth(24);
+  previousMatch->setAccessibleName(tr("Previous match"));
+  auto* nextMatch = new QToolButton(left);
+  nextMatch->setObjectName(QStringLiteral("historyNextMatch"));
+  nextMatch->setText(tr("▼"));
+  nextMatch->setFixedWidth(24);
+  nextMatch->setAccessibleName(tr("Next match"));
+  searchRow->addWidget(historySearchField_);
+  searchRow->addWidget(historySearch_, 1);
+  searchRow->addWidget(historyHighlight_);
+  searchRow->addWidget(historyMatches_);
+  searchRow->addWidget(previousMatch);
+  searchRow->addWidget(nextMatch);
+  leftLayout->addLayout(searchRow);
+
   connect(historyMode_, &QComboBox::currentIndexChanged, this, [this](int index) {
     auto preferences = appState_.preferences;
     if (preferences.graphHistory == (index == 1)) return;
     preferences.graphHistory = index == 1;
     controller_->setPreferences(preferences);
   });
-  historyBranch_ = new QComboBox(left);
-  historyBranch_->setObjectName(QStringLiteral("historyBranch"));
-  historyBranch_->setAccessibleName(tr("Browse branch history without checkout"));
-  historyBranch_->setToolTip(tr("Browse local and fetched remote branches without changing your working files. Fetch to discover new remote branches."));
-  leftLayout->addWidget(historyBranch_);
-  fetchHistoryBranches_ = new QPushButton(tr("Fetch all origin branches"), left);
-  fetchHistoryBranches_->setObjectName(QStringLiteral("fetchHistoryBranches"));
-  fetchHistoryBranches_->setToolTip(tr("Discover every branch on origin, including in single-branch clones. Does not change your checked-out branch or files."));
-  leftLayout->addWidget(fetchHistoryBranches_);
   connect(fetchHistoryBranches_, &QPushButton::clicked, this, [this] {
     controller_->fetchOrigin(currentAccountId(), true);
   });
-  auto* branchActions = new QHBoxLayout;
-  checkoutHistoryBranch_ = new QPushButton(tr("Check out branch"), left);
-  checkoutHistoryBranch_->setObjectName(QStringLiteral("checkoutHistoryBranch"));
-  createHistoryBranch_ = new QPushButton(tr("New branch from here…"), left);
-  createHistoryBranch_->setObjectName(QStringLiteral("createHistoryBranch"));
-  branchActions->addWidget(checkoutHistoryBranch_);
-  branchActions->addWidget(createHistoryBranch_);
-  leftLayout->addLayout(branchActions);
+  connect(historyFocus_, &QToolButton::toggled, this, &MainWindow::setHistoryFocus);
+  auto* leaveFocus = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+  connect(leaveFocus, &QShortcut::activated, this, [this] { if (historyFocus_->isChecked()) historyFocus_->setChecked(false); });
+  connect(previousMatch, &QToolButton::clicked, this, [this] { stepHistoryMatch(-1); });
+  connect(nextMatch, &QToolButton::clicked, this, [this] { stepHistoryMatch(1); });
+  connect(historySearch_, &QLineEdit::returnPressed, this, [this] { stepHistoryMatch(1); });
+  auto* previousShortcut = new QShortcut(QKeySequence(Qt::SHIFT | Qt::Key_Return), historySearch_);
+  previousShortcut->setContext(Qt::WidgetShortcut);
+  connect(previousShortcut, &QShortcut::activated, this, [this] { stepHistoryMatch(-1); });
   connect(historyBranch_, &QComboBox::currentIndexChanged, this, [this] { reloadHistory(); });
   connect(checkoutHistoryBranch_, &QPushButton::clicked, this, [this] {
     const auto ref = historyBranch_->currentData().toString();
@@ -746,6 +808,7 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
     if (accepted && !name.isEmpty()) controller_->createBranch(name, historyBranch_->currentData().toString());
   });
   historyModel_ = new HistoryCommitListModel(this);
+  historyModel_->setSearchMode(HistoryCommitListModel::SearchMode::highlight);
   historyList_ = new QListView(left);
   historyList_->setObjectName(QStringLiteral("historyList"));
   historyList_->setModel(historyModel_);
@@ -758,12 +821,13 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
 
   auto* right = new QSplitter(Qt::Vertical, splitter);
   right->setObjectName(QStringLiteral("historyDetailSplitter"));
-  right->setHandleWidth(7);
+  right->setHandleWidth(5);
   right->setChildrenCollapsible(false);
+  historyDetails_ = right;
   auto* details = new QWidget(right);
   details->setMinimumHeight(100);
   auto* rightLayout = new QVBoxLayout(details);
-  rightLayout->setContentsMargins(16, 12, 12, 8);
+  rightLayout->setContentsMargins(10, 8, 8, 6);
   auto* headingRow = new QHBoxLayout;
   historyTitle_ = new QLabel(tr("Select a commit"), right);
   historyTitle_->setProperty("role", QStringLiteral("large"));
@@ -808,6 +872,25 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
 
   connect(historyModel_, &QAbstractItemModel::modelAboutToBeReset, this, &MainWindow::clearCommitDetail);
   connect(historySearch_, &QLineEdit::textChanged, historyModel_, &HistoryCommitListModel::setSearch);
+  connect(historySearchField_, &QComboBox::currentIndexChanged, this, [this] {
+    historyModel_->setSearchField(static_cast<HistoryCommitListModel::SearchField>(historySearchField_->currentData().toInt()));
+    if (historyModel_->searchMode() == HistoryCommitListModel::SearchMode::filter) historySearchTimer_->start();
+  });
+  connect(historyHighlight_, &QToolButton::toggled, this, [this](const bool highlight) {
+    // Leaving whole-history results returns to the normal pages first.
+    if (highlight && historyModel_->showingSearchResults()) reloadHistory();
+    historyModel_->setSearchMode(highlight ? HistoryCommitListModel::SearchMode::highlight
+                                           : HistoryCommitListModel::SearchMode::filter);
+    if (!highlight) historySearchTimer_->start();
+  });
+  connect(historyModel_, &QAbstractItemModel::modelReset, this, &MainWindow::updateHistoryMatches);
+  connect(historyModel_, &QAbstractItemModel::rowsInserted, this, &MainWindow::updateHistoryMatches);
+  // Typing in highlight mode brings the first match into view.
+  connect(historySearch_, &QLineEdit::textChanged, this, [this] {
+    if (historyModel_->searchMode() != HistoryCommitListModel::SearchMode::highlight) return;
+    if (const auto rows = historyModel_->matchingRows(); !rows.isEmpty())
+      historyList_->scrollTo(historyModel_->index(rows.first()), QAbstractItemView::PositionAtCenter);
+  });
   // Loaded commits filter as you type; once typing pauses, Git searches the
   // rest of the history if it is not all loaded.
   historySearchTimer_ = new QTimer(this);
@@ -826,10 +909,16 @@ QWidget* MainWindow::buildHistoryPage(QWidget* parent) {
       }
       return;
     }
+    // Highlight works on loaded commits and keeps the graph; only filtering
+    // replaces them with Git's whole-history results. Git searches message,
+    // author and hash, so a branch filter stays on loaded commits.
+    if (historyModel_->searchMode() != HistoryCommitListModel::SearchMode::filter ||
+        historyModel_->searchField() == HistoryCommitListModel::SearchField::branch) return;
     if (historyModel_->endOfHistory() && !historyModel_->showingSearchResults()) return;
     controller_->searchHistory(query, reference);
   });
   connect(historyList_->selectionModel(), &QItemSelectionModel::currentChanged, this, [this](const QModelIndex& index) {
+    updateHistoryMatches();
     clearCommitDetail();
     if (const auto* commit = historyModel_->commitAt(index.row())) controller_->requestCommitDetail(commit->fullHash);
   });
@@ -1194,8 +1283,6 @@ void MainWindow::applyState(const AppState& state) {
   }
   { const QSignalBlocker blocker(historyMode_); historyMode_->setCurrentIndex(state.preferences.graphHistory ? 1 : 0); }
   historyModel_->setGraphEnabled(state.preferences.graphHistory);
-  historySearch_->setPlaceholderText(state.preferences.graphHistory
-      ? tr("Search history (hides graph)") : tr("Search history"));
   if (historyModeChanged) {
     updateHistoryBranches();
     historyModel_->clear();
@@ -1624,6 +1711,48 @@ void MainWindow::showSshProfilesDialog() {
             dialog.setTestResult({false, message});
           });
   if (dialog.exec() == QDialog::Accepted) controller_->saveSshProfile(dialog.profile());
+}
+
+void MainWindow::updateHistoryMatches() {
+  if (historySearch_->text().trimmed().isEmpty()) { historyMatches_->clear(); return; }
+  const auto rows = historyModel_->matchingRows();
+  const auto current = historyList_->currentIndex().row();
+  const auto position = rows.indexOf(current);
+  // "+" means more history exists than is loaded.
+  const auto more = historyModel_->endOfHistory() ? QString{} : QStringLiteral("+");
+  historyMatches_->setText(position >= 0 ? tr("%1/%2%3").arg(position + 1).arg(rows.size()).arg(more)
+                                         : tr("%1%2").arg(rows.size()).arg(more));
+}
+
+void MainWindow::stepHistoryMatch(const int direction) {
+  const auto rows = historyModel_->matchingRows();
+  if (rows.isEmpty()) return;
+  const auto current = historyList_->currentIndex().row();
+  int target = direction > 0 ? rows.first() : rows.last();
+  if (direction > 0) {
+    for (const auto row : rows) if (row > current) { target = row; break; }
+  } else {
+    for (auto it = rows.crbegin(); it != rows.crend(); ++it) if (*it < current) { target = *it; break; }
+  }
+  const auto index = historyModel_->index(target);
+  historyList_->setCurrentIndex(index);
+  historyList_->scrollTo(index, QAbstractItemView::PositionAtCenter);
+  updateHistoryMatches();
+}
+
+void MainWindow::setHistoryFocus(const bool focused) {
+  // Full-width history: no sidebar, no commit details, whole screen.
+  if (auto* sidebar = findChild<QWidget*>(QStringLiteral("sidebar"))) sidebar->setVisible(!focused);
+  if (historyDetails_) historyDetails_->setVisible(!focused);
+  if (focused) {
+    contentTabs_->setCurrentIndex(1);
+    focusRestoreMaximized_ = isMaximized();
+    showFullScreen();
+  } else if (isFullScreen()) {
+    if (focusRestoreMaximized_) showMaximized();
+    else showNormal();
+  }
+  { const QSignalBlocker blocker(historyFocus_); historyFocus_->setChecked(focused); }
 }
 
 void MainWindow::reloadHistory() {

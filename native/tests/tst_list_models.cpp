@@ -378,6 +378,60 @@ class ListModelsTest final : public QObject {
     QVERIFY(!model.flags(index).testFlag(Qt::ItemIsUserCheckable));
     QVERIFY(!index.data(Qt::CheckStateRole).isValid());
   }
+
+  void historySearchHighlightsByFieldAndBranch() {
+    using Model = relay::HistoryCommitListModel;
+    const auto when = QDateTime::currentDateTimeUtc();
+    // feature: f2 -> f1 -> base; main: m1 -> base. Children come first.
+    auto f2 = commit(QStringLiteral("f2f2f2f2f2f2"), QStringLiteral("Second feature step"), QStringLiteral("Ada"), QStringLiteral("ada@example.com"), when);
+    f2.parents = {QStringLiteral("f1f1f1f1f1f1")};
+    f2.refs = {QStringLiteral("feature")};
+    auto m1 = commit(QStringLiteral("a1a1a1a1a1a1"), QStringLiteral("Main fix"), QStringLiteral("Grace"), QStringLiteral("grace@example.com"), when);
+    m1.parents = {QStringLiteral("b0b0b0b0b0b0")};
+    m1.refs = {QStringLiteral("HEAD -> main")};
+    auto f1 = commit(QStringLiteral("f1f1f1f1f1f1"), QStringLiteral("First feature step"), QStringLiteral("Ada"), QStringLiteral("ada@example.com"), when);
+    f1.parents = {QStringLiteral("b0b0b0b0b0b0")};
+    auto base = commit(QStringLiteral("b0b0b0b0b0b0"), QStringLiteral("Base"), QStringLiteral("Grace"), QStringLiteral("grace@example.com"), when);
+    Model model;
+    model.setGraphEnabled(true);
+    model.setSearchMode(Model::SearchMode::highlight);
+    model.resetHistory({f2, m1, f1}, {}, false);
+    const auto highlight = [&model](int row) { return model.index(row).data(Model::highlightRole).toInt(); };
+    QCOMPARE(highlight(0), Model::noHighlight);
+
+    // Highlight keeps every row and the graph, dimming non-matches.
+    model.setSearch(QStringLiteral("ada"));
+    QCOMPARE(model.rowCount(), 3);
+    QVERIFY(model.graphRowAt(0) != nullptr);
+    QCOMPARE(highlight(0), Model::matchHighlight);
+    QCOMPARE(highlight(1), Model::dimmedHighlight);
+    QCOMPARE(model.matchingRows(), (QList<int>{0, 2}));
+
+    model.setSearchField(Model::SearchField::message);
+    QVERIFY(model.matchingRows().isEmpty());
+    model.setSearch(QStringLiteral("fix"));
+    QCOMPARE(model.matchingRows(), QList<int>{1});
+    model.setSearchField(Model::SearchField::hash);
+    model.setSearch(QStringLiteral("F1F1"));
+    QCOMPARE(model.matchingRows(), QList<int>{2});
+
+    // A branch means its tip and every loaded ancestor, including later pages.
+    model.setSearchField(Model::SearchField::branch);
+    model.setSearch(QStringLiteral("feature"));
+    QCOMPARE(model.matchingRows(), (QList<int>{0, 2}));
+    QCOMPARE(model.appendCommits({base}), 1);
+    QCOMPARE(model.matchingRows(), (QList<int>{0, 2, 3}));
+    QCOMPARE(highlight(1), Model::dimmedHighlight);
+
+    // Filter shows only matches, without the graph.
+    model.setSearchMode(Model::SearchMode::filter);
+    QCOMPARE(model.rowCount(), 3);
+    QVERIFY(model.graphRowAt(0) == nullptr);
+    QCOMPARE(highlight(0), Model::noHighlight);
+    model.setSearch({});
+    QCOMPARE(model.rowCount(), 4);
+    QVERIFY(model.graphRowAt(0) != nullptr);
+  }
 };
 
 QTEST_APPLESS_MAIN(ListModelsTest)

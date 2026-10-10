@@ -24,6 +24,7 @@ QListView* commitList(HistoryCommitListModel* model, const QString& name, const 
   list->setModel(model);
   list->setItemDelegate(new HistoryCommitItemDelegate(list));
   list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+  list->setMouseTracking(true);
   return list;
 }
 
@@ -71,6 +72,7 @@ CompareDialog::CompareDialog(QWidget* parent) : QDialog(parent) {
   fileList_->setAccessibleName(tr("Changed files"));
   fileList_->setModel(files_);
   fileList_->setItemDelegate(new CommitFileItemDelegate(fileList_));
+  fileList_->setMouseTracking(true);
   diff_ = new DiffView(split);
   diff_->setObjectName(QStringLiteral("compareDiff"));
   split->addWidget(fileList_);

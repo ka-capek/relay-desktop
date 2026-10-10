@@ -147,7 +147,16 @@ class HistoryCommitListModel final : public QAbstractListModel {
     refsRole,
     dayLabelRole,
     startsDayGroupRole,
+    highlightRole,  // noHighlight, matchHighlight or dimmedHighlight
   };
+  static constexpr int noHighlight = 0;
+  static constexpr int matchHighlight = 1;
+  static constexpr int dimmedHighlight = 2;
+  // What a search looks at.
+  enum class SearchField { any, message, author, branch, hash };
+  // Highlight keeps every commit (and the graph) and dims non-matches;
+  // filter shows only matches.
+  enum class SearchMode { highlight, filter };
 
   explicit HistoryCommitListModel(QObject* parent = nullptr);
 
@@ -164,6 +173,13 @@ class HistoryCommitListModel final : public QAbstractListModel {
   [[nodiscard]] qsizetype appendPage(const HistoryPage& page);
   void clear();
   void setSearch(QString search);
+  void setSearchField(SearchField field);
+  void setSearchMode(SearchMode mode);
+  [[nodiscard]] SearchField searchField() const noexcept { return searchField_; }
+  [[nodiscard]] SearchMode searchMode() const noexcept { return searchMode_; }
+  // Visible rows that match the current search, top to bottom.
+  [[nodiscard]] QList<int> matchingRows() const;
+  [[nodiscard]] bool matches(const HistoryCommit& commit) const;
   // Shows whole-history search results in place of the loaded pages until
   // the next resetHistory(). Results are shown unfiltered: Git matched them,
   // including on message bodies the model does not hold.
@@ -187,6 +203,13 @@ class HistoryCommitListModel final : public QAbstractListModel {
 
   bool graphEnabled_{};
   bool searchResults_{};
+  SearchField searchField_{SearchField::any};
+  SearchMode searchMode_{SearchMode::filter};
+  [[nodiscard]] bool filtering() const noexcept;
+  // Branch search: tips whose refs match, and every loaded ancestor of them.
+  // History lists children before parents, so one pass in order suffices.
+  QSet<QString> branchReach_;
+  void extendBranchReach(const HistoryCommit& commit);
   QStringList graphLanes_;
   QList<HistoryGraphRow> graphRows_;
   QHash<QString, int> graphColors_;
