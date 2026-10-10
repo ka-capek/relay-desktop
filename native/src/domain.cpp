@@ -195,7 +195,7 @@ AppState appStateFromJson(const QJsonObject& object) {
   state.preferences.diffFontSize = qBound(10, preferences.value(QStringLiteral("diffFontSize")).toInt(12), 24);
   state.preferences.commitName = preferences.value(QStringLiteral("commitName")).toString();
   state.preferences.commitEmail = preferences.value(QStringLiteral("commitEmail")).toString();
-  state.preferences.graphHistory = preferences.value(QStringLiteral("graphHistory")).toBool();
+  state.preferences.graphHistory = preferences.value(QStringLiteral("graphHistory")).toBool(true);
   state.preferences.themeId = preferences.value(QStringLiteral("themeId")).toString(QStringLiteral("light"));
   state.preferences.customTheme = preferences.value(QStringLiteral("customTheme")).toObject();
   state.preferences.layout = preferences.value(QStringLiteral("layout")).toObject();

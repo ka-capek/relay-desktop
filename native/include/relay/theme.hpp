@@ -38,20 +38,20 @@ struct Metrics {
   static constexpr int textBadge = 10;
   static constexpr int textMeta = 11;
   static constexpr int textSmall = 12;
-  static constexpr int textBody = 13;
+  static constexpr int textBody = 12;
   static constexpr int textMedium = 15;
   static constexpr int textLarge = 17;
   static constexpr int textExtraLarge = 20;
   static constexpr int textCode = 12;
 
-  static constexpr int titleRowHeight = 38;
-  static constexpr int macTitleStripHeight = 34;
-  static constexpr int repositoryActionRowHeight = 58;
-  static constexpr int contentTabHeight = 45;
-  static constexpr int statusRowHeight = 31;
-  static constexpr int repositoryRowHeight = 54;
-  static constexpr int fileRowHeight = 54;
-  static constexpr int commitFileRowHeight = 46;
+  static constexpr int titleRowHeight = 30;
+  static constexpr int macTitleStripHeight = 30;
+  static constexpr int repositoryActionRowHeight = 38;
+  static constexpr int contentTabHeight = 29;
+  static constexpr int statusRowHeight = 22;
+  static constexpr int repositoryRowHeight = 26;
+  static constexpr int fileRowHeight = 24;
+  static constexpr int commitFileRowHeight = 24;
 };
 
 [[nodiscard]] const Colors& colors();

@@ -18,6 +18,7 @@ class QListView;
 class QMenu;
 class QPlainTextEdit;
 class QPushButton;
+class QScrollArea;
 class QCloseEvent;
 class QSplitter;
 class QStackedWidget;
@@ -43,6 +44,7 @@ class MainWindow final : public QMainWindow {
  protected:
   bool event(QEvent* event) override;
   void closeEvent(QCloseEvent* event) override;
+  bool eventFilter(QObject* watched, QEvent* event) override;
 
  private:
   void buildMenus();
@@ -116,6 +118,19 @@ class MainWindow final : public QMainWindow {
   QPushButton* commitButton_{};
   QLineEdit* historySearch_{};
   QComboBox* historyMode_{};
+  QComboBox* historySearchField_{};
+  QToolButton* historyHighlight_{};
+  QLabel* historyMatches_{};
+  QToolButton* historyFocus_{};
+  QWidget* sidebarHeading_{};
+  QToolButton* historyPreviousMatch_{};
+  QToolButton* historyNextMatch_{};
+  QWidget* historyDetails_{};
+  bool focusRestoreMaximized_{};
+  // Moves the history selection to the next (+1) or previous (-1) match.
+  void stepHistoryMatch(int direction);
+  void updateHistoryMatches();
+  void setHistoryFocus(bool focused);
   QComboBox* historyBranch_{};
   QPushButton* checkoutHistoryBranch_{};
   QPushButton* createHistoryBranch_{};
@@ -123,6 +138,7 @@ class MainWindow final : public QMainWindow {
   QLabel* historyTitle_{};
   QLabel* historyMetadata_{};
   QLabel* historyBody_{};
+  QScrollArea* historyBodyArea_{};
   QPushButton* copyHashButton_{};
   QPushButton* openGitHubButton_{};
   QLabel* statusIdentity_{};

@@ -98,8 +98,8 @@ must also be checked manually.
 - Public repository: <https://github.com/ka-capek/relay-desktop>
 - Default branch: `main`
 - Version: `project(RelayNative VERSION ...)` in `CMakeLists.txt`, currently
-  `0.5.4`. CI names installers from it.
-- Releases so far are prereleases (`v0.5.1` to `v0.5.4`). They use
+  `0.5.5`. CI names installers from it.
+- Releases so far are prereleases (`v0.5.1` to `v0.5.5`). They use
   external Git/gh and do not satisfy the stable bundled-runtime distribution
   gate. `v0.5.0` was the last Electron release.
 - Release page: <https://github.com/ka-capek/relay-desktop/releases>
@@ -236,7 +236,7 @@ with the same controller/service boundary as existing operations.
   Updating a binding removes aliases of that repository only; unavailable paths
   remain preserved in metadata.
 - `Preferences` now includes `commitName`, `commitEmail` and `graphHistory`.
-  Normal history is default. Graph history snapshots local/remote branch tips,
+  The all-branch graph is the default since 0.5.5. Graph history snapshots local/remote branch tips,
   sends revision lists over stdin and batch-validates them. Filtering does not
   draw misleading edges across hidden commits.
 - `RepositoryAction` covers local branch rename/delete/remote checkout, merge,
@@ -289,8 +289,9 @@ so an outage at gnu.org cannot interrupt an otherwise complete installation.
 ### 5.3 Native themes and graph colors
 
 `theme.cpp` applies a semantic palette to QPalette, QSS and painted delegates.
-Four bundled JSON palettes under `native/resources/themes/` provide Light,
-Dark, Catppuccin Latte and Mocha. Native preferences persist `themeId` and a
+Six bundled JSON palettes under `native/resources/themes/` provide Light,
+Dark, Catppuccin Latte and Mocha, and the high-contrast Mono Light and Mono
+Dark. Native preferences persist `themeId` and a
 `customTheme` JSON object. Appearance settings support base selection, editable
 overrides and import/export. Validate unknown keys, color syntax and branch
 palette length before saving/importing. Export resolved colors using QSaveFile;
@@ -300,6 +301,34 @@ Light. Palette changes repaint existing controls and diffs without a restart.
 Qt Fusion and explicitly positioned licensed SVG chevrons avoid platform/QSS
 arrow placement conflicts; native menu roles remain intact. The shared core
 owns resources so application and UI tests use the same icons and palettes.
+
+Since 0.5.5 the design is square and dense: no rounded corners anywhere
+(the theme test rejects any non-zero `border-radius`), hairline borders,
+12px body text, 24px single-line rows for files, commits and repositories,
+square badges and commit marks. Splitters keep a 5px grab area drawn as a 1px
+line. Every button, field and combo is exactly 24px with no vertical padding.
+Panels share one grid: the sidebar heading copies the tab bar's height
+(`MainWindow::eventFilter`), header rows use 5px margins with zero layout
+spacing, so the sidebar's filter/order rows, the History header rows, the
+Changes header, the Diff label and the commit detail header sit on the same
+lines. The history graph uses one column as wide as the widest loaded row, so
+every message starts at the same x; the list never scrolls sideways. An empty
+`DiffView` takes no width and shows nothing; only a file without a text diff
+shows the notice. Repository selection stays a tint without a left-edge marker. Every item
+view has mouse tracking so delegates' hover state follows the pointer.
+
+History is a one-line-per-commit table: graph, ref chips, subject, then fixed
+author/hash/date columns sized by the view (narrow views drop author, then
+hash). Its header has two rows: branch scope, List/Graph, Check out, Branch
+from…, Fetch all and **Focus** (hides the sidebar and commit details, full
+screen; Esc leaves); then the search field selector (All, Message, Author,
+Branch, Hash), the query, **Highlight**, a match counter and previous/next
+(Enter / Shift+Enter). Highlight (the window's default) keeps every loaded
+commit and the graph, tints matches and dims the rest through
+`HistoryCommitListModel::highlightRole`; turning it off filters, and only
+filtering asks Git to search beyond the loaded pages. Branch search matches
+the commits reachable from tips whose refs match, within loaded history.
+The model's own default stays filtering for API compatibility.
 
 History has a visible List/Graph selector. Graph colors belong to active lines
 of ancestry, independently of lane position, and survive pagination/compaction.
@@ -1027,7 +1056,8 @@ status bar: identity and transport | repository settings
 ```
 
 - Colors and the style sheet come from `theme.cpp` and the active palette
-  (section 5.3). Do not hard-code colors in widgets.
+  (section 5.3). Do not hard-code colors in widgets. Do not add rounded
+  corners (section 5.3).
 - Icons are flat SVG resources (chevrons from Lucide). Do not use emoji, icon
   fonts, gradients, or highlight effects.
 - Avatars are GitHub profile pictures from `AvatarCache`, with flat initials as

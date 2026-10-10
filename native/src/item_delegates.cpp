@@ -18,7 +18,9 @@
 namespace relay {
 namespace {
 
-constexpr int rowHorizontalPadding = 11;
+constexpr int historyRowHeight = 24;
+constexpr int historyLaneWidth = 14;
+constexpr int dayHeaderHeight = 20;
 
 QFont rowFont(const QStyleOptionViewItem& option, int pixelSize,
               QFont::Weight weight = QFont::Normal) {
@@ -32,15 +34,9 @@ int textFlags(Qt::Alignment alignment) {
   return static_cast<int>(alignment.toInt());
 }
 
-void fillRounded(QPainter& painter, const QRect& rect, const QColor& color,
-                 qreal radius = 0.0) {
-  painter.save();
-  painter.setRenderHint(QPainter::Antialiasing, radius > 0.0);
-  painter.setPen(Qt::NoPen);
-  painter.setBrush(color);
-  if (radius > 0.0) painter.drawRoundedRect(rect, radius, radius);
-  else painter.drawRect(rect);
-  painter.restore();
+// The design has no rounded corners; every filled shape is a plain box.
+void fillBox(QPainter& painter, const QRect& rect, const QColor& color) {
+  painter.fillRect(rect, color);
 }
 
 void drawFocus(QPainter& painter, const QStyleOptionViewItem& option,
@@ -79,7 +75,7 @@ void drawRepositoryGlyph(QPainter& painter, const QRect& rect, const QColor& col
   painter.setPen(pen);
   painter.setBrush(Qt::NoBrush);
   const QRectF book = QRectF{rect}.adjusted(2.5, 1.5, -2.5, -1.5);
-  painter.drawRoundedRect(book, 1.5, 1.5);
+  painter.drawRect(book);
   painter.drawLine(QPointF{book.left() + 3.0, book.top()},
                    QPointF{book.left() + 3.0, book.bottom()});
   painter.drawLine(QPointF{book.left(), book.bottom() - 3.0},
@@ -112,7 +108,7 @@ BadgeColors statusColors(const QString& tone) {
 void drawStatusBadge(QPainter& painter, const QRect& rect, const QString& code,
                      const QString& tone, const QFont& font) {
   const BadgeColors colors = statusColors(tone);
-  fillRounded(painter, rect, colors.background, 5.0);
+  fillBox(painter, rect, colors.background);
   painter.save();
   painter.setFont(font);
   painter.setPen(colors.foreground);
@@ -165,16 +161,16 @@ void paintFileRow(QPainter& painter, const QStyleOptionViewItem& option,
   painter.fillRect(row, background);
   drawBottomLine(painter, row);
 
-  int left = row.left() + rowHorizontalPadding;
+  int left = row.left() + 8;
   if (checkable) {
     QStyleOptionButton checkbox;
-    checkbox.rect = QRect{left, row.center().y() - 7, 14, 14};
+    checkbox.rect = QRect{left, row.center().y() - 6, 12, 12};
     checkbox.state = QStyle::State_Enabled;
     if (index.data(Qt::CheckStateRole).toInt() == Qt::Checked) checkbox.state |= QStyle::State_On;
     else checkbox.state |= QStyle::State_Off;
     const QStyle* style = option.widget != nullptr ? option.widget->style() : QApplication::style();
     style->drawPrimitive(QStyle::PE_IndicatorCheckBox, &checkbox, &painter, option.widget);
-    left += 22;
+    left += 19;
   }
 
   const QString status = index.data(ChangedFileListModel::statusCodeRole).toString();
@@ -182,29 +178,32 @@ void paintFileRow(QPainter& painter, const QStyleOptionViewItem& option,
   const qlonglong added = index.data(ChangedFileListModel::addedCountRole).toLongLong();
   const qlonglong removed = index.data(ChangedFileListModel::removedCountRole).toLongLong();
   const bool binary = index.data(ChangedFileListModel::binaryRole).toBool();
-  const QRect badgeRect{row.right() - rowHorizontalPadding - 21, row.center().y() - 10, 21, 21};
-  const QFont badgeFont = rowFont(option, theme::Metrics::textBadge, QFont::Bold);
-  drawStatusBadge(painter, badgeRect, status, tone, badgeFont);
+  // Status letter first, like `git status --short`.
+  const QRect badgeRect{left, row.center().y() - 8, 16, 16};
+  drawStatusBadge(painter, badgeRect, status, tone, rowFont(option, theme::Metrics::textBadge, QFont::Bold));
+  left = badgeRect.right() + 7;
 
   const QFont metaFont = rowFont(option, theme::Metrics::textMeta);
-  const int deltaLeft = drawDelta(painter, badgeRect.left() - 9, row.top() + 7,
-                                  added, removed, binary, metaFont);
+  const int deltaLeft = drawDelta(painter, row.right() - 8, row.center().y() - 9, added, removed, binary, metaFont);
   const int textRight = std::max(left, deltaLeft - 8);
   const QFont nameFont = rowFont(option, theme::Metrics::textSmall, QFont::DemiBold);
   const QString name = index.data(ChangedFileListModel::nameRole).toString();
   const QString directory = index.data(ChangedFileListModel::directoryRole).toString();
+  const QRect textRect{left, row.top(), textRight - left, row.height()};
 
   painter.save();
   painter.setPen(token.ink);
   painter.setFont(nameFont);
-  painter.drawText(QRect{left, row.top() + 7, textRight - left, 18},
-                   textFlags(Qt::AlignLeft | Qt::AlignVCenter),
-                   elided(name, nameFont, textRight - left));
-  painter.setPen(theme::colors().muted);
-  painter.setFont(metaFont);
-  painter.drawText(QRect{left, row.top() + 27, textRight - left, 16},
-                   textFlags(Qt::AlignLeft | Qt::AlignVCenter),
-                   elided(directory, metaFont, textRight - left));
+  const auto shownName = elided(name, nameFont, textRect.width());
+  painter.drawText(textRect, textFlags(Qt::AlignLeft | Qt::AlignVCenter), shownName);
+  // The folder follows the name on the same line, muted.
+  const int nameWidth = QFontMetrics{nameFont}.horizontalAdvance(shownName) + 8;
+  if (nameWidth < textRect.width()) {
+    painter.setPen(theme::colors().muted);
+    painter.setFont(metaFont);
+    painter.drawText(textRect.adjusted(nameWidth, 0, 0, 0), textFlags(Qt::AlignLeft | Qt::AlignVCenter),
+                     elided(directory, metaFont, textRect.width() - nameWidth));
+  }
   painter.restore();
   drawFocus(painter, option, row);
 }
@@ -219,15 +218,6 @@ QString relativeTime(const QDateTime& date) {
   return QLocale{}.toString(date.toLocalTime().date(), QStringLiteral("MMM d"));
 }
 
-QString initials(const QString& author) {
-  const QStringList parts = author.split(QChar{u' '}, Qt::SkipEmptyParts);
-  QString result;
-  for (qsizetype i = 0; i < std::min<qsizetype>(2, parts.size()); ++i) {
-    if (!parts.at(i).isEmpty()) result.append(parts.at(i).front().toUpper());
-  }
-  return result.isEmpty() ? QStringLiteral("G") : result;
-}
-
 }  // namespace
 
 RepositoryItemDelegate::RepositoryItemDelegate(QObject* parent)
@@ -239,46 +229,45 @@ void RepositoryItemDelegate::paint(QPainter* painter,
   painter->save();
   painter->setClipRect(option.rect);
   const theme::Colors& token = theme::colors();
-  QColor background = Qt::transparent;
-  if (option.state.testFlag(QStyle::State_Selected)) background = token.greenWash;
-  else if (option.state.testFlag(QStyle::State_MouseOver)) background = theme::colors().soft;
-  if (background != Qt::transparent) fillRounded(*painter, option.rect.adjusted(1, 1, -1, -1), background, 8.0);
+  const bool selected = option.state.testFlag(QStyle::State_Selected);
+  if (selected) painter->fillRect(option.rect, token.greenWash);
+  else if (option.state.testFlag(QStyle::State_MouseOver)) painter->fillRect(option.rect, token.soft);
+  // Repository selection deliberately has no left-edge marker; the tint is
+  // the complete selection treatment.
 
-  const QRect iconRect{option.rect.left() + 10, option.rect.center().y() - 9, 18, 18};
+  const QRect iconRect{option.rect.left() + 8, option.rect.center().y() - 7, 14, 14};
   drawRepositoryGlyph(*painter, iconRect, identityColor(index.data(RepositoryListModel::nameRole).toString()));
-  const int left = iconRect.right() + 10;
-  int right = option.rect.right() - 10;
+  const int left = iconRect.right() + 7;
+  int right = option.rect.right() - 8;
 
   const qlonglong changes = index.data(RepositoryListModel::changeCountRole).toLongLong();
   if (changes > 0) {
     const QString label = QString::number(changes);
     const QFont countFont = rowFont(option, theme::Metrics::textMeta, QFont::Bold);
-    const int width = std::max(21, QFontMetrics{countFont}.horizontalAdvance(label) + 10);
-    const QRect countRect{right - width + 1, option.rect.center().y() - 10, width, 21};
-    fillRounded(*painter, countRect, theme::colors().soft, 9.0);
-    painter->setPen(theme::colors().added);
+    const int width = QFontMetrics{countFont}.horizontalAdvance(label);
+    painter->setPen(token.added);
     painter->setFont(countFont);
-    painter->drawText(countRect, textFlags(Qt::AlignCenter), label);
-    right = countRect.left() - 9;
+    painter->drawText(QRect{right - width, option.rect.top(), width, option.rect.height()},
+                      textFlags(Qt::AlignRight | Qt::AlignVCenter), label);
+    right -= width + 8;
   }
 
-  const QFont nameFont = rowFont(option, theme::Metrics::textBody, QFont::DemiBold);
+  const QFont nameFont = rowFont(option, theme::Metrics::textSmall, QFont::DemiBold);
   const QFont ownerFont = rowFont(option, theme::Metrics::textMeta);
   const QString name = index.data(RepositoryListModel::nameRole).toString();
   const QString owner = index.data(RepositoryListModel::ownerRole).toString();
+  const QRect textRect{left, option.rect.top(), right - left, option.rect.height()};
+  const auto shownName = elided(name, nameFont, textRect.width());
   painter->setPen(token.ink);
   painter->setFont(nameFont);
-  painter->drawText(QRect{left, option.rect.top() + 8, right - left, 19},
-                    textFlags(Qt::AlignLeft | Qt::AlignVCenter),
-                    elided(name, nameFont, right - left));
-  painter->setPen(theme::colors().muted);
-  painter->setFont(ownerFont);
-  painter->drawText(QRect{left, option.rect.top() + 29, right - left, 16},
-                    textFlags(Qt::AlignLeft | Qt::AlignVCenter),
-                    elided(owner, ownerFont, right - left));
-
-  // Repository selection deliberately has no left-edge marker. The selected
-  // background above is the complete selection treatment.
+  painter->drawText(textRect, textFlags(Qt::AlignLeft | Qt::AlignVCenter), shownName);
+  const int nameWidth = QFontMetrics{nameFont}.horizontalAdvance(shownName) + 6;
+  if (nameWidth < textRect.width()) {
+    painter->setPen(token.muted);
+    painter->setFont(ownerFont);
+    painter->drawText(textRect.adjusted(nameWidth, 0, 0, 0), textFlags(Qt::AlignLeft | Qt::AlignVCenter),
+                      elided(owner, ownerFont, textRect.width() - nameWidth));
+  }
   drawFocus(*painter, option, option.rect);
   painter->restore();
 }
@@ -318,39 +307,42 @@ void HistoryCommitItemDelegate::paint(QPainter* painter,
   const auto* graph = model ? model->graphRowAt(index.row()) : nullptr;
   const bool startsDay = !graph && index.data(HistoryCommitListModel::startsDayGroupRole).toBool();
   const QStringList refs = index.data(HistoryCommitListModel::refsRole).toStringList();
-  const int dayHeight = startsDay ? 30 : 0;
-  QRect commitRect = option.rect.adjusted(0, dayHeight, 0, 0);
+  const int highlight = index.data(HistoryCommitListModel::highlightRole).toInt();
+  const int dayHeight = startsDay ? dayHeaderHeight : 0;
+  const QRect commitRect = option.rect.adjusted(0, dayHeight, 0, 0);
 
   if (startsDay) {
     const QRect dayRect{option.rect.left(), option.rect.top(), option.rect.width(), dayHeight};
-    painter->fillRect(dayRect, theme::colors().soft);
+    painter->fillRect(dayRect, token.canvas);
     painter->setPen(token.lineSoft);
     painter->drawLine(dayRect.bottomLeft(), dayRect.bottomRight());
-    const QFont dayFont = rowFont(option, theme::Metrics::textMeta, QFont::DemiBold);
-    painter->setFont(dayFont);
-    painter->setPen(theme::colors().muted);
-    painter->drawText(dayRect.adjusted(13, 0, -10, 0),
-                      textFlags(Qt::AlignLeft | Qt::AlignVCenter),
-                      index.data(HistoryCommitListModel::dayLabelRole).toString());
+    painter->setFont(rowFont(option, theme::Metrics::textBadge, QFont::Bold));
+    painter->setPen(token.muted);
+    painter->drawText(dayRect.adjusted(10, 0, -10, 0), textFlags(Qt::AlignLeft | Qt::AlignVCenter),
+                      index.data(HistoryCommitListModel::dayLabelRole).toString().toUpper());
   }
 
+  const bool selected = option.state.testFlag(QStyle::State_Selected);
   QColor background = token.panel;
-  if (option.state.testFlag(QStyle::State_Selected)) background = token.greenWash;
-  else if (option.state.testFlag(QStyle::State_MouseOver)) background = theme::colors().soft;
+  if (selected) background = token.greenWash;
+  else if (highlight == HistoryCommitListModel::matchHighlight) background = theme::tint(token.orange);
+  else if (option.state.testFlag(QStyle::State_MouseOver)) background = token.soft;
   painter->fillRect(commitRect, background);
-  drawBottomLine(*painter, commitRect);
-  if (option.state.testFlag(QStyle::State_Selected)) {
-    painter->fillRect(QRect{commitRect.left(), commitRect.top(), 3, commitRect.height()}, token.green);
-  }
+  if (selected) painter->fillRect(QRect{commitRect.left(), commitRect.top(), 2, commitRect.height()}, token.green);
+  else if (highlight == HistoryCommitListModel::matchHighlight)
+    painter->fillRect(QRect{commitRect.left(), commitRect.top(), 2, commitRect.height()}, token.orange);
+  // Search results stay bright; everything else recedes but keeps its place.
+  if (highlight == HistoryCommitListModel::dimmedHighlight && !selected) painter->setOpacity(0.3);
 
   int graphWidth = 0;
   if (graph) {
-    graphWidth = graph->width * 22 + 16;
-    const auto x = [&commitRect](int lane) { return commitRect.left() + 16 + lane * 22; };
+    // One graph column for all rows, so every message starts at the same x.
+    graphWidth = std::max(model->graphLanes(), graph->width) * historyLaneWidth + 12;
+    const auto x = [&commitRect](int lane) { return commitRect.left() + 12 + lane * historyLaneWidth; };
     const auto y = commitRect.center().y();
     painter->setRenderHint(QPainter::Antialiasing);
     const auto line = [painter](QPointF start, QPointF end, int lane) {
-      painter->setPen(QPen(theme::branchColor(lane), 2.2));
+      painter->setPen(QPen(theme::branchColor(lane), 1.6));
       QPainterPath path(start);
       const qreal middle = (start.y() + end.y()) / 2.0;
       path.cubicTo(QPointF(start.x(), middle), QPointF(end.x(), middle), end);
@@ -363,70 +355,83 @@ void HistoryCommitItemDelegate::paint(QPainter* painter,
     if (graph->incoming) line(QPointF(x(graph->lane), commitRect.top()), QPointF(x(graph->lane), y), graph->color);
     for (qsizetype i = 0; i < graph->parents.size(); ++i)
       line(QPointF(x(graph->lane), y), QPointF(x(graph->parents.at(i)), commitRect.bottom() + 1), graph->parentColors.at(i));
-    painter->setPen(QPen(theme::branchColor(graph->color), 2.2));
-    painter->setBrush(graph->parents.size() > 1 ? background : theme::branchColor(graph->color));
-    painter->drawEllipse(QPointF(x(graph->lane), y), 4.5, 4.5);
-    painter->setBrush(Qt::NoBrush);
+    // Square commit marks; a merge is hollow.
+    painter->setRenderHint(QPainter::Antialiasing, false);
+    const QRect dot{x(graph->lane) - 3, y - 3, 7, 7};
+    painter->fillRect(dot, theme::branchColor(graph->color));
+    if (graph->parents.size() > 1) painter->fillRect(dot.adjusted(2, 2, -2, -2), background);
   }
-  const int left = commitRect.left() + 13 + graphWidth;
-  const QRect authorRect{commitRect.right() - 39, commitRect.top() + 12, 26, 26};
-  const int right = authorRect.left() - 10;
-  const QFont titleFont = rowFont(option, theme::Metrics::textBody, QFont::DemiBold);
+
+  // Columns from the right: date, hash, author. Narrow views drop author,
+  // then hash, before the message gets squeezed.
+  const QFont titleFont = rowFont(option, theme::Metrics::textSmall);
   const QFont metaFont = rowFont(option, theme::Metrics::textMeta);
+  QFont hashFont = theme::codeFont();
+  hashFont.setPixelSize(theme::Metrics::textMeta);
   const QString title = index.data(HistoryCommitListModel::titleRole).toString();
   const QString hash = index.data(HistoryCommitListModel::shortHashRole).toString();
   const QString author = index.data(HistoryCommitListModel::authorRole).toString();
   const QDateTime date = index.data(HistoryCommitListModel::dateRole).toDateTime();
+  // Column widths follow the view, not the graph, so columns line up.
+  const int width = option.widget ? option.widget->width() : commitRect.width();
+  int right = commitRect.right() - 8;
+  const auto column = [&](int columnWidth, const QString& text, const QFont& font, const QColor& color, Qt::Alignment alignment) {
+    const QRect rect{right - columnWidth, commitRect.top(), columnWidth, commitRect.height()};
+    painter->setFont(font);
+    painter->setPen(color);
+    painter->drawText(rect, textFlags(alignment | Qt::AlignVCenter), elided(text, font, columnWidth));
+    right = rect.left() - 10;
+  };
+  column(58, relativeTime(date), metaFont, token.muted, Qt::AlignRight);
+  if (width > 380) column(56, hash, hashFont, token.muted, Qt::AlignLeft);
+  if (width > 480) column(std::clamp(width / 6, 80, 140), author, metaFont, token.muted, Qt::AlignLeft);
 
-  painter->setPen(token.ink);
-  painter->setFont(titleFont);
-  painter->drawText(QRect{left, commitRect.top() + 7, right - left, 18},
-                    textFlags(Qt::AlignLeft | Qt::AlignVCenter),
-                    elided(title, titleFont, right - left));
-  const QString metadata = QStringLiteral("%1 · %2 · %3").arg(hash, relativeTime(date), author);
-  painter->setPen(theme::colors().muted);
-  painter->setFont(metaFont);
-  painter->drawText(QRect{left, commitRect.top() + 28, right - left, 16},
-                    textFlags(Qt::AlignLeft | Qt::AlignVCenter),
-                    elided(metadata, metaFont, right - left));
-
-  const auto authorColor = identityColor(author);
-  fillRounded(*painter, authorRect, theme::tint(authorColor), 13.0);
-  painter->setPen(authorColor);
-  painter->setFont(rowFont(option, theme::Metrics::textBadge, QFont::Bold));
-  painter->drawText(authorRect, textFlags(Qt::AlignCenter), initials(author));
-
+  int left = commitRect.left() + 10 + graphWidth;
   if (!refs.isEmpty()) {
-    int tagLeft = left;
-    const int tagTop = commitRect.top() + 48;
-    const QFont tagFont = rowFont(option, theme::Metrics::textBadge);
+    // Branch and tag chips precede the message, as in `git log --oneline --decorate`.
+    const QFont tagFont = rowFont(option, theme::Metrics::textBadge, QFont::DemiBold);
     const QFontMetrics metrics{tagFont};
-    for (const QString& originalRef : refs) {
-      QString ref = originalRef;
+    const int limit = left + std::max(80, (right - left) / 2);
+    const QColor refColor = graph ? theme::branchColor(graph->color) : token.green;
+    for (qsizetype i = 0; i < refs.size(); ++i) {
+      QString ref = refs.at(i);
       if (ref.startsWith(QStringLiteral("tag: "))) ref.remove(0, 5);
-      const int width = metrics.horizontalAdvance(ref) + 12;
-      if (tagLeft + width > right) break;
-      const QRect tagRect{tagLeft, tagTop, width, 18};
-      const QColor refColor = graph ? theme::branchColor(graph->color) : token.green;
-      fillRounded(*painter, tagRect, theme::tint(refColor), 5.0);
+      const int chipWidth = metrics.horizontalAdvance(ref) + 10;
+      if (left + chipWidth > limit) {
+        const auto more = QStringLiteral("+%1").arg(refs.size() - i);
+        painter->setFont(tagFont);
+        painter->setPen(token.muted);
+        painter->drawText(QRect{left, commitRect.top(), metrics.horizontalAdvance(more) + 2, commitRect.height()},
+                          textFlags(Qt::AlignLeft | Qt::AlignVCenter), more);
+        left += metrics.horizontalAdvance(more) + 8;
+        break;
+      }
+      const QRect chip{left, commitRect.center().y() - 8, chipWidth, 16};
+      fillBox(*painter, chip, theme::tint(refColor));
       painter->setPen(refColor);
       painter->setFont(tagFont);
-      painter->drawText(tagRect, textFlags(Qt::AlignCenter), ref);
-      tagLeft += width + 4;
+      painter->drawText(chip, textFlags(Qt::AlignCenter), ref);
+      left += chipWidth + 4;
     }
+    left += 4;
   }
-
+  painter->setPen(token.ink);
+  painter->setFont(titleFont);
+  painter->drawText(QRect{left, commitRect.top(), std::max(0, right - left), commitRect.height()},
+                    textFlags(Qt::AlignLeft | Qt::AlignVCenter), elided(title, titleFont, right - left));
+  painter->setOpacity(1.0);
+  drawBottomLine(*painter, commitRect);
   drawFocus(*painter, option, commitRect);
   painter->restore();
 }
 
 QSize HistoryCommitItemDelegate::sizeHint(const QStyleOptionViewItem& option,
                                           const QModelIndex& index) const {
-  const bool startsDay = index.data(HistoryCommitListModel::startsDayGroupRole).toBool();
-  const int refsHeight = index.data(HistoryCommitListModel::refsRole).toStringList().isEmpty() ? 0 : 22;
   const auto* model = dynamic_cast<const HistoryCommitListModel*>(index.model());
   const auto* graph = model ? model->graphRowAt(index.row()) : nullptr;
-  return {graph ? std::max(option.rect.width(), graph->width * 22 + 300) : option.rect.width(), (!graph && startsDay ? 30 : 0) + 52 + refsHeight};
+  const bool startsDay = !graph && index.data(HistoryCommitListModel::startsDayGroupRole).toBool();
+  return {graph ? std::max(option.rect.width(), model->graphLanes() * historyLaneWidth + 320) : option.rect.width(),
+          (startsDay ? dayHeaderHeight : 0) + historyRowHeight};
 }
 
 CommitFileItemDelegate::CommitFileItemDelegate(QObject* parent)

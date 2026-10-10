@@ -30,9 +30,12 @@ class DiffView final : public QTableView {
 
  protected:
   void paintEvent(QPaintEvent* event) override;
+  void resizeEvent(QResizeEvent* event) override;
 
  private:
   void rebuildSpansAndWidths();
+  // Shown when a file has no text diff; empty after clearDiff().
+  QString emptyText_;
 
   DiffModel* model_{};
   QAction* copyAction_{};

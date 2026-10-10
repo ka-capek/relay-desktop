@@ -239,6 +239,8 @@ SettingsDialog::SettingsDialog(Preferences preferences, QWidget* parent) : QDial
   themeId_->addItem(tr("Dark"), QStringLiteral("dark"));
   themeId_->addItem(tr("Catppuccin Latte"), QStringLiteral("catppuccin-latte"));
   themeId_->addItem(tr("Catppuccin Mocha"), QStringLiteral("catppuccin-mocha"));
+  themeId_->addItem(tr("Mono Light"), QStringLiteral("mono-light"));
+  themeId_->addItem(tr("Mono Dark"), QStringLiteral("mono-dark"));
   themeId_->setCurrentIndex(qMax(0, themeId_->findData(preferences.themeId)));
   appearanceLayout->addWidget(new QLabel(tr("Base theme"), appearance));
   appearanceLayout->addWidget(themeId_);

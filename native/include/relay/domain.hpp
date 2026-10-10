@@ -210,7 +210,7 @@ struct Preferences {
   int diffFontSize{12};
   QString commitName;
   QString commitEmail;
-  bool graphHistory{};
+  bool graphHistory{true};  // the all-branch graph is the default view
   QString themeId{QStringLiteral("light")};
   QJsonObject customTheme;
   // Window geometry and splitter states, saved by the window itself. Only

@@ -111,6 +111,10 @@ class MainWindowTest final : public QObject {
     for (auto* edit : window.findChildren<QLineEdit*>())
       if (edit->accessibleName() == QStringLiteral("Search commits")) search = edit;
     QVERIFY(search);
+    // Highlight (the default) works on loaded commits; filtering searches all history.
+    auto* highlight = window.findChild<QToolButton*>(QStringLiteral("historyHighlight"));
+    QVERIFY(highlight && highlight->isChecked());
+    highlight->setChecked(false);
     // "zephyr" is only in the body of a commit that is not loaded yet.
     search->setText(QStringLiteral("ZEPHYR"));
     QTRY_COMPARE_WITH_TIMEOUT(model->rowCount(), 1, gitTimeoutMs);
@@ -714,6 +718,64 @@ class MainWindowTest final : public QObject {
     QCOMPARE(answered, QStringList{QStringLiteral("pullDivergedDialog")});
   }
 
+  void historyHighlightsMatchesAndFocusesFullScreen() {
+    QTemporaryDir temporary;
+    createRepository(temporary.path());
+    for (const auto& title : {QStringLiteral("Fix login"), QStringLiteral("Docs"), QStringLiteral("Fix logout")})
+      runGit(temporary.path(), {QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), title});
+    QTemporaryDir profile;
+    relay::RelayControllerConfig config;
+    config.storeFile = profile.filePath(QStringLiteral("state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.resize(1250, 820);
+    window.show();
+    controller.start();
+    controller.openRepository(temporary.path());
+    window.findChild<QTabWidget*>(QStringLiteral("contentTabs"))->setCurrentIndex(1);
+    auto* history = window.findChild<QListView*>(QStringLiteral("historyList"));
+    auto* model = dynamic_cast<relay::HistoryCommitListModel*>(history->model());
+    QVERIFY(history->hasMouseTracking());
+    // The all-branch graph is the default.
+    QCOMPARE(window.findChild<QComboBox*>(QStringLiteral("historyMode"))->currentIndex(), 1);
+    QTRY_COMPARE_WITH_TIMEOUT(model->rowCount(), 4, gitTimeoutMs);
+    QVERIFY(model->graphRowAt(0) != nullptr);
+
+    auto* field = window.findChild<QComboBox*>(QStringLiteral("historySearchField"));
+    auto* search = window.findChild<QLineEdit*>(QStringLiteral("historySearch"));
+    auto* matches = window.findChild<QLabel*>(QStringLiteral("historyMatches"));
+    field->setCurrentIndex(field->findText(QStringLiteral("Message")));
+    search->setText(QStringLiteral("fix"));
+    // Every commit stays, with the graph; matches are counted and stepped through.
+    QCOMPARE(model->rowCount(), 4);
+    QVERIFY(model->graphRowAt(0) != nullptr);
+    QCOMPARE(model->index(1).data(relay::HistoryCommitListModel::highlightRole).toInt(), relay::HistoryCommitListModel::dimmedHighlight);
+    QCOMPARE(matches->text(), QStringLiteral("2"));
+    QTest::keyClick(search, Qt::Key_Return);
+    QCOMPARE(model->commitAt(history->currentIndex().row())->title, QStringLiteral("Fix logout"));
+    QCOMPARE(matches->text(), QStringLiteral("1/2"));
+    QTest::keyClick(search, Qt::Key_Return);
+    QCOMPARE(model->commitAt(history->currentIndex().row())->title, QStringLiteral("Fix login"));
+    QTest::keyClick(search, Qt::Key_Return, Qt::ShiftModifier);
+    QCOMPARE(model->commitAt(history->currentIndex().row())->title, QStringLiteral("Fix logout"));
+    if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+      QDir().mkpath(output);
+      window.grab().save(QDir(output).filePath(QStringLiteral("history-highlight.png")));
+    }
+
+    auto* focus = window.findChild<QToolButton*>(QStringLiteral("historyFocus"));
+    auto* sidebar = window.findChild<QWidget*>(QStringLiteral("sidebar"));
+    auto* details = window.findChild<QSplitter*>(QStringLiteral("historyDetailSplitter"));
+    focus->setChecked(true);
+    QVERIFY(!sidebar->isVisible());
+    QVERIFY(!details->isVisible());
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QVERIFY(!focus->isChecked());
+    QVERIFY(sidebar->isVisible());
+    QVERIFY(details->isVisible());
+  }
+
   void toolbarPullFetchesUnknownRemoteChanges() {
     QTemporaryDir temporary;
     const auto seed = temporary.filePath(QStringLiteral("seed"));
@@ -1220,7 +1282,10 @@ class MainWindowTest final : public QObject {
     relay::RelayController controller(config);
     relay::MainWindow window(&controller);
     controller.start();
-    controller.setPreferences({false, 12});
+    relay::Preferences preferences;
+    preferences.refreshOnFocus = false;
+    preferences.graphHistory = false;  // the current branch only, as a list
+    controller.setPreferences(preferences);
     window.show();
     controller.openRepository(root.path());
     QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository() != nullptr, gitTimeoutMs);
