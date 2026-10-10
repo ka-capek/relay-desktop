@@ -34,6 +34,9 @@ if(WIN32)
   # Run 37954523555 passed every 0.5.4 case, then hit 180 seconds three tests
   # before the end; individual waits stay bounded.
   set_tests_properties(main_window PROPERTIES TIMEOUT 300)
+  # Run 38045779478 (the v0.5.5 tag) passed every controller case but hit the
+  # 60-second default near the end while suites ran in parallel.
+  set_tests_properties(relay_controller PROPERTIES TIMEOUT 180)
 endif()
 
 add_test(NAME app_smoke COMMAND $<TARGET_FILE:relay_native> --smoke-test)
