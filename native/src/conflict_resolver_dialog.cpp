@@ -28,8 +28,8 @@ namespace {
 
 constexpr int rowHeight = 20;
 constexpr int numberWidth = 44;
-constexpr int boxSize = 10;
-constexpr int textInset = 24;
+constexpr int boxSize = 12;
+constexpr int textInset = 26;
 
 QString withoutEnding(QString line) {
   if (line.endsWith(u'\n')) line.chop(1);
@@ -79,10 +79,7 @@ class ConflictLineDelegate final : public QStyledItemDelegate {
 
     QRect textRect = text ? option.rect.adjusted(conflict ? textInset : 8, 0, -8, 0) : option.rect.adjusted(2, 0, -8, 0);
     if (text && conflict && line) {
-      const QRect box(option.rect.left() + 8, option.rect.center().y() - boxSize / 2, boxSize, boxSize);
-      if (chosen) painter->fillRect(box, colors.green);
-      painter->setPen(chosen ? colors.green : colors.muted);
-      painter->drawRect(box.adjusted(0, 0, -1, -1));
+      theme::paintCheckBox(*painter, QRect(option.rect.left() + 8, option.rect.center().y() - boxSize / 2, boxSize, boxSize), chosen);
     }
     painter->setPen(!text || (conflict && decided && !chosen) ? colors.muted : colors.ink);
     painter->drawText(textRect, static_cast<int>(((text ? Qt::AlignLeft : Qt::AlignRight) | Qt::AlignVCenter).toInt()),

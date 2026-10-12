@@ -98,7 +98,7 @@ must also be checked manually.
 - Public repository: <https://github.com/ka-capek/relay-desktop>
 - Default branch: `main`
 - Version: `project(RelayNative VERSION ...)` in `CMakeLists.txt`, currently
-  `0.6.0`. CI names installers from it.
+  `0.6.1`. CI names installers from it.
 - `v0.5.1` to `v0.5.5` were prereleases. On 2026-10-12 the owner chose to
   publish `v0.6.0` as the first full (non-pre) release, knowing it is unsigned
   and that macOS still needs external Git. It still does not satisfy the strict
@@ -318,6 +318,11 @@ every message starts at the same x; the list never scrolls sideways. An empty
 `DiffView` takes no width and shows nothing; only a file without a text diff
 shows the notice. Repository selection stays a tint without a left-edge marker. Every item
 view has mouse tracking so delegates' hover state follows the pointer.
+Check boxes are flat squares: a 1px `muted` frame, or the accent fill with a
+Lucide check in `onAccent`. `QCheckBox` gets it from the style sheet
+(`check-white.svg` / `check-black.svg`, chosen by `onAccent`); painted rows
+call `theme::paintCheckBox()`. Fusion's own indicator had no visible frame in
+the dark presets.
 
 History is a one-line-per-commit table: graph, ref chips, subject, then fixed
 author/hash/date columns sized by the view (narrow views drop author, then
