@@ -10,8 +10,8 @@ accounts, repositories and settings carry over with no new sign-in.
 
 ## Download
 
-[**Relay 0.5.5**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.5.5)
-is a prerelease. The Windows setup includes Git for Windows and the GitHub CLI;
+[**Relay 0.6.0**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.6.0)
+is the first full release. The Windows setup includes Git for Windows and the GitHub CLI;
 the macOS DMG includes the GitHub CLI and uses the Git from the Xcode Command
 Line Tools or Homebrew. The installers are unsigned (macOS uses ad-hoc
 signing) and not notarized. Real multi-account OAuth, private clone/fetch/push
@@ -22,11 +22,11 @@ first time; Windows SmartScreen may also ask for confirmation.
 
 ## Installers and upgrades
 
-Prereleases provide a Windows **Relay-Native-Setup-<version>-x64.exe**
+Releases provide a Windows **Relay-Native-Setup-<version>-x64.exe**
 and an Apple Silicon **Relay-Native-<version>-arm64.dmg**, with a
-`SHA256SUMS.txt`. These are unsigned preview distributions with the bundled
-tools described above. Pushing a `v<version>` tag builds, tests and publishes
-them from CI.
+`SHA256SUMS.txt`. These are unsigned distributions with the bundled tools
+described above. Pushing a `v<version>` tag builds, tests and publishes them
+from CI; a tag with a suffix such as `v0.6.1-rc1` becomes a prerelease.
 
 On Windows, the wizard lets you choose the install folder and optionally add a
 desktop shortcut. Subsequent installers remember that folder and update the
