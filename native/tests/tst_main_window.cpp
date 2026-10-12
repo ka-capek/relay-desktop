@@ -1175,7 +1175,8 @@ class MainWindowTest final : public QObject {
     QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository()->conflictedFiles.isEmpty(), gitTimeoutMs);
     QFile readme(root.path() + QStringLiteral("/README.md"));
     QVERIFY(readme.open(QIODevice::ReadOnly));
-    QCOMPARE(readme.readAll(), QByteArray("main\ntopic\n"));
+    // Git for Windows may check files out with CRLF; the resolver keeps them.
+    QCOMPARE(readme.readAll().replace("\r\n", "\n"), QByteArray("main\ntopic\n"));
     QTRY_VERIFY_WITH_TIMEOUT(banner->isEnabled(), gitTimeoutMs);
     controller.executeRepositoryAction(relay::RepositoryAction::continueOperation);
     QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository()->pendingOperation.isEmpty(), gitTimeoutMs);
