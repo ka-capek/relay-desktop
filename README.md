@@ -10,8 +10,8 @@ accounts, repositories and settings carry over with no new sign-in.
 
 ## Download
 
-[**Relay 0.6.0**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.6.0)
-is the first full release. The Windows setup includes Git for Windows and the GitHub CLI;
+[**Relay 0.6.1**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.6.1)
+adds line-by-line conflict resolution; 0.6.0 was the first full release. The Windows setup includes Git for Windows and the GitHub CLI;
 the macOS DMG includes the GitHub CLI and uses the Git from the Xcode Command
 Line Tools or Homebrew. The installers are unsigned (macOS uses ad-hoc
 signing) and not notarized. Real multi-account OAuth, private clone/fetch/push
@@ -144,7 +144,10 @@ already fetched from other remotes are also visible.
 
 Repository actions include branch creation/rename/local deletion, merge,
 rebase, revert, stash/apply/drop, tags, recoverable discard, undo,
-amend and conflict resolution with continue/skip/abort. Select multiple history
+amend and conflict resolution with continue/skip/abort. **Resolve line by
+line…** shows both versions of a conflicted text file side by side; pick
+single lines or whole blocks, or edit the result, then save to mark the file
+resolved. Select multiple history
 rows with Ctrl/Cmd or Shift, then **Repository → Cherry-pick selected commits…**.
 The confirmation shows the destination and applies the selected commits from
 oldest to newest in displayed history order (up to 200). A conflicting series
@@ -310,7 +313,8 @@ all-branch graph. Both modes share commit details and text/image previews.
 Repository menus provide branch creation/rename/deletion, remote checkout,
 merge, rebase, stash/restore, recoverable selected-file
 discard, revert/cherry-pick, latest-commit undo/message editing and local tags.
-A conflict dialog handles resolution, continue, abort and skip. New repositories
+A conflict dialog handles resolution (whole versions or line by line),
+continue, abort and skip. New repositories
 can be initialized locally or published through an explicit GitHub dialog.
 Production login/publication and installers still require native-platform checks.
 

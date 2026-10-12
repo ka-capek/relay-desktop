@@ -85,6 +85,26 @@ struct FilePreview {
   QImage after;
 };
 
+// A conflicted text file as Git left it in the worktree: the text both sides
+// agree on, and blocks between conflict markers. Every line keeps its line
+// ending; marker lines are kept only in raw.
+struct ConflictSegment {
+  bool conflict{};
+  QStringList lines;  // common text
+  QStringList current;   // Git's "ours" (HEAD)
+  QStringList base;      // shown by the diff3 conflict style only
+  QStringList incoming;  // Git's "theirs"
+  QString raw;           // the block with its markers, as read
+};
+
+struct ConflictFile {
+  QString path;
+  QList<ConflictSegment> segments;
+  // SHA-256 of the bytes that were parsed. A save is refused when the file
+  // no longer has them, so edits made elsewhere are never overwritten.
+  QString contentHash;
+};
+
 struct HistoryItem {
   QString fullHash;
   QString hash;
@@ -300,3 +320,4 @@ Q_DECLARE_METATYPE(relay::HistoryCommit)
 Q_DECLARE_METATYPE(relay::CommitDetail)
 
 Q_DECLARE_METATYPE(relay::FilePreview)
+Q_DECLARE_METATYPE(relay::ConflictFile)

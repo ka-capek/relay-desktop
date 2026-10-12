@@ -14,5 +14,7 @@
     <file>Catppuccin-LICENSE.txt</file>
     <file>chevron-up-light.svg</file>
     <file>chevron-up-dark.svg</file>
+    <file>check-white.svg</file>
+    <file>check-black.svg</file>
   </qresource>
 </RCC>
