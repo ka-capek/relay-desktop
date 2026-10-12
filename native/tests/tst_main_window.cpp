@@ -718,6 +718,55 @@ class MainWindowTest final : public QObject {
     QCOMPARE(answered, QStringList{QStringLiteral("pullDivergedDialog")});
   }
 
+  void historyGraphPaintsBranchesAndMerges() {
+    QTemporaryDir temporary;
+    createRepository(temporary.path());
+    const auto git = [&temporary](QStringList arguments) { runGit(temporary.path(), arguments); };
+    const auto commit = [&git](const QString& title) {
+      git({QStringLiteral("commit"), QStringLiteral("--allow-empty"), QStringLiteral("-m"), title});
+    };
+    git({QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("feature")});
+    commit(QStringLiteral("Add feature"));
+    commit(QStringLiteral("Polish feature"));
+    git({QStringLiteral("switch"), QStringLiteral("main")});
+    commit(QStringLiteral("Update docs"));
+    git({QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("fix")});
+    commit(QStringLiteral("Fix crash"));
+    git({QStringLiteral("switch"), QStringLiteral("main")});
+    git({QStringLiteral("merge"), QStringLiteral("--no-ff"), QStringLiteral("-m"), QStringLiteral("Merge feature"), QStringLiteral("feature")});
+    git({QStringLiteral("switch"), QStringLiteral("fix")});
+    commit(QStringLiteral("Test crash fix"));
+    git({QStringLiteral("switch"), QStringLiteral("main")});
+    commit(QStringLiteral("Release notes"));
+    QTemporaryDir profile;
+    relay::RelayControllerConfig config;
+    config.storeFile = profile.filePath(QStringLiteral("state.json"));
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.resize(1250, 820);
+    window.show();
+    controller.start();
+    controller.openRepository(temporary.path());
+    window.findChild<QTabWidget*>(QStringLiteral("contentTabs"))->setCurrentIndex(1);
+    auto* history = window.findChild<QListView*>(QStringLiteral("historyList"));
+    auto* model = dynamic_cast<relay::HistoryCommitListModel*>(history->model());
+    QTRY_COMPARE_WITH_TIMEOUT(model->rowCount(), 8, gitTimeoutMs);
+    // Some edge changes lanes, which the delegate draws as rounded corners.
+    bool crossesLanes = false;
+    for (int row = 0; row < model->rowCount(); ++row) {
+      const auto* graph = model->graphRowAt(row);
+      QVERIFY(graph);
+      for (const int parent : graph->parents) crossesLanes = crossesLanes || parent != graph->lane;
+    }
+    QVERIFY(crossesLanes);
+    QVERIFY(!history->grab().isNull());
+    if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+      QDir().mkpath(output);
+      QVERIFY(window.grab().save(QDir(output).filePath(QStringLiteral("history-graph.png"))));
+    }
+  }
+
   void historyHighlightsMatchesAndFocusesFullScreen() {
     QTemporaryDir temporary;
     createRepository(temporary.path());

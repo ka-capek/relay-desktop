@@ -3,7 +3,8 @@ name: Native desktop validation
 on:
   workflow_dispatch:
   # A version tag builds, tests and packages both platforms, then the
-  # release job publishes the installers as a prerelease.
+  # release job publishes the installers (a prerelease for a suffixed tag
+  # such as v0.6.1-rc1).
   push:
     tags:
       - 'v*'
@@ -199,7 +200,7 @@ jobs:
           if-no-files-found: ignore
 
   release:
-    name: Publish prerelease
+    name: Publish release
     needs: native
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -212,7 +213,7 @@ jobs:
         shell: bash
         run: |
           version=$(sed -n 's/^  VERSION \(.*\)$/\1/p' CMakeLists.txt)
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+          if [ "v$version" != "${GITHUB_REF_NAME%%-*}" ]; then
             echo "Tag $GITHUB_REF_NAME does not match CMakeLists.txt version $version" >&2
             exit 1
           fi
@@ -222,7 +223,7 @@ jobs:
           pattern: Relay-Native-*-installers
           path: release
           merge-multiple: true
-      - name: Create the prerelease
+      - name: Create the release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -236,6 +237,9 @@ jobs:
           done
           sha256sum "$dmg" "$exe" > SHA256SUMS.txt
           cat SHA256SUMS.txt
+          kind=(--latest)
+          case "$GITHUB_REF_NAME" in *-*) kind=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" "$dmg" "$exe" SHA256SUMS.txt \
-            --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease \
-            --title "Relay $VERSION" --generate-notes
+            --repo "$GITHUB_REPOSITORY" --verify-tag "${kind[@]}" \
+            --title "Relay $VERSION" --generate-notes \
+            --notes "The installers are not Developer ID signed, notarized or Authenticode signed. The Windows setup includes Git for Windows and the GitHub CLI; on macOS, Git comes from the Xcode Command Line Tools or Homebrew."

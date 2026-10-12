@@ -98,10 +98,12 @@ must also be checked manually.
 - Public repository: <https://github.com/ka-capek/relay-desktop>
 - Default branch: `main`
 - Version: `project(RelayNative VERSION ...)` in `CMakeLists.txt`, currently
-  `0.5.5`. CI names installers from it.
-- Releases so far are prereleases (`v0.5.1` to `v0.5.5`). They use
-  external Git/gh and do not satisfy the stable bundled-runtime distribution
-  gate. `v0.5.0` was the last Electron release.
+  `0.6.0`. CI names installers from it.
+- `v0.5.1` to `v0.5.5` were prereleases. On 2026-10-12 the owner chose to
+  publish `v0.6.0` as the first full (non-pre) release, knowing it is unsigned
+  and that macOS still needs external Git. It still does not satisfy the strict
+  bundled-runtime packaging gate (section 18). A tag with a suffix such as
+  `v0.6.1-rc1` publishes a prerelease. `v0.5.0` was the last Electron release.
 - Release page: <https://github.com/ka-capek/relay-desktop/releases>
 - Product name `Relay`; installed app `Relay Native.app` /
   `%LOCALAPPDATA%/Programs/Relay Native`
@@ -333,7 +335,11 @@ The model's own default stays filtering for API compatibility.
 History has a visible List/Graph selector. Graph colors belong to active lines
 of ancestry, independently of lane position, and survive pagination/compaction.
 Allocate unused color identities until a line ends; do not recolor a passing
-line when a neighboring branch finishes. First-parent connectors retain the
+line when a neighboring branch finishes. A line that changes lanes is drawn as
+straight segments joined by rounded 90-degree corners (GitKraken-style): a
+parent edge leaves the commit mark horizontally and turns down into its lane;
+a passing line shifting lanes turns below the row's commit mark so it never
+appears to join it. First-parent connectors retain the
 child's color until joining; merge arms use their parent line colors. Graph
 mode omits day-header gaps (dates remain in metadata) and filtered results hide
 edges. Dots and reference chips share graph colors, with hollow merge dots.
@@ -1270,8 +1276,9 @@ location without an uninstall. CI verifies the DMG and launches its copied app.
    both platforms to pass.
 4. Push the tag: `git tag v<version> && git push origin v<version>`. The
    workflow builds and tests both platforms again, checks the tag matches
-   `CMakeLists.txt`, and publishes a prerelease with the DMG, the Windows
-   setup and `SHA256SUMS.txt`.
+   `CMakeLists.txt` (ignoring a `-suffix`), and publishes a release with the
+   DMG, the Windows setup and `SHA256SUMS.txt`; a suffixed tag is a
+   prerelease.
 5. Install each installer on a real machine and smoke-test: startup, Git/gh
    check, sign-in, a clone, a commit, fetch/pull/push.
 6. Edit the generated release notes if needed.

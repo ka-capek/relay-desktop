@@ -14,12 +14,14 @@
 #include <QStyleOptionFocusRect>
 
 #include <algorithm>
+#include <cmath>
 
 namespace relay {
 namespace {
 
 constexpr int historyRowHeight = 24;
 constexpr int historyLaneWidth = 14;
+constexpr qreal historyCornerRadius = 6.0;
 constexpr int dayHeaderHeight = 20;
 
 QFont rowFont(const QStyleOptionViewItem& option, int pixelSize,
@@ -341,20 +343,37 @@ void HistoryCommitItemDelegate::paint(QPainter* painter,
     const auto x = [&commitRect](int lane) { return commitRect.left() + 12 + lane * historyLaneWidth; };
     const auto y = commitRect.center().y();
     painter->setRenderHint(QPainter::Antialiasing);
-    const auto line = [painter](QPointF start, QPointF end, int lane) {
+    // A line changing lanes runs down, across at `turn` and down again, with
+    // rounded 90-degree corners. Starting at `turn` skips the first corner.
+    const auto line = [painter](QPointF start, QPointF end, qreal turn, int lane) {
       painter->setPen(QPen(theme::branchColor(lane), 1.6));
       QPainterPath path(start);
-      const qreal middle = (start.y() + end.y()) / 2.0;
-      path.cubicTo(QPointF(start.x(), middle), QPointF(end.x(), middle), end);
+      if (start.x() == end.x()) {
+        path.lineTo(end);
+      } else {
+        const qreal direction = end.x() > start.x() ? 1.0 : -1.0;
+        const qreal radius = std::min({historyCornerRadius, std::abs(end.x() - start.x()) / 2.0, end.y() - turn});
+        const qreal first = std::min(radius, turn - start.y());
+        if (first > 0) {
+          path.lineTo(start.x(), turn - first);
+          path.quadTo(start.x(), turn, start.x() + direction * first, turn);
+        }
+        path.lineTo(end.x() - direction * radius, turn);
+        path.quadTo(end.x(), turn, end.x(), turn + radius);
+        path.lineTo(end);
+      }
       painter->drawPath(path);
     };
+    const qreal bottom = commitRect.bottom() + 1;
     for (qsizetype i = 0; i < graph->passing.size(); ++i) {
       const auto edge = graph->passing.at(i);
-      line(QPointF(x(edge.first), commitRect.top()), QPointF(x(edge.second), commitRect.bottom() + 1), graph->passingColors.at(i));
+      // Below the commit mark, so a shifting line never seems to join it.
+      line(QPointF(x(edge.first), commitRect.top()), QPointF(x(edge.second), bottom), bottom - historyCornerRadius,
+           graph->passingColors.at(i));
     }
-    if (graph->incoming) line(QPointF(x(graph->lane), commitRect.top()), QPointF(x(graph->lane), y), graph->color);
+    if (graph->incoming) line(QPointF(x(graph->lane), commitRect.top()), QPointF(x(graph->lane), y), y, graph->color);
     for (qsizetype i = 0; i < graph->parents.size(); ++i)
-      line(QPointF(x(graph->lane), y), QPointF(x(graph->parents.at(i)), commitRect.bottom() + 1), graph->parentColors.at(i));
+      line(QPointF(x(graph->lane), y), QPointF(x(graph->parents.at(i)), bottom), y, graph->parentColors.at(i));
     // Square commit marks; a merge is hollow.
     painter->setRenderHint(QPainter::Antialiasing, false);
     const QRect dot{x(graph->lane) - 3, y - 3, 7, 7};
