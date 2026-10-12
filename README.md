@@ -10,8 +10,8 @@ accounts, repositories and settings carry over with no new sign-in.
 
 ## Download
 
-[**Relay 0.6.0**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.6.0)
-is the first full release. The Windows setup includes Git for Windows and the GitHub CLI;
+[**Relay 0.6.1**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.6.1)
+adds line-by-line conflict resolution; 0.6.0 was the first full release. The Windows setup includes Git for Windows and the GitHub CLI;
 the macOS DMG includes the GitHub CLI and uses the Git from the Xcode Command
 Line Tools or Homebrew. The installers are unsigned (macOS uses ad-hoc
 signing) and not notarized. Real multi-account OAuth, private clone/fetch/push
