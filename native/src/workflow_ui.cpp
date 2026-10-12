@@ -1,4 +1,5 @@
 #include "relay/main_window.hpp"
+#include "relay/conflict_resolver_dialog.hpp"
 #include "relay/relay_controller.hpp"
 #include "relay/github_api.hpp"
 #include "relay/list_models.hpp"
@@ -28,6 +29,20 @@ bool confirm(QWidget* parent, const QString& title, const QString& text) {
   dialog.setTextFormat(Qt::PlainText);
   dialog.setDefaultButton(QMessageBox::Cancel);
   return dialog.exec() == QMessageBox::Ok;
+}
+
+// Names Git's "ours" (stage 2) and "theirs" (stage 3) by where each version
+// comes from. A rebase swaps them: HEAD is the branch being rebased onto.
+std::pair<QString, QString> conflictSideLabels(const Repository& repository) {
+  const auto current = repository.branch.isEmpty() || repository.branch == QStringLiteral("detached HEAD")
+      ? MainWindow::tr("Use the current branch's version")
+      : MainWindow::tr("Use the version from %1").arg(repository.branch);
+  const auto& operation = repository.pendingOperation;
+  if (operation == QStringLiteral("rebase"))
+    return {MainWindow::tr("Use the version from the branch rebased onto"), MainWindow::tr("Use the version from the reapplied commit")};
+  if (operation == QStringLiteral("cherry-pick")) return {current, MainWindow::tr("Use the version from the cherry-picked commit")};
+  if (operation == QStringLiteral("revert")) return {current, MainWindow::tr("Use the version with the commit reverted")};
+  return {current, MainWindow::tr("Use the version from the merged branch")};
 }
 }
 
@@ -308,15 +323,20 @@ void MainWindow::showConflicts() {
   dialog.setWindowTitle(tr("Resolve conflicts"));
   dialog.resize(640, 300);
   auto* layout = new QVBoxLayout(&dialog);
-  auto* explanation = new QLabel(tr("Edit conflicting files in your editor, save them, then mark them resolved. You can also keep an entire Git side. During a rebase, Ours is the base branch and Theirs is the replayed commit."), &dialog);
+  auto* explanation = new QLabel(tr("Edit conflicting files in your editor, save them, then mark them resolved. You can also replace a whole file with one of the two versions."), &dialog);
   explanation->setWordWrap(true);
   layout->addWidget(explanation);
   auto* picker = new QComboBox(&dialog);
   picker->setAccessibleName(tr("Conflicted file"));
   layout->addWidget(picker);
-  auto* ours = new QPushButton(tr("Keep ours"), &dialog);
-  auto* theirs = new QPushButton(tr("Keep theirs"), &dialog);
+  auto* ours = new QPushButton(&dialog);
+  ours->setObjectName(QStringLiteral("conflictOursButton"));
+  auto* theirs = new QPushButton(&dialog);
+  theirs->setObjectName(QStringLiteral("conflictTheirsButton"));
   auto* resolved = new QPushButton(tr("Mark resolved after editing"), &dialog);
+  auto* lines = new QPushButton(tr("Resolve line by line…"), &dialog);
+  lines->setObjectName(QStringLiteral("resolveLinesButton"));
+  layout->addWidget(lines);
   layout->addWidget(ours);
   layout->addWidget(theirs);
   layout->addWidget(resolved);
@@ -325,14 +345,18 @@ void MainWindow::showConflicts() {
   auto* abort = buttons->addButton(tr("Abort operation…"), QDialogButtonBox::ActionRole);
   auto* skip = buttons->addButton(tr("Skip commit…"), QDialogButtonBox::ActionRole);
   layout->addWidget(buttons);
-  const auto update = [picker, ours, theirs, resolved, finish, abort, skip](const Repository& repository, bool busy) {
+  const auto update = [picker, lines, ours, theirs, resolved, finish, abort, skip](const Repository& repository, bool busy) {
     const auto previous = picker->currentText();
     picker->clear();
     picker->addItems(repository.conflictedFiles);
     if (repository.conflictedFiles.contains(previous)) picker->setCurrentText(previous);
+    const auto [oursLabel, theirsLabel] = conflictSideLabels(repository);
+    ours->setText(oursLabel);
+    theirs->setText(theirsLabel);
     ours->setEnabled(!busy && !repository.conflictedFiles.isEmpty());
     theirs->setEnabled(ours->isEnabled());
     resolved->setEnabled(ours->isEnabled());
+    lines->setEnabled(ours->isEnabled());
     finish->setEnabled(!busy && repository.conflictedFiles.isEmpty() && !repository.pendingOperation.isEmpty());
     abort->setEnabled(!busy && !repository.pendingOperation.isEmpty());
     skip->setEnabled(!busy && !repository.pendingOperation.isEmpty() && repository.pendingOperation != QStringLiteral("merge"));
@@ -363,9 +387,35 @@ void MainWindow::showConflicts() {
     const auto file = picker->currentText();
     if (file.isEmpty()) return;
     if (action != RepositoryAction::markResolved && !confirm(&dialog, tr("Resolve file"),
-        tr("Replace the whole conflicted file with this Git side? For a deleted side, the file will be removed."))) return;
+        tr("Replace the whole file with this version? If that version deletes the file, the file will be removed."))) return;
     controller_->executeRepositoryAction(action, {}, {file});
   };
+  connect(lines, &QPushButton::clicked, &dialog, [this, &dialog, picker, path] {
+    const auto file = picker->currentText();
+    if (file.isEmpty() || !repository_) return;
+    ConflictResolverDialog resolver(file, &dialog);
+    resolver.setRepository(*repository_);
+    resolver.setCodeFontSize(appState_.preferences.diffFontSize);
+    resolver.setBusy(!busyOperations_.isEmpty());
+    connect(controller_, &RelayController::conflictFileReady, &resolver,
+        [&resolver, path](const QString& repositoryPath, const ConflictFile& conflict) {
+          if (repositoryPath == path) resolver.setFile(conflict);
+        });
+    connect(controller_, &RelayController::operationFailed, &resolver, [&resolver](const QString& operation, const QString& message) {
+      if (operation == QStringLiteral("conflict-file") || operation == QStringLiteral("repository-action")) resolver.showError(message);
+    });
+    connect(controller_, &RelayController::currentRepositoryChanged, &resolver, [&resolver, path](const Repository& repository) {
+      if (repository.path != path) resolver.QDialog::reject();
+      else resolver.setRepository(repository);
+    });
+    connect(controller_, &RelayController::repositoryClosed, &resolver, [&resolver] { resolver.QDialog::reject(); });
+    connect(controller_, &RelayController::busyChanged, &resolver, [this, &resolver](const QString&, bool) {
+      resolver.setBusy(!busyOperations_.isEmpty());
+    });
+    connect(&resolver, &ConflictResolverDialog::saveRequested, controller_, &RelayController::saveConflictResolution);
+    controller_->requestConflictFile(file);
+    resolver.exec();
+  });
   connect(ours, &QPushButton::clicked, &dialog, [resolve] { resolve(RepositoryAction::resolveOurs); });
   connect(theirs, &QPushButton::clicked, &dialog, [resolve] { resolve(RepositoryAction::resolveTheirs); });
   connect(resolved, &QPushButton::clicked, &dialog, [resolve] { resolve(RepositoryAction::markResolved); });

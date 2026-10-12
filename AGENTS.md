@@ -50,7 +50,7 @@ Relay provides these flows:
 - Switch to local or remote-tracking branches; create, rename and delete local
   branches; merge, rebase (published commits only after a warning), revert, cherry-pick (including
   several commits), stash, recoverable discard, undo, amend, tags, and conflict
-  resolution.
+  resolution, including choosing individual lines of each conflicting block.
 - Select an SSH identity per repository for any SSH host, including GitHub.
 - Choose a theme, including imported custom palettes.
 
@@ -392,6 +392,7 @@ default locale is C, where Qt otherwise ignores numeric mode.
 | `native/tests/` | QtTest unit, integration, large-diff, Git-fixture, and app smoke tests |
 | `docs/native-measurements.md` | Reproducible native size and physical-footprint measurements |
 | `native/src/git_workflows.cpp`, `native/src/workflow_ui.cpp` | Repository actions (branches, merge, rebase, stash, discard, cherry-pick, tags) and their UI |
+| `native/src/conflict_resolution.cpp`, `native/src/conflict_resolver_dialog.cpp` | Conflict marker parsing and the line-by-line conflict resolver (section 12.9) |
 | `native/src/forge_service.cpp`, `forge_controller.cpp`, `forge_dialog.cpp`, `forge_ui.cpp` | Gitea/Forgejo/GitLab API discovery and account UI |
 | `native/src/credential_store.cpp` | macOS Keychain / Windows Credential Manager access for forge API tokens |
 | `native/src/runtime_check.cpp` | Startup Git and GitHub CLI version checks |
@@ -998,6 +999,38 @@ single-branch clones, without switching branches. The picker item's data is
 `relay:fetch-origin-branches`, never a ref. Names starting with
 `-` are rejected, and the picker shows the actual branch until a switch
 succeeds.
+
+### 12.9 Conflict resolution
+
+**Repository → Resolve conflicts / continue…** (also the conflict banner)
+lists the conflicted files. Each file can be replaced by one whole version,
+marked resolved after editing elsewhere, or opened with **Resolve line by
+line…**. Buttons name where a version comes from, never Git's "ours" and
+"theirs": the current branch, the merged branch, the cherry-picked commit,
+the reverted version, or during a rebase (where Git swaps the sides) the
+branch rebased onto and the reapplied commit. `conflictSides()` and
+`workflow_ui.cpp` hold these names.
+
+The line resolver (`conflict_resolver_dialog.cpp`) reads the worktree file,
+not Git's stages, so edits made before opening it are kept.
+`GitService::readConflictFile()` accepts only a file that is still unmerged,
+regular on both sides (stages 2 and 3), inside the repository, not a symlink,
+at most 2 MiB, without NUL bytes and valid UTF-8 (a BOM is kept as U+FEFF).
+`parseConflictMarkers()` (`conflict_resolution.cpp`) accepts any marker size
+of at least 7 and the diff3 base section; incomplete or nested markers of
+the same size are refused. Lines keep their own `\n` or `\r\n`.
+
+`ConflictLinesModel` shows both versions in one virtualized table, padded so
+that a block's sides stay aligned. A click toggles one line, Space toggles the
+selected lines of one side, and Use left/right/both/neither, Right side first
+and Undecide act on the current block. An undecided block keeps its markers
+in the result; saving needs every block decided, or a hand-edited result
+(**Edit result** locks line choices; edited text takes the file's CRLF
+endings). `saveConflictResolution()` refuses a result that still has markers
+and a file whose SHA-256 differs from what was read, writes with `QSaveFile`
+keeping permissions, then runs `git add -- <path>`. Saving is a
+`repository-action` under the repository mutation lock. Deleted sides,
+binary files and links still use the whole-version buttons.
 
 ## 13. Repository Discovery Semantics
 

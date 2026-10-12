@@ -1,5 +1,6 @@
 #include "relay/main_window.hpp"
 #include "relay/compare_dialog.hpp"
+#include "relay/conflict_resolver_dialog.hpp"
 #include "relay/dialogs.hpp"
 #include "relay/relay_application.hpp"
 #include "relay/relay_controller.hpp"
@@ -1092,6 +1093,11 @@ class MainWindowTest final : public QObject {
       QVERIFY(dialog);
       auto* error = dialog->findChild<QLabel*>(QStringLiteral("conflictError"));
       QVERIFY(error);
+      const auto* ours = dialog->findChild<QPushButton*>(QStringLiteral("conflictOursButton"));
+      const auto* theirs = dialog->findChild<QPushButton*>(QStringLiteral("conflictTheirsButton"));
+      QVERIFY(ours && theirs);
+      QCOMPARE(ours->text(), QStringLiteral("Use the version from %1").arg(controller.currentRepository()->branch));
+      QCOMPARE(theirs->text(), QStringLiteral("Use the version from the merged branch"));
       controller.executeRepositoryAction(relay::RepositoryAction::continueOperation);
       QTRY_VERIFY(!error->text().isEmpty());
       QVERIFY(error->text().contains(QStringLiteral("Resolve")));
@@ -1106,6 +1112,73 @@ class MainWindowTest final : public QObject {
     controller.executeRepositoryAction(relay::RepositoryAction::abortOperation);
     QTRY_VERIFY(controller.currentRepository()->pendingOperation.isEmpty());
     QVERIFY(!banner->isVisible());
+  }
+
+  void conflictLinesCanBeResolvedFromTheConflictDialog() {
+    QTemporaryDir root;
+    QTemporaryDir store;
+    createRepository(root.path());
+    const auto change = [&root](const QByteArray& content) {
+      QFile file(root.path() + QStringLiteral("/README.md"));
+      QVERIFY(file.open(QIODevice::WriteOnly)); file.write(content); file.close();
+      runGit(root.path(), {QStringLiteral("commit"), QStringLiteral("-am"), QString::fromUtf8(content).trimmed()});
+    };
+    runGit(root.path(), {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("topic")});
+    change("topic\n");
+    runGit(root.path(), {QStringLiteral("switch"), QStringLiteral("main")});
+    change("main\n");
+    relay::RelayControllerConfig config;
+    config.storeFile = store.path() + QStringLiteral("/state.json");
+    config.synchronizeAccountsOnStart = false;
+    relay::RelayController controller(config);
+    relay::MainWindow window(&controller);
+    window.show(); controller.start(); controller.openRepository(root.path());
+    QTRY_VERIFY(controller.currentRepository());
+    controller.executeRepositoryAction(relay::RepositoryAction::mergeBranch, QStringLiteral("topic"));
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRepository()->pendingOperation, QStringLiteral("merge"), gitTimeoutMs);
+    auto* banner = window.findChild<QPushButton*>(QStringLiteral("conflictButton"));
+    QTRY_VERIFY_WITH_TIMEOUT(banner->isEnabled(), gitTimeoutMs);
+    // Never leave a modal dialog open if a check below fails.
+    QTimer::singleShot(gitTimeoutMs * 2, &window, [&window] {
+      if (auto* resolver = window.findChild<QDialog*>(QStringLiteral("conflictResolverDialog"))) resolver->done(QDialog::Rejected);
+      if (auto* dialog = window.findChild<QDialog*>(QStringLiteral("conflictsDialog"))) dialog->reject();
+    });
+    bool saved = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>(QStringLiteral("conflictsDialog"));
+      QVERIFY(dialog);
+      auto* lines = dialog->findChild<QPushButton*>(QStringLiteral("resolveLinesButton"));
+      QVERIFY(lines && lines->isEnabled());
+      QTimer::singleShot(0, &window, [&] {
+        auto* resolver = window.findChild<relay::ConflictResolverDialog*>(QStringLiteral("conflictResolverDialog"));
+        QVERIFY(resolver);
+        QTRY_COMPARE_WITH_TIMEOUT(resolver->linesModel()->blockCount(), 1, gitTimeoutMs);
+        QCOMPARE(resolver->linesModel()->headerData(relay::ConflictLinesModel::currentTextColumn, Qt::Horizontal).toString(),
+                 QStringLiteral("main"));
+        resolver->findChild<QPushButton*>(QStringLiteral("useBothBlocks"))->click();
+        if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+          QDir().mkpath(output);
+          resolver->grab().save(QDir(output).filePath(QStringLiteral("conflict-resolver.png")));
+        }
+        auto* save = resolver->findChild<QPushButton*>(QStringLiteral("saveConflictResolution"));
+        QVERIFY(save->isEnabled());
+        save->click();
+        // The resolver closes itself once the file is no longer conflicted.
+        QTRY_VERIFY_WITH_TIMEOUT(!resolver->isVisible(), gitTimeoutMs);
+        saved = true;
+      });
+      lines->click();
+      dialog->reject();
+    });
+    banner->click();
+    QVERIFY(saved);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository()->conflictedFiles.isEmpty(), gitTimeoutMs);
+    QFile readme(root.path() + QStringLiteral("/README.md"));
+    QVERIFY(readme.open(QIODevice::ReadOnly));
+    QCOMPARE(readme.readAll(), QByteArray("main\ntopic\n"));
+    QTRY_VERIFY_WITH_TIMEOUT(banner->isEnabled(), gitTimeoutMs);
+    controller.executeRepositoryAction(relay::RepositoryAction::continueOperation);
+    QTRY_VERIFY_WITH_TIMEOUT(controller.currentRepository()->pendingOperation.isEmpty(), gitTimeoutMs);
   }
 
   void themeSettingsRejectInvalidOverridesBeforeAccepting() {

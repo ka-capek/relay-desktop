@@ -144,7 +144,10 @@ already fetched from other remotes are also visible.
 
 Repository actions include branch creation/rename/local deletion, merge,
 rebase, revert, stash/apply/drop, tags, recoverable discard, undo,
-amend and conflict resolution with continue/skip/abort. Select multiple history
+amend and conflict resolution with continue/skip/abort. **Resolve line by
+line…** shows both versions of a conflicted text file side by side; pick
+single lines or whole blocks, or edit the result, then save to mark the file
+resolved. Select multiple history
 rows with Ctrl/Cmd or Shift, then **Repository → Cherry-pick selected commits…**.
 The confirmation shows the destination and applies the selected commits from
 oldest to newest in displayed history order (up to 200). A conflicting series
@@ -310,7 +313,8 @@ all-branch graph. Both modes share commit details and text/image previews.
 Repository menus provide branch creation/rename/deletion, remote checkout,
 merge, rebase, stash/restore, recoverable selected-file
 discard, revert/cherry-pick, latest-commit undo/message editing and local tags.
-A conflict dialog handles resolution, continue, abort and skip. New repositories
+A conflict dialog handles resolution (whole versions or line by line),
+continue, abort and skip. New repositories
 can be initialized locally or published through an explicit GitHub dialog.
 Production login/publication and installers still require native-platform checks.
 
