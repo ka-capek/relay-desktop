@@ -1,13 +1,17 @@
 #include "relay/git_service.hpp"
+#include "relay/conflict_resolution.hpp"
 #include "relay/process_runner.hpp"
 
 #include <algorithm>
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QSet>
 #include <QRegularExpression>
+#include <QSaveFile>
+#include <QStringDecoder>
 #include <QUuid>
 #include <QUrl>
 
@@ -465,4 +469,68 @@ void GitService::performAction(const QString& root, const RepositoryAction actio
     }
   }
 }
+QByteArray GitService::readConflictedText(const QString& root, const QString& path) const {
+  Repository state;
+  state.path = root;
+  readOperationState(state);
+  if (!state.conflictedFiles.contains(path)) throw ProcessError(QStringLiteral("The selected file is no longer conflicted."));
+  // Both sides must be regular files; deletions, symbolic links and
+  // submodules are resolved by choosing a whole version.
+  const auto entries = runGit(root, {QStringLiteral("ls-files"), QStringLiteral("--stage"), QStringLiteral("-z"),
+      QStringLiteral("--"), path}).split(QChar{0}, Qt::SkipEmptyParts);
+  QSet<QString> regular;
+  for (const auto& entry : entries) {
+    const auto fields = entry.section(u'\t', 0, 0).split(u' ');
+    if (fields.size() == 3 && (fields.at(0) == QStringLiteral("100644") || fields.at(0) == QStringLiteral("100755")))
+      regular.insert(fields.at(2));
+  }
+  if (!regular.contains(QStringLiteral("2")) || !regular.contains(QStringLiteral("3")))
+    throw ProcessError(QStringLiteral("One side deleted this file or it is not a regular file. Choose a whole version instead."));
+  const QFileInfo info(QDir(root).absoluteFilePath(path));
+  const auto canonicalRoot = QFileInfo(root).canonicalFilePath();
+  if (info.isSymLink() || !info.isFile() || !info.canonicalFilePath().startsWith(canonicalRoot + u'/'))
+    throw ProcessError(QStringLiteral("The conflicted file is missing or is not a regular file. Choose a whole version instead."));
+  if (info.size() > 2 * 1024 * 1024)
+    throw ProcessError(QStringLiteral("This file is larger than 2 MiB. Edit it in your editor or choose a whole version."));
+  QFile file(info.absoluteFilePath());
+  if (!file.open(QIODevice::ReadOnly)) throw ProcessError(QStringLiteral("The conflicted file cannot be read."));
+  return file.readAll();
+}
+
+ConflictFile GitService::readConflictFile(const QString& root, const QString& path) const {
+  const auto bytes = readConflictedText(root, path);
+  if (bytes.contains('\0'))
+    throw ProcessError(QStringLiteral("This file is binary. Choose a whole version instead."));
+  // Keep a byte order mark as U+FEFF so that saving writes it back.
+  QStringDecoder decoder(QStringConverter::Utf8, QStringConverter::Flag::ConvertInitialBom);
+  const QString text = decoder.decode(bytes);
+  if (decoder.hasError())
+    throw ProcessError(QStringLiteral("This file is not UTF-8 text. Edit it in your editor or choose a whole version."));
+  auto segments = parseConflictMarkers(text);
+  if (!segments)
+    throw ProcessError(QStringLiteral("The conflict markers in this file are incomplete. Edit it in your editor."));
+  return {path, std::move(*segments),
+          QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex())};
+}
+
+void GitService::saveConflictResolution(const QString& root, const QString& path, const QString& expectedHash,
+                                        const QString& content) const {
+  const auto bytes = readConflictedText(root, path);
+  if (QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()) != expectedHash)
+    throw ProcessError(QStringLiteral("The file changed after it was opened. Open it again to see the current content."));
+  const auto segments = parseConflictMarkers(content);
+  if (!segments || conflictCount(*segments) > 0)
+    throw ProcessError(QStringLiteral("The result still contains conflict markers. Decide every conflict first."));
+  const auto target = QDir(root).absoluteFilePath(path);
+  const auto permissions = QFile::permissions(target);
+  QSaveFile file(target);
+  if (!file.open(QIODevice::WriteOnly)) throw ProcessError(QStringLiteral("The conflicted file cannot be written."));
+  const auto encoded = content.toUtf8();
+  // Keep an executable bit; failing to copy permissions is not fatal.
+  static_cast<void>(file.setPermissions(permissions));
+  if (file.write(encoded) != encoded.size() || !file.commit())
+    throw ProcessError(QStringLiteral("The conflicted file cannot be written."));
+  static_cast<void>(runGit(root, {QStringLiteral("add"), QStringLiteral("--"), path}));
+}
+
 }  // namespace relay

@@ -6,8 +6,8 @@ foreach(test_name IN ITEMS forge_integration forge_service app_paths avatar_cach
   set_target_properties(tst_${test_name} PROPERTIES WIN32_EXECUTABLE FALSE)
   target_link_libraries(tst_${test_name} PRIVATE relay_native_core Qt6::Test)
   target_compile_definitions(tst_${test_name} PRIVATE QT_NO_CAST_FROM_ASCII QT_NO_CAST_TO_ASCII)
-  if(test_name STREQUAL "git_workflows")
-    # The slowest suite on Windows runs as two halves that CTest can run in
+  if(test_name STREQUAL "git_workflows" OR test_name STREQUAL "main_window")
+    # The slowest suites on Windows run as two halves that CTest can run in
     # parallel; see test_shard.hpp.
     foreach(shard IN ITEMS 1 2)
       add_test(NAME ${test_name}_${shard} COMMAND tst_${test_name}
@@ -33,7 +33,9 @@ if(WIN32)
   # workflow's 60-second default even while every individual test passes.
   # Run 37954523555 passed every 0.5.4 case, then hit 180 seconds three tests
   # before the end; individual waits stay bounded.
-  set_tests_properties(main_window PROPERTIES TIMEOUT 300)
+  # Run 38248988936 (0.6.1) then reached 300 seconds with one test function
+  # left, so the suite runs as two halves like git_workflows.
+  set_tests_properties(main_window_1 main_window_2 PROPERTIES TIMEOUT 300)
   # Run 38045779478 (the v0.5.5 tag) passed every controller case but hit the
   # 60-second default near the end while suites ran in parallel.
   set_tests_properties(relay_controller PROPERTIES TIMEOUT 180)
@@ -46,6 +48,14 @@ find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
   add_test(NAME windows_installer_safety COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_install_windows.py")
+endif()
+
+# The Linux payload installer is plain shell; its test shims uname, so macOS
+# checks the same safety rules.
+if(UNIX)
+  add_test(NAME linux_installer_safety COMMAND bash
+    "${PROJECT_SOURCE_DIR}/native/tools/test-install-linux.sh")
+  set_tests_properties(linux_installer_safety PROPERTIES TIMEOUT 30)
 endif()
 
 # Mock macOS inspection tools use POSIX shell scripts. Linux and macOS run

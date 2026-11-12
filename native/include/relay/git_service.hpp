@@ -106,6 +106,13 @@ class GitService final {
   void performAction(const QString& repositoryPath, RepositoryAction action,
                      const QString& target = {}, const QStringList& paths = {},
                      const Account& account = {}) const;
+  // A conflicted UTF-8 text file split at its conflict markers. Throws for
+  // deleted sides, links, binary or non-UTF-8 content and files over 2 MiB.
+  [[nodiscard]] ConflictFile readConflictFile(const QString& repositoryPath, const QString& path) const;
+  // Writes the resolved text and stages it, only while the file still has
+  // the content that was read (expectedHash) and the result has no markers.
+  void saveConflictResolution(const QString& repositoryPath, const QString& path,
+                              const QString& expectedHash, const QString& content) const;
   [[nodiscard]] Repository createRepository(const QString& destinationPath) const;
   void setOriginRemote(const QString& repositoryPath, const QString& remote, bool replace = false) const;
   void createBranch(const QString& repositoryPath, const QString& branch, const QString& startPoint = {}) const;
@@ -150,6 +157,7 @@ class GitService final {
 
   [[nodiscard]] QStringList expandedChangedPaths(const QString& root, const QStringList& paths) const;
   void readOperationState(Repository& repository) const;
+  [[nodiscard]] QByteArray readConflictedText(const QString& root, const QString& path) const;
   void requireIdle(const QString& repositoryPath, bool clean = false) const;
 
   QString resourcesPath_;

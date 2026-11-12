@@ -160,6 +160,7 @@ RelayController::RelayController(RelayControllerConfig config, QObject* parent)
   qRegisterMetaType<Repository>();
   qRegisterMetaType<HistoryPage>();
   qRegisterMetaType<CommitDetail>();
+  qRegisterMetaType<ConflictFile>();
   qRegisterMetaType<GitHubRepositoryPage>();
   qRegisterMetaType<RepositoryScanResult>();
   qRegisterMetaType<GitHubLoginProgress>();
@@ -544,6 +545,7 @@ void RelayController::invalidateRepositoryRequests() {
   ++historyGeneration_;
   ++detailGeneration_;
   ++commitDiffGeneration_;
+  ++conflictFileGeneration_;
 }
 
 void RelayController::openRepository(const QString& repositoryPath) {
@@ -662,6 +664,7 @@ void RelayController::requestCommitDetail(const QString& hash) {
   const auto repositoryPath = currentRepository_->path;
   const auto generation = ++detailGeneration_;
   ++commitDiffGeneration_;
+  ++conflictFileGeneration_;
   const auto git = git_;
   const auto operationGate = config_.operationGate;
   runAsync<CommitDetail>(QStringLiteral("commit-detail"),
@@ -1199,6 +1202,49 @@ void RelayController::executeRepositoryAction(const RepositoryAction action, con
       }, [this, generation, path](Result result) {
         if (result.undone) emit commitUndone(path, result.undone->title, result.undone->body);
         if (!result.error.isEmpty()) emit operationFailed(QStringLiteral("repository-action"), tr("%1: %2").arg(result.repository.name, result.error));
+        if (generation != repositoryGeneration_ || !currentRepository_ || currentRepository_->path != path) return;
+        currentRepository_ = std::make_unique<Repository>(result.repository);
+        emit currentRepositoryChanged(result.repository);
+        rememberRepository(result.repository);
+      });
+}
+
+void RelayController::requestConflictFile(const QString& filePath) {
+  if (!currentRepository_) return;
+  const auto path = currentRepository_->path;
+  const auto generation = ++conflictFileGeneration_;
+  const auto git = git_;
+  runAsync<ConflictFile>(QStringLiteral("conflict-file"),
+      [git, path, filePath] { return git->readConflictFile(path, filePath); },
+      [this, generation, path](ConflictFile file) {
+        if (generation != conflictFileGeneration_ || !currentRepository_ || currentRepository_->path != path) return;
+        emit conflictFileReady(path, std::move(file));
+      }, [this, generation] { return generation == conflictFileGeneration_; });
+}
+
+void RelayController::saveConflictResolution(const QString& filePath, const QString& contentHash,
+                                             const QString& content) {
+  if (!currentRepository_) return;
+  if (repositoryMutationActive_) {
+    emit operationFailed(QStringLiteral("repository-action"), tr("Wait for the current Git operation to finish."));
+    return;
+  }
+  const auto path = currentRepository_->path;
+  const auto generation = ++repositoryGeneration_;
+  invalidateRepositoryRequests();
+  const auto git = git_;
+  const auto operationGate = config_.operationGate;
+  struct Result { Repository repository; QString error; };
+  runAsync<Result>(QStringLiteral("repository-action"),
+      [git, operationGate, path, filePath, contentHash, content] {
+        invokeGate(operationGate, QStringLiteral("repository-action"), path);
+        QString error;
+        try {
+          git->saveConflictResolution(path, filePath, contentHash, content);
+        } catch (const ProcessError& failure) { error = failure.qMessage(); }
+        return Result{git->readRepository(path), error};
+      }, [this, generation, path](Result result) {
+        if (!result.error.isEmpty()) emit operationFailed(QStringLiteral("repository-action"), result.error);
         if (generation != repositoryGeneration_ || !currentRepository_ || currentRepository_->path != path) return;
         currentRepository_ = std::make_unique<Repository>(result.repository);
         emit currentRepositoryChanged(result.repository);

@@ -10,6 +10,7 @@ The output uses the runtime/ layout that Relay already resolves:
 
 macOS has no official relocatable Git build, so Relay uses the Git from the
 Xcode Command Line Tools or Homebrew there and bundles only the GitHub CLI.
+Linux distributions provide Git; only the GitHub CLI is bundled there too.
 
   python native/tools/fetch_runtimes.py --platform win-x64 --output runtime
 """
@@ -24,6 +25,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import urllib.request
 import zipfile
@@ -101,6 +103,14 @@ def extract_zip(archive: Path, destination: Path) -> None:
         bundle.extractall(destination)
 
 
+def extract_tar(archive: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive) as bundle:
+        # The data filter refuses absolute paths, parent traversal, links
+        # that leave the destination and device files.
+        bundle.extractall(destination, filter="data")
+
+
 def extract_portable_git(archive: Path, destination: Path) -> None:
     """PortableGit is a 7-Zip self-extractor; 7z reads it on any platform."""
     seven_zip = shutil.which("7z") or shutil.which("7za")
@@ -143,7 +153,7 @@ def remove_excluded(root: Path) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--platform", choices=("win-x64", "mac-arm64"), required=True)
+    parser.add_argument("--platform", choices=("win-x64", "mac-arm64", "linux-x64"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cache", type=Path, help="Keep downloads here between runs.")
     arguments = parser.parse_args()
@@ -167,6 +177,8 @@ def main() -> int:
             unpacked = scratch / tool
             if tool == "git":
                 extract_portable_git(archive, unpacked)
+            elif archive.name.endswith((".tar.gz", ".tgz")):
+                extract_tar(archive, unpacked)
             else:
                 extract_zip(archive, unpacked)
             if not (unpacked / pinned["executable"]).is_file():

@@ -51,6 +51,14 @@ class ExternalAppsTest final : public QObject {
     QCOMPARE(files.arguments, QStringList{directory});
     const auto bundle = ExternalApps::editorLaunch({QStringLiteral("zed"), QStringLiteral("Zed"), QStringLiteral("/Applications/Zed.app")}, directory);
     QCOMPARE(bundle.arguments, (QStringList{QStringLiteral("-a"), QStringLiteral("/Applications/Zed.app"), directory}));
+#elif defined(Q_OS_LINUX)
+    QCOMPARE(files.program, QStringLiteral("xdg-open"));
+    QCOMPARE(files.arguments, QStringList{directory});
+    // The folder is one argument (or one --option=folder), never shell text.
+    QVERIFY(!terminal.program.isEmpty());
+    QVERIFY(terminal.arguments.size() <= 2);
+    for (const auto& argument : terminal.arguments)
+      QVERIFY(argument == directory || argument.startsWith(u'-'));
 #endif
     // Nothing starts for a folder that does not exist.
     QVERIFY_THROWS_EXCEPTION(relay::ProcessError, ExternalApps::start(files));

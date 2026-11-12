@@ -223,9 +223,12 @@ SettingsDialog::SettingsDialog(Preferences preferences, QWidget* parent) : QDial
 #if defined(Q_OS_MACOS)
     const auto start = QStringLiteral("/Applications");
     const auto filter = tr("Applications (*.app)");
-#else
+#elif defined(Q_OS_WIN)
     const auto start = QString{};
     const auto filter = tr("Programs (*.exe)");
+#else
+    const auto start = QStringLiteral("/usr/bin");
+    const auto filter = tr("All files (*)");
 #endif
     const auto path = QFileDialog::getOpenFileName(this, tr("Choose an editor"), start, filter);
     if (!path.isEmpty()) editorPath_->setText(path);

@@ -114,6 +114,10 @@ class RelayController final : public QObject {
   void compareBranches(const QString& base, const QString& compare);
   void requestComparisonFileDiff(const QString& from, const QString& to, const QString& filePath);
   void rewriteUnpublishedCommits(const QList<CommitRewriteStep>& steps);
+  // Reads a conflicted file for line-by-line resolution (conflictFileReady),
+  // and saves and stages its resolved text as a "repository-action".
+  void requestConflictFile(const QString& filePath);
+  void saveConflictResolution(const QString& filePath, const QString& contentHash, const QString& content);
   void executeRepositoryAction(relay::RepositoryAction action, const QString& target = {},
                                const QStringList& paths = {});
   void createLocalRepository(const QString& destinationPath);
@@ -154,6 +158,7 @@ class RelayController final : public QObject {
   void editorsDetected(QList<QPair<QString, QString>> editors);
   void comparisonReady(QString repositoryPath, relay::BranchComparison comparison);
   void comparisonFileDiffReady(QString repositoryPath, QString from, QString to, QString filePath, QString diff);
+  void conflictFileReady(QString repositoryPath, relay::ConflictFile file);
   void commitUndone(QString repositoryPath, QString summary, QString description);
   void filePreviewReady(QString repositoryPath, QString filePath, relay::FilePreview preview);
   void commitFilePreviewReady(QString repositoryPath, QString hash, QString filePath, relay::FilePreview preview);
@@ -264,6 +269,7 @@ class RelayController final : public QObject {
   quint64 comparisonGeneration_{};
   quint64 comparisonDiffGeneration_{};
   quint64 commitDiffGeneration_{};
+  quint64 conflictFileGeneration_{};
 };
 
 }  // namespace relay

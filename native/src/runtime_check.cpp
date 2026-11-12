@@ -18,8 +18,9 @@ QString runtimeInstallHelp(const RuntimeTool tool) {
   return git ? QStringLiteral("Install or update Git with: brew install git")
              : QStringLiteral("Install or update GitHub CLI with: brew install gh");
 #else
-  return git ? QStringLiteral("Install or update Git using your system package manager.")
-             : QStringLiteral("Install or update GitHub CLI (gh) using your system package manager.");
+  // Distribution packages of gh are often older than Relay needs.
+  return git ? QStringLiteral("Install or update Git with your package manager, for example: sudo apt install git")
+             : QStringLiteral("Install or update GitHub CLI (gh) as described at https://cli.github.com");
 #endif
 }
 
@@ -38,6 +39,13 @@ QString systemRuntimeExecutable(const RuntimeTool tool) {
   }
 #elif defined(Q_OS_MACOS)
   candidates.append(QStringLiteral("/opt/homebrew/bin/%1").arg(name));
+#else
+  // A desktop launcher may start Relay without the login shell's PATH.
+  for (const auto& directory : {QStringLiteral("/usr/local/bin"), QStringLiteral("/usr/bin"),
+                                QDir::home().filePath(QStringLiteral(".local/bin")), QStringLiteral("/snap/bin"),
+                                QStringLiteral("/home/linuxbrew/.linuxbrew/bin")}) {
+    candidates.append(QDir(directory).filePath(name));
+  }
 #endif
   for (const auto& candidate : candidates) {
     const QFileInfo file(candidate);

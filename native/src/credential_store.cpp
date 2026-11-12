@@ -1,3 +1,8 @@
+// libsecret's GLib headers use `signals` as a member name, which Qt defines as
+// a macro; include them before any Qt header.
+#if defined(__linux__)
+#include <libsecret/secret.h>
+#endif
 #include "relay/credential_store.hpp"
 #include <QByteArray>
 #include <QRegularExpression>
@@ -27,6 +32,20 @@ CFMutableDictionaryRef query(const QString& id) {
   CFRelease(account);
   return dict;
 }
+#elif defined(Q_OS_LINUX)
+// The Secret Service (GNOME Keyring, KWallet, KeePassXC) through libsecret.
+const SecretSchema* schema() {
+  static const SecretSchema value{"dev.relay.gitclient.forge", SECRET_SCHEMA_NONE,
+      {{"account", SECRET_SCHEMA_ATTRIBUTE_STRING}, {nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING}},
+      0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+  return &value;
+}
+// Reports whether the call failed and releases the error without its text.
+bool failed(GError* error) {
+  if (!error) return false;
+  g_error_free(error);
+  return true;
+}
 #endif
 }
 void CredentialStore::write(const QString& accountId, const QString& token) {
@@ -54,10 +73,18 @@ void CredentialStore::write(const QString& accountId, const QString& token) {
   const bool ok = CredWriteW(&credential, 0);
   bytes.fill('\0');
   if (!ok) throw std::runtime_error("Could not save the Git server token in Windows Credential Manager.");
+#elif defined(Q_OS_LINUX)
+  GError* error{};
+  const auto account = name.toUtf8();
+  const bool ok = secret_password_store_sync(schema(), SECRET_COLLECTION_DEFAULT, "Relay Git server token",
+      bytes.constData(), nullptr, &error, "account", account.constData(), nullptr);
+  bytes.fill('\0');
+  if (failed(error) || !ok)
+    throw std::runtime_error("Could not save the Git server token in the system keyring. Relay needs a running Secret Service such as GNOME Keyring or KWallet; no plaintext fallback is used.");
 #else
   Q_UNUSED(name);
   bytes.fill('\0');
-  throw std::runtime_error("Git server credential storage is supported on macOS and Windows. No plaintext fallback is used.");
+  throw std::runtime_error("Git server credential storage is supported on macOS, Windows and Linux. No plaintext fallback is used.");
 #endif
 }
 QString CredentialStore::read(const QString& accountId) {
@@ -86,9 +113,21 @@ QString CredentialStore::read(const QString& accountId) {
   if (credential->CredentialBlob) SecureZeroMemory(credential->CredentialBlob, credential->CredentialBlobSize);
   CredFree(credential);
   return result;
+#elif defined(Q_OS_LINUX)
+  GError* error{};
+  const auto account = name.toUtf8();
+  auto* secret = secret_password_lookup_sync(schema(), nullptr, &error, "account", account.constData(), nullptr);
+  if (failed(error)) {
+    if (secret) secret_password_free(secret);
+    throw std::runtime_error("Could not read the Git server token from the system keyring.");
+  }
+  if (!secret) return {};
+  auto result = QString::fromUtf8(secret);
+  secret_password_free(secret);
+  return result;
 #else
   Q_UNUSED(name);
-  throw std::runtime_error("Git server credential storage is supported on macOS and Windows.");
+  throw std::runtime_error("Git server credential storage is supported on macOS, Windows and Linux.");
 #endif
 }
 void CredentialStore::remove(const QString& accountId) {
@@ -101,9 +140,15 @@ void CredentialStore::remove(const QString& accountId) {
 #elif defined(Q_OS_WIN)
   if (!CredDeleteW(name.toStdWString().c_str(), CRED_TYPE_GENERIC, 0) && GetLastError() != ERROR_NOT_FOUND)
     throw std::runtime_error("Could not remove the Git server token from Windows Credential Manager.");
+#elif defined(Q_OS_LINUX)
+  GError* error{};
+  const auto account = name.toUtf8();
+  // FALSE without an error means there was nothing to remove.
+  secret_password_clear_sync(schema(), nullptr, &error, "account", account.constData(), nullptr);
+  if (failed(error)) throw std::runtime_error("Could not remove the Git server token from the system keyring.");
 #else
   Q_UNUSED(name);
-  throw std::runtime_error("Git server credential storage is supported on macOS and Windows.");
+  throw std::runtime_error("Git server credential storage is supported on macOS, Windows and Linux.");
 #endif
 }
 }  // namespace relay

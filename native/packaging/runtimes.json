@@ -15,6 +15,12 @@
         "sha256": "8cfb027cc5310675f2b830eac8f9865c1155a45ffcf9757f699fdd5a22046ca4",
         "executable": "gh_2.98.0_macOS_arm64/bin/gh",
         "licenseFile": "gh_2.98.0_macOS_arm64/LICENSE"
+      },
+      "linux-x64": {
+        "url": "https://github.com/cli/cli/releases/download/v2.98.0/gh_2.98.0_linux_amd64.tar.gz",
+        "sha256": "3b8ac6b30336802fc1a858d7c084e11cdf24ac1a761ca90b68022d7d729208de",
+        "executable": "gh_2.98.0_linux_amd64/bin/gh",
+        "licenseFile": "gh_2.98.0_linux_amd64/LICENSE"
       }
     }
   },

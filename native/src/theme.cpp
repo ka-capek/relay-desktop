@@ -4,12 +4,15 @@
 #include <QFontDatabase>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QPainter>
 #include <QFile>
 #include <QRegularExpression>
 #include <QStyleFactory>
 #include <QStyle>
 #include <QPushButton>
 #include <QToolButton>
+
+#include <algorithm>
 
 static void initializeThemeResources() {
   static const bool ready = [] { Q_INIT_RESOURCE(resources); return true; }();
@@ -89,6 +92,30 @@ QColor tint(const QColor& color, double amount) {
                          static_cast<float>(base.greenF() * (1 - amount) + color.greenF() * amount),
                          static_cast<float>(base.blueF() * (1 - amount) + color.blueF() * amount));
 }
+void paintCheckBox(QPainter& painter, const QRect& rect, const bool checked, const bool enabled) {
+  const Colors& token = colors();
+  painter.save();
+  if (checked) {
+    painter.fillRect(rect, enabled ? token.green : token.line);
+    painter.setRenderHint(QPainter::Antialiasing);
+    QPen pen(token.onAccent, std::max(1.5, rect.width() / 8.0));
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter.setPen(pen);
+    // Lucide "check" (M20 6 9 17l-5-5) in its 24-unit box.
+    const auto point = [&rect](const double x, const double y) {
+      return QPointF(rect.left() + rect.width() * x / 24.0, rect.top() + rect.height() * y / 24.0);
+    };
+    const QPointF check[] = {point(20, 6), point(9, 17), point(4, 12)};
+    painter.drawPolyline(check, 3);
+  } else {
+    painter.fillRect(rect, enabled ? token.panel : token.soft);
+    painter.setPen(enabled ? token.muted : token.line);
+    painter.drawRect(rect.adjusted(0, 0, -1, -1));
+  }
+  painter.restore();
+}
+
 QColor branchColor(int identity) {
   const auto& list = colors().branches;
   return list.at(qMax(0, identity) % list.size());
@@ -265,7 +292,11 @@ QString styleSheet() {
     QToolButton#syncButton::menu-arrow { image: url(@arrow@); width: 12px; height: 12px; }
     QComboBox QAbstractItemView { padding: 0; border: 1px solid @line@; background: @panel@; selection-background-color: @greenWash@; }
     QCheckBox, QRadioButton { spacing: 6px; font-size: 12px; }
-    QCheckBox::indicator, QRadioButton::indicator { width: 12px; height: 12px; }
+    QRadioButton::indicator { width: 12px; height: 12px; }
+    QCheckBox::indicator { width: 12px; height: 12px; border: 1px solid @muted@; background: @panel@; }
+    QCheckBox::indicator:checked { border-color: @green@; background: @green@; image: url(@check@); }
+    QCheckBox::indicator:disabled { border-color: @line@; background: @soft@; }
+    QCheckBox::indicator:checked:disabled { background: @line@; }
 
     QMenuBar { background: @canvas@; color: @ink@; font-size: 12px; spacing: 0; }
     QMenuBar::item { padding: 3px 8px; border-radius: 0; background: transparent; }
@@ -363,6 +394,7 @@ QString styleSheet() {
       font-size: 11px;
     }
   )QSS");
+  sheet.replace(QStringLiteral("@check@"), colors().onAccent.lightness() < 128 ? QStringLiteral(":/relay/check-black.svg") : QStringLiteral(":/relay/check-white.svg"));
   sheet.replace(QStringLiteral("@upArrow@"), colors().panel.lightness() < 128 ? QStringLiteral(":/relay/chevron-up-dark.svg") : QStringLiteral(":/relay/chevron-up-light.svg"));
   sheet.replace(QStringLiteral("@arrow@"), colors().panel.lightness() < 128 ? QStringLiteral(":/relay/chevron-dark.svg") : QStringLiteral(":/relay/chevron-light.svg"));
   sheet.replace(QStringLiteral("@canvas@"), colors().canvas.name());

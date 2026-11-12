@@ -2,7 +2,7 @@ name: Native desktop validation
 
 on:
   workflow_dispatch:
-  # A version tag builds, tests and packages both platforms, then the
+  # A version tag builds, tests and packages every platform, then the
   # release job publishes the installers (a prerelease for a suffixed tag
   # such as v0.6.1-rc1).
   push:
@@ -35,6 +35,10 @@ jobs:
             runner: windows-2025
             qt-host: windows
             qt-arch: win64_msvc2022_64
+          - target: linux-debug
+            runner: ubuntu-24.04
+            qt-host: linux
+            qt-arch: linux_gcc_64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -48,8 +52,26 @@ jobs:
       - name: Install macOS LLVM
         if: runner.os == 'macOS'
         run: brew install llvm@20
+      # clang-20 comes from the Ubuntu archive, or from apt.llvm.org if the
+      # runner image's archive no longer carries it. The Qt SDK needs the
+      # OpenGL and xkbcommon headers; the rest runs the tests and the
+      # installed application (X11 platform plugin, keyring, menu entry).
+      - name: Install Linux compiler and libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          if ! sudo apt-get install -y clang-20; then
+            curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+            echo 'deb http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main' | sudo tee /etc/apt/sources.list.d/llvm-20.list
+            sudo apt-get update
+            sudo apt-get install -y clang-20
+          fi
+          sudo apt-get install -y g++ pkg-config libsecret-1-dev libgl-dev libxkbcommon-dev \
+            libegl1 libfontconfig1 libdbus-1-3 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xkb1 \
+            dbus-daemon gnome-keyring xvfb desktop-file-utils
       - uses: jurplel/install-qt-action@v4
-        if: runner.os == 'macOS'
+        if: runner.os != 'Windows'
         with:
           version: '6.11.1'
           host: ${{ matrix.qt-host }}
@@ -76,6 +98,9 @@ jobs:
       - name: Record macOS compiler
         if: runner.os == 'macOS'
         run: /opt/homebrew/opt/llvm@20/bin/clang++ --version
+      - name: Record Linux compiler
+        if: runner.os == 'Linux'
+        run: clang++-20 --version
       - name: Configure
         shell: bash
         run: cmake --preset "${{ matrix.target }}" -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
@@ -110,15 +135,29 @@ jobs:
       # Suites use their own temporary repositories and profiles, so they run
       # side by side; wall time is then about the longest suite.
       - name: Test
+        if: runner.os != 'Linux'
         env:
           QT_QPA_PLATFORM: offscreen
           RELAY_SCREENSHOT_DIR: ${{ github.workspace }}/build-native/screenshots
         run: ctest --preset ${{ matrix.target }} --timeout 60 --parallel 4
+      # The keyring test needs a session bus and an unlocked Secret Service;
+      # both live only for this step, with a throwaway password.
+      - name: Test (Linux, with a disposable keyring)
+        if: runner.os == 'Linux'
+        env:
+          QT_QPA_PLATFORM: offscreen
+          RELAY_SCREENSHOT_DIR: ${{ github.workspace }}/build-native/screenshots
+          RELAY_TEST_SECRET_SERVICE: '1'
+        run: |
+          dbus-run-session -- bash -c '
+            set -e
+            echo relay-ci-keyring | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            ctest --preset linux-debug --timeout 60 --parallel 4'
       # Pinned versions and SHA-256 digests live in native/packaging/runtimes.json.
       - name: Fetch bundled Git and GitHub CLI
         shell: bash
         run: |
-          platform=$([ "$RUNNER_OS" = Windows ] && echo win-x64 || echo mac-arm64)
+          case "$RUNNER_OS" in Windows) platform=win-x64 ;; macOS) platform=mac-arm64 ;; *) platform=linux-x64 ;; esac
           python native/tools/fetch_runtimes.py --platform "$platform" --output "$RUNNER_TEMP/relay-runtimes"
       - name: Validate Apple Silicon installer
         if: runner.os == 'macOS'
@@ -145,6 +184,25 @@ jobs:
           & "$app/resources/git/cmd/git.exe" ls-remote https://github.com/ka-capek/relay-desktop.git HEAD
           if ($LASTEXITCODE -ne 0) { throw 'Bundled git could not reach GitHub over HTTPS' }
           "app_dir=$app" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      # Builds the release payload, installs it for the runner user, then
+      # checks the installed copy and the packaged archive on an X server.
+      - name: Validate Linux source installer and archive
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          version=$(sed -n 's/^  VERSION \(.*\)$/\1/p' CMakeLists.txt)
+          bash native/tools/install-linux.sh --source "$GITHUB_WORKSPACE" --qt-dir "$QT_ROOT_DIR" \
+            --runtimes "$RUNNER_TEMP/relay-runtimes" --compiler clang++-20 \
+            --package "$PWD/build-native/preview-installers" --no-open
+          app="$HOME/.local/share/relay-native"
+          "$app/resources/gh/gh" --version
+          desktop-file-validate "$HOME/.local/share/applications/dev.relay.gitclient.desktop"
+          env -u QT_QPA_PLATFORM xvfb-run -a "$app/Relay" --smoke-test
+          mkdir "$RUNNER_TEMP/relay-archive"
+          tar -xzf "build-native/preview-installers/Relay-Native-$version-linux-x64.tar.gz" -C "$RUNNER_TEMP/relay-archive"
+          env -u QT_QPA_PLATFORM xvfb-run -a "$RUNNER_TEMP/relay-archive/relay-native/Relay" --smoke-test
+          XDG_DATA_HOME="$RUNNER_TEMP/relay-data" bash "$RUNNER_TEMP/relay-archive/relay-native/install.sh" --no-open
+          env -u QT_QPA_PLATFORM xvfb-run -a "$RUNNER_TEMP/relay-data/relay-native/Relay" --smoke-test
       - name: Package and verify macOS preview DMG
         if: runner.os == 'macOS'
         shell: bash
@@ -172,6 +230,7 @@ jobs:
           path: |
             build-native/preview-installers/*.exe
             build-native/preview-installers/*.dmg
+            build-native/preview-installers/*.tar.gz
           if-no-files-found: error
       - name: Upload macOS source build
         if: runner.os == 'macOS'
@@ -232,14 +291,15 @@ jobs:
           cd release
           dmg="Relay-Native-$VERSION-arm64.dmg"
           exe="Relay-Native-Setup-$VERSION-x64.exe"
-          for file in "$dmg" "$exe"; do
+          linux="Relay-Native-$VERSION-linux-x64.tar.gz"
+          for file in "$dmg" "$exe" "$linux"; do
             [ -f "$file" ] || { echo "Missing installer $file" >&2; ls -l >&2; exit 1; }
           done
-          sha256sum "$dmg" "$exe" > SHA256SUMS.txt
+          sha256sum "$dmg" "$exe" "$linux" > SHA256SUMS.txt
           cat SHA256SUMS.txt
           kind=(--latest)
           case "$GITHUB_REF_NAME" in *-*) kind=(--prerelease) ;; esac
-          gh release create "$GITHUB_REF_NAME" "$dmg" "$exe" SHA256SUMS.txt \
+          gh release create "$GITHUB_REF_NAME" "$dmg" "$exe" "$linux" SHA256SUMS.txt \
             --repo "$GITHUB_REPOSITORY" --verify-tag "${kind[@]}" \
             --title "Relay $VERSION" --generate-notes \
-            --notes "The installers are not Developer ID signed, notarized or Authenticode signed. The Windows setup includes Git for Windows and the GitHub CLI; on macOS, Git comes from the Xcode Command Line Tools or Homebrew."
+            --notes "The installers are not Developer ID signed, notarized or Authenticode signed. The Windows setup includes Git for Windows and the GitHub CLI; on macOS, Git comes from the Xcode Command Line Tools or Homebrew. The Linux archive (x86_64, glibc 2.39 or newer) includes the GitHub CLI and uses the distribution's Git; extract it and run install.sh."

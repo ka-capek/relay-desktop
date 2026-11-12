@@ -15,6 +15,8 @@ set(RELAY_NATIVE_SOURCES
   include/relay/diff_view.hpp
   include/relay/dialogs.hpp
   include/relay/compare_dialog.hpp
+  include/relay/conflict_resolution.hpp
+  include/relay/conflict_resolver_dialog.hpp
   include/relay/external_apps.hpp
   include/relay/process_runner.hpp
   include/relay/relay_controller.hpp
@@ -38,6 +40,8 @@ set(RELAY_NATIVE_SOURCES
   src/diff_view.cpp
   src/dialogs.cpp
   src/compare_dialog.cpp
+  src/conflict_resolution.cpp
+  src/conflict_resolver_dialog.cpp
   src/external_apps.cpp
   src/github_api.cpp
   src/github_auth.cpp
@@ -80,6 +84,11 @@ if(APPLE)
   target_link_libraries(relay_native_core PUBLIC "-framework Security" "-framework CoreFoundation")
 elseif(WIN32)
   target_link_libraries(relay_native_core PUBLIC Advapi32)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # Forge API tokens are kept in the Secret Service keyring through libsecret.
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(RELAY_LIBSECRET REQUIRED IMPORTED_TARGET libsecret-1)
+  target_link_libraries(relay_native_core PUBLIC PkgConfig::RELAY_LIBSECRET)
 endif()
 
 foreach(target IN ITEMS relay_native relay_native_core)

@@ -1,3 +1,4 @@
+#include "relay/conflict_resolution.hpp"
 #include "relay/git_service.hpp"
 #include "relay/process_runner.hpp"
 #include "relay/relay_controller.hpp"
@@ -567,6 +568,119 @@ class GitWorkflowsTest final : public QObject {
         {commits.at(1).fullHash, true, {}}, {commits.at(0).fullHash, true, {}}}, identity);
     QCOMPARE(git(root, {QStringLiteral("log"), QStringLiteral("--format=%s")}), QStringLiteral("everything"));
     QCOMPARE(read(root, QStringLiteral("file.txt")), QByteArray("two\n"));
+  }
+  void conflictMarkersParseAndCompose() {
+    const auto text = QStringLiteral("a\n<<<<<<< HEAD\nx\ny\n=======\nz\n>>>>>>> topic\nb");
+    const auto segments = relay::parseConflictMarkers(text);
+    QVERIFY(segments);
+    QCOMPARE(segments->size(), 3);
+    QCOMPARE(segments->at(0).lines, QStringList{QStringLiteral("a\n")});
+    QVERIFY(segments->at(1).conflict);
+    QCOMPARE(segments->at(1).current, (QStringList{QStringLiteral("x\n"), QStringLiteral("y\n")}));
+    QCOMPARE(segments->at(1).incoming, QStringList{QStringLiteral("z\n")});
+    QCOMPARE(segments->at(2).lines, QStringList{QStringLiteral("b")});
+    QCOMPARE(relay::conflictCount(*segments), 1);
+
+    // Undecided blocks keep their markers; decided ones take chosen lines in order.
+    QCOMPARE(relay::composeConflictResolution(*segments, {}), text);
+    relay::ConflictChoice choice{{true, false}, {true}, false, true};
+    QCOMPARE(relay::composeConflictResolution(*segments, {choice}), QStringLiteral("a\nx\nz\nb"));
+    choice.incomingFirst = true;
+    QCOMPARE(relay::composeConflictResolution(*segments, {choice}), QStringLiteral("a\nz\nx\nb"));
+    QCOMPARE(relay::composeConflictResolution(*segments, {{{false, false}, {false}, false, true}}), QStringLiteral("a\nb"));
+
+    // diff3 base sections, CRLF endings and larger marker sizes.
+    const auto diff3 = relay::parseConflictMarkers(QStringLiteral(
+        "<<<<<<<<< ours\r\n======= kept\r\n||||||||| base\r\nold\r\n=========\r\nnew\r\n>>>>>>>>> theirs\r\n"));
+    QVERIFY(diff3);
+    QCOMPARE(diff3->size(), 1);
+    QCOMPARE(diff3->at(0).current, QStringList{QStringLiteral("======= kept\r\n")});
+    QCOMPARE(diff3->at(0).base, QStringList{QStringLiteral("old\r\n")});
+    QCOMPARE(diff3->at(0).incoming, QStringList{QStringLiteral("new\r\n")});
+
+    QVERIFY(!relay::parseConflictMarkers(QStringLiteral("<<<<<<< a\nx\n=======\ny\n")));
+    QVERIFY(!relay::parseConflictMarkers(QStringLiteral("<<<<<<< a\n<<<<<<< b\n=======\n>>>>>>> c\n")));
+    QCOMPARE(relay::conflictCount(*relay::parseConflictMarkers(QStringLiteral("======= alone\n>>>>>>> x\n"))), 0);
+  }
+
+  void conflictFileResolvesLineByLineAndStages() {
+    QTemporaryDir dir; const auto root = dir.path(); init(root);
+    write(root, QStringLiteral("file.txt"), "one\ntwo\nthree\n"); commit(root);
+    git(root, {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("topic")});
+    write(root, QStringLiteral("file.txt"), "one\nTWO topic\nthree\n"); commit(root);
+    git(root, {QStringLiteral("switch"), QStringLiteral("main")});
+    write(root, QStringLiteral("file.txt"), "one\nTWO main\nthree\n"); commit(root);
+    git(root, {QStringLiteral("config"), QStringLiteral("merge.conflictStyle"), QStringLiteral("diff3")});
+    relay::GitService service;
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.performAction(root, RepositoryAction::mergeBranch, QStringLiteral("topic"), {}, identity));
+
+    auto conflict = service.readConflictFile(root, QStringLiteral("file.txt"));
+    QCOMPARE(conflict.path, QStringLiteral("file.txt"));
+    QCOMPARE(relay::conflictCount(conflict.segments), 1);
+    QCOMPARE(conflict.segments.at(0).lines, QStringList{QStringLiteral("one\n")});
+    QCOMPARE(conflict.segments.at(1).current, QStringList{QStringLiteral("TWO main\n")});
+    QCOMPARE(conflict.segments.at(1).base, QStringList{QStringLiteral("two\n")});
+    QCOMPARE(conflict.segments.at(1).incoming, QStringList{QStringLiteral("TWO topic\n")});
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.readConflictFile(root, QStringLiteral("missing.txt")));
+
+    // Results with markers, and files changed since reading, are refused.
+    const auto unresolved = relay::composeConflictResolution(conflict.segments, {});
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.saveConflictResolution(root, QStringLiteral("file.txt"), conflict.contentHash, unresolved));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.saveConflictResolution(root, QStringLiteral("file.txt"), QString(64, u'0'), QStringLiteral("x\n")));
+    QCOMPARE(read(root, QStringLiteral("file.txt")).toStdString(), unresolved.toUtf8().toStdString());
+
+    const auto resolved = relay::composeConflictResolution(conflict.segments, {{{true}, {true}, true, true}});
+    QCOMPARE(resolved, QStringLiteral("one\nTWO topic\nTWO main\nthree\n"));
+    service.saveConflictResolution(root, QStringLiteral("file.txt"), conflict.contentHash, resolved);
+    QCOMPARE(read(root, QStringLiteral("file.txt")), resolved.toUtf8());
+    QVERIFY(service.readRepository(root).conflictedFiles.isEmpty());
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.readConflictFile(root, QStringLiteral("file.txt")));
+    service.performAction(root, RepositoryAction::continueOperation, {}, {}, identity);
+    QCOMPARE(git(root, {QStringLiteral("show"), QStringLiteral("HEAD:file.txt")}), QStringLiteral("one\nTWO topic\nTWO main\nthree"));
+  }
+
+  void conflictFileKeepsCrLfBomAndEditsMadeBeforeOpening() {
+    QTemporaryDir dir; const auto root = dir.path(); init(root);
+    write(root, QStringLiteral("file.txt"), "\xEF\xBB\xBFone\r\ntwo\r\n"); commit(root);
+    git(root, {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("topic")});
+    write(root, QStringLiteral("file.txt"), "\xEF\xBB\xBFone\r\ntopic\r\n"); commit(root);
+    git(root, {QStringLiteral("switch"), QStringLiteral("main")});
+    write(root, QStringLiteral("file.txt"), "\xEF\xBB\xBFone\r\nmain\r\n"); commit(root);
+    relay::GitService service;
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.performAction(root, RepositoryAction::mergeBranch, QStringLiteral("topic"), {}, identity));
+    // An edit outside the markers survives line-by-line resolution.
+    auto bytes = read(root, QStringLiteral("file.txt"));
+    bytes.replace("one\r\n", "ONE\r\n");
+    write(root, QStringLiteral("file.txt"), bytes);
+#ifndef Q_OS_WIN
+    QFile::setPermissions(root + QStringLiteral("/file.txt"), QFile::permissions(root + QStringLiteral("/file.txt")) | QFileDevice::ExeOwner);
+#endif
+    const auto conflict = service.readConflictFile(root, QStringLiteral("file.txt"));
+    QCOMPARE(conflict.segments.at(1).current, QStringList{QStringLiteral("main\r\n")});
+    const auto resolved = relay::composeConflictResolution(conflict.segments, {{{false}, {true}, false, true}});
+    service.saveConflictResolution(root, QStringLiteral("file.txt"), conflict.contentHash, resolved);
+    QCOMPARE(read(root, QStringLiteral("file.txt")), QByteArray("\xEF\xBB\xBFONE\r\ntopic\r\n"));
+#ifndef Q_OS_WIN
+    QVERIFY(QFile::permissions(root + QStringLiteral("/file.txt")).testFlag(QFileDevice::ExeOwner));
+#endif
+  }
+
+  void conflictFileRefusesBinaryAndDeletedSides() {
+    QTemporaryDir dir; const auto root = dir.path(); init(root);
+    write(root, QStringLiteral("data.bin"), QByteArray("a\0b\n", 4));
+    write(root, QStringLiteral("gone.txt"), "keep\n"); commit(root);
+    git(root, {QStringLiteral("switch"), QStringLiteral("-c"), QStringLiteral("topic")});
+    write(root, QStringLiteral("data.bin"), QByteArray("t\0b\n", 4));
+    QFile::remove(root + QStringLiteral("/gone.txt")); commit(root);
+    git(root, {QStringLiteral("switch"), QStringLiteral("main")});
+    write(root, QStringLiteral("data.bin"), QByteArray("m\0b\n", 4));
+    write(root, QStringLiteral("gone.txt"), "changed\n"); commit(root);
+    relay::GitService service;
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.performAction(root, RepositoryAction::mergeBranch, QStringLiteral("topic"), {}, identity));
+    QCOMPARE(service.readRepository(root).conflictedFiles.size(), 2);
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.readConflictFile(root, QStringLiteral("data.bin")));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.readConflictFile(root, QStringLiteral("gone.txt")));
+    QVERIFY_THROWS_EXCEPTION(relay::ProcessError, service.saveConflictResolution(root, QStringLiteral("gone.txt"), {}, QStringLiteral("x\n")));
   }
 };
 int main(int argc, char** argv) {

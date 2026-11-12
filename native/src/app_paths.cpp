@@ -24,7 +24,12 @@ QString packagedResourceRoot(const QString& applicationDirectory, const RuntimeP
 }
 
 QString platformFolder(const RuntimePlatform platform) {
-  return platform == RuntimePlatform::windowsX64 ? QStringLiteral("win-x64") : QStringLiteral("mac-arm64");
+  switch (platform) {
+    case RuntimePlatform::windowsX64: return QStringLiteral("win-x64");
+    case RuntimePlatform::linuxX64: return QStringLiteral("linux-x64");
+    case RuntimePlatform::macOSArm64: break;
+  }
+  return QStringLiteral("mac-arm64");
 }
 
 QString gitRelativeExecutable(const RuntimePlatform platform) {
@@ -73,28 +78,37 @@ QProcessEnvironment GitRuntime::environment(QProcessEnvironment inherited) const
 }
 
 RuntimePlatform AppPaths::currentPlatform() {
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN)
   return RuntimePlatform::windowsX64;
-#else
+#elif defined(Q_OS_MACOS)
   return RuntimePlatform::macOSArm64;
+#else
+  return RuntimePlatform::linuxX64;
 #endif
 }
 
 QString AppPaths::legacyUserDataDirectory() {
   const auto home = QDir::homePath();
-  const auto roaming = qEnvironmentVariable("APPDATA");
-  return legacyUserDataDirectoryFor(currentPlatform(), home, roaming);
+  const auto platform = currentPlatform();
+  const auto config = qEnvironmentVariable(platform == RuntimePlatform::linuxX64 ? "XDG_CONFIG_HOME" : "APPDATA");
+  return legacyUserDataDirectoryFor(platform, home, config);
 }
 
 QString AppPaths::legacyUserDataDirectoryFor(
-    const RuntimePlatform platform, const QString& homeDirectory, const QString& roamingAppDataDirectory) {
+    const RuntimePlatform platform, const QString& homeDirectory, const QString& configDirectory) {
   if (platform == RuntimePlatform::macOSArm64) {
     return joined(homeDirectory, QStringLiteral("Library/Application Support/relay-desktop"));
   }
+  if (platform == RuntimePlatform::linuxX64) {
+    // The XDG specification ignores a relative XDG_CONFIG_HOME.
+    const auto config = QDir::isAbsolutePath(configDirectory) ? configDirectory
+                                                               : joined(homeDirectory, QStringLiteral(".config"));
+    return joined(config, QStringLiteral("relay-desktop"));
+  }
 
-  auto roaming = roamingAppDataDirectory.isEmpty()
+  auto roaming = configDirectory.isEmpty()
       ? joined(homeDirectory, QStringLiteral("AppData/Roaming"))
-      : roamingAppDataDirectory;
+      : configDirectory;
   roaming.replace(u'\\', u'/');
   return joined(roaming, QStringLiteral("relay-desktop"));
 }
