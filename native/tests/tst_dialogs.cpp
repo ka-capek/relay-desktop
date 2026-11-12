@@ -494,6 +494,8 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
   }
   QApplication application{argc, argv};
+  // Generous on loaded CI runners; a passing wait returns immediately.
+  QTest::defaultTryTimeout.store(std::chrono::milliseconds{30000});
   DialogsTest test;
   return QTest::qExec(&test, argc, argv);
 }

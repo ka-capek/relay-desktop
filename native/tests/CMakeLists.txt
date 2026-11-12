@@ -29,7 +29,9 @@ if(WIN32)
   # The v0.6.1 tag build (run 43297198632) then hit 180 seconds here: with
   # main_window split in two, five Git-heavy tests share the runner's cores.
   set_tests_properties(git_service PROPERTIES TIMEOUT 300)
-  set_tests_properties(git_workflows_1 git_workflows_2 PROPERTIES TIMEOUT 300)
+  # Run 43299170578 finished git_workflows_2 in 287 seconds, so the shards
+  # get headroom above the 300 seconds they had.
+  set_tests_properties(git_workflows_1 git_workflows_2 PROPERTIES TIMEOUT 480)
   # The UI suite also creates real Git repositories. With the toolbar pull,
   # resize and SSH-binding fixtures, Windows process startup can exceed the
   # workflow's 60-second default even while every individual test passes.
