@@ -1290,6 +1290,9 @@ Match verification effort to risk.
   for another suite that becomes the longest one on Windows. Steps that start
   Git wait up to `gitTimeoutMs` (30 s) in the controller and main-window
   suites: the v0.5.4 tag build failed a 5-second wait under parallel load.
+  The main-window and dialogs suites also set `QTest::defaultTryTimeout` to
+  30 s, so a plain `QTRY_COMPARE`/`QTRY_VERIFY` there is not a 5-second wait
+  (run 43299170578 failed one).
 
 Git fixtures should cover, as relevant: clean, modified, untracked, binary,
 no commits, with and without `origin` and upstream, local and remote-only
@@ -1394,7 +1397,9 @@ platforms, connect/browse/restart/disconnect UI, failed metadata/vault writes,
 controller shutdown, stale requests, branch browsing without checkout and
 multi-commit conflict continuation. Private real-server authentication remains
 an installed-platform manual check; do not claim fixtures prove it.
-Windows Git service/workflow suite budgets are 180/300 seconds (per workflow shard), and the
+Windows Git service/workflow suite budgets are 300/480 seconds (per workflow shard; the
+service suite hit its former 180 seconds on the v0.6.1 tag build, run 43297198632, and a
+workflow shard then took 287 of its former 300 seconds in run 43299170578), and the
 controller suite has 180 seconds (the v0.5.5 tag build hit its 60-second default): run
 36154921968 passed the new cases but exhausted the former total suite limits
 near the final fixtures. Individual process limits remain unchanged. Gitea PAT

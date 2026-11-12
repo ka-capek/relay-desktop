@@ -1521,6 +1521,9 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
   relay::RelayApplication application(argc, argv);
   relay::theme::apply(application);
+  // Most waits here are for Git running in a worker. A loaded Windows runner
+  // needed more than QtTest's default 5 seconds (run 43299170578).
+  QTest::defaultTryTimeout.store(std::chrono::milliseconds{gitTimeoutMs});
   MainWindowTest test;
   return relay::test::execSharded(&test, argc, argv);
 }
