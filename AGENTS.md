@@ -1177,7 +1177,8 @@ Match verification effort to risk.
   Linux builds only supplement it. CI runs suites with `ctest --parallel 4`
   and disables Defender real-time scanning on the disposable Windows runner,
   so every test must keep using its own temporary directories and profiles.
-  `git_workflows` runs as `git_workflows_1` and `git_workflows_2`:
+  `git_workflows` and `main_window` each run as two tests (`git_workflows_1`
+  and `git_workflows_2`, `main_window_1` and `main_window_2`):
   `tests/test_shard.hpp` gives each `RELAY_TEST_SHARD=i/n` every n-th test
   function in declaration order, so new functions are never left out. Use it
   for another suite that becomes the longest one on Windows. Steps that start
@@ -1237,6 +1238,8 @@ resizing a populated diff, persisted SSH selection and host mismatch rejection.
 The Windows main-window suite has a 300-second CTest limit because its real
 Git fixtures exceed the default 60 seconds on CI (180 seconds stopped being
 enough with the 0.5.4 cases in run 37954523555); individual waits stay bounded.
+With the 0.6.1 cases the whole suite reached 300 seconds one function before
+the end (run 38248988936), so it now runs as two halves, each with that limit.
 
 ### Native multi-host and branch work (2026-09-25)
 

@@ -1,4 +1,5 @@
 #include "relay/main_window.hpp"
+#include "test_shard.hpp"
 #include "relay/compare_dialog.hpp"
 #include "relay/conflict_resolver_dialog.hpp"
 #include "relay/dialogs.hpp"
@@ -1521,7 +1522,7 @@ int main(int argc, char** argv) {
   relay::RelayApplication application(argc, argv);
   relay::theme::apply(application);
   MainWindowTest test;
-  return QTest::qExec(&test, argc, argv);
+  return relay::test::execSharded(&test, argc, argv);
 }
 
 #include "tst_main_window.moc"
