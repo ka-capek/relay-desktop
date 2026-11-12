@@ -10,7 +10,6 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QStyle>
-#include <QStyleOptionButton>
 #include <QStyleOptionFocusRect>
 
 #include <algorithm>
@@ -165,13 +164,8 @@ void paintFileRow(QPainter& painter, const QStyleOptionViewItem& option,
 
   int left = row.left() + 8;
   if (checkable) {
-    QStyleOptionButton checkbox;
-    checkbox.rect = QRect{left, row.center().y() - 6, 12, 12};
-    checkbox.state = QStyle::State_Enabled;
-    if (index.data(Qt::CheckStateRole).toInt() == Qt::Checked) checkbox.state |= QStyle::State_On;
-    else checkbox.state |= QStyle::State_Off;
-    const QStyle* style = option.widget != nullptr ? option.widget->style() : QApplication::style();
-    style->drawPrimitive(QStyle::PE_IndicatorCheckBox, &checkbox, &painter, option.widget);
+    theme::paintCheckBox(painter, QRect{left, row.center().y() - 6, 12, 12},
+                         index.data(Qt::CheckStateRole).toInt() == Qt::Checked);
     left += 19;
   }
 

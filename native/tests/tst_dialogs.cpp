@@ -1,7 +1,10 @@
+#include "relay/conflict_resolver_dialog.hpp"
 #include "relay/dialogs.hpp"
+#include "relay/theme.hpp"
 
 #include <QApplication>
 #include <QComboBox>
+#include <QDir>
 #include <QCheckBox>
 #include <QSpinBox>
 #include <QJsonObject>
@@ -12,6 +15,7 @@
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QTabWidget>
+#include <QTableView>
 #include <QTest>
 
 namespace {
@@ -360,6 +364,100 @@ class DialogsTest final : public QObject {
     // Second keeps the message edited for it, as a reword.
     QCOMPARE(steps.at(2).hash, QStringLiteral("c2"));
     QCOMPARE(steps.at(2).message, QStringLiteral("Combined"));
+  }
+
+  void conflictResolverChoosesLinesAndBlocks() {
+    relay::ConflictFile file;
+    file.path = QStringLiteral("file.txt");
+    file.contentHash = QStringLiteral("hash");
+    file.segments = *relay::parseConflictMarkers(QStringLiteral(
+        "a\n<<<<<<< HEAD\nx\ny\n=======\nz\n>>>>>>> topic\nb\n<<<<<<< HEAD\np\n=======\nq\n>>>>>>> topic\n"));
+    relay::Repository repository;
+    repository.branch = QStringLiteral("main");
+    repository.pendingOperation = QStringLiteral("merge");
+    repository.conflictedFiles = {file.path};
+
+    relay::ConflictResolverDialog dialog(file.path);
+    dialog.setRepository(repository);
+    dialog.show();
+    auto* model = dialog.linesModel();
+    QCOMPARE(model->headerData(relay::ConflictLinesModel::currentTextColumn, Qt::Horizontal).toString(), QStringLiteral("main"));
+    QCOMPARE(model->headerData(relay::ConflictLinesModel::incomingTextColumn, Qt::Horizontal).toString(), QStringLiteral("Merged branch"));
+    auto* save = dialog.findChild<QPushButton*>(QStringLiteral("saveConflictResolution"));
+    QVERIFY(save);
+    QVERIFY(!save->isEnabled());
+    dialog.setFile(file);
+    // a, two rows for the first block (y has no partner), b, one row for the second.
+    QCOMPARE(model->rowCount(), 5);
+    QCOMPARE(model->blockCount(), 2);
+    QCOMPARE(model->index(2, relay::ConflictLinesModel::incomingTextColumn).flags() & Qt::ItemIsUserCheckable, Qt::ItemFlags{});
+    QCOMPARE(model->index(3, relay::ConflictLinesModel::currentNumberColumn).data().toLongLong(), 4);
+    QCOMPARE(model->index(3, relay::ConflictLinesModel::incomingNumberColumn).data().toLongLong(), 3);
+    QVERIFY(!save->isEnabled());
+
+    // A click on a line puts it into the result.
+    auto* table = dialog.findChild<QTableView*>(QStringLiteral("conflictLines"));
+    QVERIFY(table);
+    const auto x = model->index(1, relay::ConflictLinesModel::currentTextColumn);
+    QTest::mouseClick(table->viewport(), Qt::LeftButton, {}, table->visualRect(x).center());
+    QCOMPARE(x.data(Qt::CheckStateRole).value<Qt::CheckState>(), Qt::Checked);
+    QCOMPARE(model->decidedCount(), 1);
+    QVERIFY(dialog.resultText().startsWith(QStringLiteral("a\nx\nb\n<<<<<<< HEAD\n")));
+    QVERIFY(!save->isEnabled());
+
+    // Whole-block choices for the current block, right side first.
+    dialog.findChild<QPushButton*>(QStringLiteral("useBothBlocks"))->click();
+    QCOMPARE(model->decidedCount(), 1);
+    QTest::mouseClick(table->viewport(), Qt::LeftButton, {},
+                      table->visualRect(model->index(4, relay::ConflictLinesModel::currentTextColumn)).center());
+    dialog.findChild<QPushButton*>(QStringLiteral("useBothBlocks"))->click();
+    dialog.findChild<QCheckBox*>(QStringLiteral("incomingFirst"))->setChecked(true);
+    QCOMPARE(dialog.resultText(), QStringLiteral("a\nx\ny\nz\nb\nq\np\n"));
+    QVERIFY(save->isEnabled());
+    if (const auto output = qEnvironmentVariable("RELAY_SCREENSHOT_DIR"); !output.isEmpty()) {
+      QDir().mkpath(output);
+      model->resetBlock(1);
+      model->setData(model->index(4, relay::ConflictLinesModel::incomingTextColumn), Qt::Checked, Qt::CheckStateRole);
+      for (const auto& id : relay::theme::presetIds()) {
+        relay::theme::configure(id);
+        relay::theme::apply(*qApp);
+        dialog.grab().save(QDir(output).filePath(QStringLiteral("conflict-resolver-%1.png").arg(id)));
+      }
+      relay::theme::configure(QStringLiteral("light"));
+      relay::theme::apply(*qApp);
+      dialog.findChild<QCheckBox*>(QStringLiteral("incomingFirst"))->setChecked(false);
+      dialog.findChild<QPushButton*>(QStringLiteral("useBothBlocks"))->click();
+      dialog.findChild<QCheckBox*>(QStringLiteral("incomingFirst"))->setChecked(true);
+    }
+    QSignalSpy requested(&dialog, &relay::ConflictResolverDialog::saveRequested);
+    save->click();
+    QCOMPARE(requested.size(), 1);
+    QCOMPARE(requested.at(0).at(0).toString(), file.path);
+    QCOMPARE(requested.at(0).at(1).toString(), file.contentHash);
+    QCOMPARE(requested.at(0).at(2).toString(), QStringLiteral("a\nx\ny\nz\nb\nq\np\n"));
+
+    // Editing the result as text locks the line choices.
+    auto* edit = dialog.findChild<QPushButton*>(QStringLiteral("editConflictResult"));
+    edit->click();
+    QVERIFY(!table->isEnabled());
+    dialog.findChild<QPlainTextEdit*>(QStringLiteral("conflictResult"))->setPlainText(QStringLiteral("custom\n"));
+    QCOMPARE(dialog.resultText(), QStringLiteral("custom\n"));
+
+    repository.conflictedFiles.clear();
+    dialog.setRepository(repository);
+    QCOMPARE(dialog.result(), int{QDialog::Accepted});
+  }
+
+  void conflictResolverUsesCrLfForTextEdits() {
+    relay::ConflictFile file;
+    file.path = QStringLiteral("file.txt");
+    file.segments = *relay::parseConflictMarkers(QStringLiteral("a\r\n<<<<<<< HEAD\r\nx\r\n=======\r\ny\r\n>>>>>>> topic\r\n"));
+    relay::ConflictResolverDialog dialog(file.path);
+    dialog.setFile(file);
+    dialog.findChild<QPushButton*>(QStringLiteral("useCurrentBlock"))->click();
+    QCOMPARE(dialog.resultText(), QStringLiteral("a\r\nx\r\n"));
+    dialog.findChild<QPushButton*>(QStringLiteral("editConflictResult"))->click();
+    QCOMPARE(dialog.resultText(), QStringLiteral("a\r\nx\r\n"));
   }
 
   void settingsKeepsEditorChoiceAndUnrelatedPreferences() {

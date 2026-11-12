@@ -10,18 +10,20 @@ accounts, repositories and settings carry over with no new sign-in.
 
 ## Download
 
-[**Relay 0.6.0**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.6.0)
-is the first full release. The Windows setup includes Git for Windows and the GitHub CLI;
+[**Relay 0.6.1**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.6.1)
+adds line-by-line conflict resolution and Linux x86_64 support; 0.6.0 was the
+first full release. The Windows setup includes Git for Windows and the GitHub CLI;
 the macOS DMG includes the GitHub CLI and uses the Git from the Xcode Command
-Line Tools or Homebrew. The installers are unsigned (macOS uses ad-hoc
+Line Tools or Homebrew; the Linux archive includes the GitHub CLI and uses
+your distribution's Git. The installers are unsigned (macOS uses ad-hoc
 signing) and not notarized. Real multi-account OAuth, private clone/fetch/push
 and publication still need installed-platform verification.
 
 On macOS, right-click Relay Native in Applications and choose **Open** the
 first time; Windows SmartScreen may also ask for confirmation.
 
-Linux support is newer than 0.6.0: the Linux archive is published from the
-next release on. Until then, install from source as described below.
+On Linux, extract the archive and run `bash relay-native/install.sh` (see
+below). 0.6.1 is the first release with a Linux build.
 
 ## Installers and upgrades
 
@@ -186,7 +188,10 @@ already fetched from other remotes are also visible.
 
 Repository actions include branch creation/rename/local deletion, merge,
 rebase, revert, stash/apply/drop, tags, recoverable discard, undo,
-amend and conflict resolution with continue/skip/abort. Select multiple history
+amend and conflict resolution with continue/skip/abort. **Resolve line by
+line…** shows both versions of a conflicted text file side by side; pick
+single lines or whole blocks, or edit the result, then save to mark the file
+resolved. Select multiple history
 rows with Ctrl/Cmd or Shift, then **Repository → Cherry-pick selected commits…**.
 The confirmation shows the destination and applies the selected commits from
 oldest to newest in displayed history order (up to 200). A conflicting series
@@ -364,13 +369,14 @@ all-branch graph. Both modes share commit details and text/image previews.
 Repository menus provide branch creation/rename/deletion, remote checkout,
 merge, rebase, stash/restore, recoverable selected-file
 discard, revert/cherry-pick, latest-commit undo/message editing and local tags.
-A conflict dialog handles resolution, continue, abort and skip. New repositories
+A conflict dialog handles resolution (whole versions or line by line),
+continue, abort and skip. New repositories
 can be initialized locally or published through an explicit GitHub dialog.
 Production login/publication and installers still require native-platform checks.
 
 A native [CI workflow](.github/workflows/native.yml) builds and tests pinned Qt
-on macOS arm64, Windows x64 and Linux x64. The Linux job was added on
-2026-11-12 and has not completed a run yet. Both platforms and the Apple Silicon source
+on macOS arm64, Windows x64 and Linux x64. The Linux job first passed for
+commit `0a7e197` in [run 43291997133](https://github.com/ka-capek/relay-desktop/actions/runs/43291997133). Both platforms and the Apple Silicon source
 installer passed for commit `ca05c2b` in [run 34118316989](https://github.com/ka-capek/relay-desktop/actions/runs/34118316989).
 The latest local changes extend that workflow to validate the Windows source
 installer and retain downloadable source-build artifacts for both platforms.

@@ -20,7 +20,7 @@ verified macOS/Windows release**.
   pushes the branch. Partial failures include recovery instructions.
 - Local branch creation, rename, deletion of merged branches, remote checkout,
   local/remote branch merge and rebase of unpublished commits.
-- Conflict dialog with whole-file ours/theirs selection, marking externally
+- Conflict dialog with whole-file selection of either version, marking externally
   edited files resolved, continue, abort and skip where supported. Git side
   semantics during rebase are explained. Errors remain visible in the dialog.
 - Stash tracked/untracked work, restore both the index and working tree, and

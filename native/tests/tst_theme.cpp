@@ -2,6 +2,8 @@
 #include "relay/list_models.hpp"
 #include "relay/theme.hpp"
 
+#include <QImage>
+#include <QPainter>
 #include <QRegularExpression>
 #include <QTest>
 
@@ -131,6 +133,29 @@ class ThemeTest final : public QObject {
              relay::theme::Metrics::fileRowHeight);
     QCOMPARE(commitFileDelegate.sizeHint(option, files.index(0)).height(),
              relay::theme::Metrics::commitFileRowHeight);
+  }
+  // Unchecked boxes once had no visible frame in the dark presets.
+  void checkBoxesHaveAVisibleFrameInEveryPreset() {
+    for (const auto& id : relay::theme::presetIds()) {
+      relay::theme::configure(id);
+      const auto& token = relay::theme::colors();
+      QVERIFY2(std::abs(token.muted.lightness() - token.panel.lightness()) >= 60, qPrintable(id));
+      QImage image(16, 16, QImage::Format_ARGB32);
+      image.fill(token.panel);
+      {
+        QPainter painter(&image);
+        relay::theme::paintCheckBox(painter, QRect(2, 2, 12, 12), false);
+      }
+      QCOMPARE(image.pixelColor(2, 8), token.muted);
+      QCOMPARE(image.pixelColor(8, 8), token.panel);
+      {
+        QPainter painter(&image);
+        relay::theme::paintCheckBox(painter, QRect(2, 2, 12, 12), true);
+      }
+      QCOMPARE(image.pixelColor(3, 3), token.green);
+      QVERIFY(relay::theme::styleSheet().contains(
+          QStringLiteral("QCheckBox::indicator { width: 12px; height: 12px; border: 1px solid %1;").arg(token.muted.name())));
+    }
   }
 };
 

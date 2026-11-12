@@ -12,8 +12,9 @@ the immediate source of truth and update this document in the same change.
 For the latest verification record read `docs/native-completion-2026-09-14.md`.
 Commit `ca05c2b` passed the pinned Qt macOS and Windows CI jobs, including the
 macOS source installer, in run 34118316989. Linux x64 was added on 2026-11-12
-at the owner's request (section 5.4); until its CI job has passed, treat the
-Linux build, tests and installer as unverified.
+at the owner's request (section 5.4); its build, tests (including the keyring
+round trip), source installer and archive first passed for commit `0a7e197`
+in run 43291997133. It has not been used on a real desktop session yet.
 
 ## 1. Product Definition
 
@@ -54,7 +55,7 @@ Relay provides these flows:
 - Switch to local or remote-tracking branches; create, rename and delete local
   branches; merge, rebase (published commits only after a warning), revert, cherry-pick (including
   several commits), stash, recoverable discard, undo, amend, tags, and conflict
-  resolution.
+  resolution, including choosing individual lines of each conflicting block.
 - Select an SSH identity per repository for any SSH host, including GitHub.
 - Choose a theme, including imported custom palettes.
 
@@ -104,7 +105,7 @@ must also be checked manually.
 - Public repository: <https://github.com/ka-capek/relay-desktop>
 - Default branch: `main`
 - Version: `project(RelayNative VERSION ...)` in `CMakeLists.txt`, currently
-  `0.6.0`. CI names installers from it.
+  `0.6.1`. CI names installers from it.
 - `v0.5.1` to `v0.5.5` were prereleases. On 2026-10-12 the owner chose to
   publish `v0.6.0` as the first full (non-pre) release, knowing it is unsigned
   and that macOS still needs external Git. It still does not satisfy the strict
@@ -326,6 +327,11 @@ every message starts at the same x; the list never scrolls sideways. An empty
 `DiffView` takes no width and shows nothing; only a file without a text diff
 shows the notice. Repository selection stays a tint without a left-edge marker. Every item
 view has mouse tracking so delegates' hover state follows the pointer.
+Check boxes are flat squares: a 1px `muted` frame, or the accent fill with a
+Lucide check in `onAccent`. `QCheckBox` gets it from the style sheet
+(`check-white.svg` / `check-black.svg`, chosen by `onAccent`); painted rows
+call `theme::paintCheckBox()`. Fusion's own indicator had no visible frame in
+the dark presets.
 
 History is a one-line-per-commit table: graph, ref chips, subject, then fixed
 author/hash/date columns sized by the view (narrow views drop author, then
@@ -474,6 +480,7 @@ default locale is C, where Qt otherwise ignores numeric mode.
 | `native/tests/` | QtTest unit, integration, large-diff, Git-fixture, and app smoke tests |
 | `docs/native-measurements.md` | Reproducible native size and physical-footprint measurements |
 | `native/src/git_workflows.cpp`, `native/src/workflow_ui.cpp` | Repository actions (branches, merge, rebase, stash, discard, cherry-pick, tags) and their UI |
+| `native/src/conflict_resolution.cpp`, `native/src/conflict_resolver_dialog.cpp` | Conflict marker parsing and the line-by-line conflict resolver (section 12.9) |
 | `native/src/forge_service.cpp`, `forge_controller.cpp`, `forge_dialog.cpp`, `forge_ui.cpp` | Gitea/Forgejo/GitLab API discovery and account UI |
 | `native/src/credential_store.cpp` | macOS Keychain / Windows Credential Manager / Linux Secret Service access for forge API tokens |
 | `native/tools/install-linux.sh`, `native/packaging/preview/linux-install.sh`, `native/tools/test-install-linux.sh` | Linux source installer, payload installer shipped as `install.sh`, and its safety test |
@@ -1088,6 +1095,38 @@ single-branch clones, without switching branches. The picker item's data is
 `-` are rejected, and the picker shows the actual branch until a switch
 succeeds.
 
+### 12.9 Conflict resolution
+
+**Repository → Resolve conflicts / continue…** (also the conflict banner)
+lists the conflicted files. Each file can be replaced by one whole version,
+marked resolved after editing elsewhere, or opened with **Resolve line by
+line…**. Buttons name where a version comes from, never Git's "ours" and
+"theirs": the current branch, the merged branch, the cherry-picked commit,
+the reverted version, or during a rebase (where Git swaps the sides) the
+branch rebased onto and the reapplied commit. `conflictSides()` and
+`workflow_ui.cpp` hold these names.
+
+The line resolver (`conflict_resolver_dialog.cpp`) reads the worktree file,
+not Git's stages, so edits made before opening it are kept.
+`GitService::readConflictFile()` accepts only a file that is still unmerged,
+regular on both sides (stages 2 and 3), inside the repository, not a symlink,
+at most 2 MiB, without NUL bytes and valid UTF-8 (a BOM is kept as U+FEFF).
+`parseConflictMarkers()` (`conflict_resolution.cpp`) accepts any marker size
+of at least 7 and the diff3 base section; incomplete or nested markers of
+the same size are refused. Lines keep their own `\n` or `\r\n`.
+
+`ConflictLinesModel` shows both versions in one virtualized table, padded so
+that a block's sides stay aligned. A click toggles one line, Space toggles the
+selected lines of one side, and Use left/right/both/neither, Right side first
+and Undecide act on the current block. An undecided block keeps its markers
+in the result; saving needs every block decided, or a hand-edited result
+(**Edit result** locks line choices; edited text takes the file's CRLF
+endings). `saveConflictResolution()` refuses a result that still has markers
+and a file whose SHA-256 differs from what was read, writes with `QSaveFile`
+keeping permissions, then runs `git add -- <path>`. Saving is a
+`repository-action` under the repository mutation lock. Deleted sides,
+binary files and links still use the whole-version buttons.
+
 ## 13. Repository Discovery Semantics
 
 Folder scanning is breadth-first and filesystem-based; it does not run one Git
@@ -1244,7 +1283,8 @@ Match verification effort to risk.
   is skipped on Linux, so a developer's own keyring is never touched. CI runs suites with `ctest --parallel 4`
   and disables Defender real-time scanning on the disposable Windows runner,
   so every test must keep using its own temporary directories and profiles.
-  `git_workflows` runs as `git_workflows_1` and `git_workflows_2`:
+  `git_workflows` and `main_window` each run as two tests (`git_workflows_1`
+  and `git_workflows_2`, `main_window_1` and `main_window_2`):
   `tests/test_shard.hpp` gives each `RELAY_TEST_SHARD=i/n` every n-th test
   function in declaration order, so new functions are never left out. Use it
   for another suite that becomes the longest one on Windows. Steps that start
@@ -1308,6 +1348,8 @@ resizing a populated diff, persisted SSH selection and host mismatch rejection.
 The Windows main-window suite has a 300-second CTest limit because its real
 Git fixtures exceed the default 60 seconds on CI (180 seconds stopped being
 enough with the 0.5.4 cases in run 37954523555); individual waits stay bounded.
+With the 0.6.1 cases the whole suite reached 300 seconds one function before
+the end (run 38248988936), so it now runs as two halves, each with that limit.
 
 ### Native multi-host and branch work (2026-09-25)
 

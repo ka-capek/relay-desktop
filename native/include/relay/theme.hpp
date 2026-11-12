@@ -9,6 +9,8 @@
 #include <QList>
 
 class QApplication;
+class QPainter;
+class QRect;
 
 namespace relay::theme {
 
@@ -66,6 +68,9 @@ struct Metrics {
 void configure(const QString& id, const QJsonObject& custom = {});
 [[nodiscard]] QColor tint(const QColor& color, double amount = 0.15);
 [[nodiscard]] QColor branchColor(int identity);
+// A flat square check box for painted rows: a hairline frame, or the accent
+// fill with a check mark. QCheckBox gets the same look from the style sheet.
+void paintCheckBox(QPainter& painter, const QRect& rect, bool checked, bool enabled = true);
 void apply(QApplication& application);
 
 }  // namespace relay::theme
