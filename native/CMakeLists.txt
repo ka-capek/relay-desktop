@@ -80,6 +80,11 @@ if(APPLE)
   target_link_libraries(relay_native_core PUBLIC "-framework Security" "-framework CoreFoundation")
 elseif(WIN32)
   target_link_libraries(relay_native_core PUBLIC Advapi32)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # Forge API tokens are kept in the Secret Service keyring through libsecret.
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(RELAY_LIBSECRET REQUIRED IMPORTED_TARGET libsecret-1)
+  target_link_libraries(relay_native_core PUBLIC PkgConfig::RELAY_LIBSECRET)
 endif()
 
 foreach(target IN ITEMS relay_native relay_native_core)

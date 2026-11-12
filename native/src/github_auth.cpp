@@ -34,9 +34,12 @@ QString GitHubAuth::executable() const {
 #ifdef Q_OS_WIN
   const auto name = QStringLiteral("gh.exe");
   const auto platform = QStringLiteral("win-x64");
-#else
+#elif defined(Q_OS_MACOS)
   const auto name = QStringLiteral("gh");
   const auto platform = QStringLiteral("mac-arm64");
+#else
+  const auto name = QStringLiteral("gh");
+  const auto platform = QStringLiteral("linux-x64");
 #endif
   const auto bundled = QDir(context_.resourcesRoot).filePath(QStringLiteral("gh/%1").arg(name));
   if (QFileInfo(bundled).isFile()) return bundled;

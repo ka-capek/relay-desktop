@@ -5,7 +5,7 @@
 
 namespace relay {
 
-enum class RuntimePlatform { macOSArm64, windowsX64 };
+enum class RuntimePlatform { macOSArm64, windowsX64, linuxX64 };
 
 struct GitRuntime {
   QString executable;
@@ -28,10 +28,12 @@ class AppPaths final {
 
   // Relay 0.5.0 used Electron's `userData` directory under the application
   // name `relay-desktop`. Keep these paths exact so both clients can use the
-  // same public metadata and GitHub CLI credential configuration.
+  // same public metadata and GitHub CLI credential configuration. On Linux
+  // `configDirectory` is XDG_CONFIG_HOME (default ~/.config); on Windows it
+  // is the roaming AppData directory.
   [[nodiscard]] static QString legacyUserDataDirectory();
   [[nodiscard]] static QString legacyUserDataDirectoryFor(
-      RuntimePlatform platform, const QString& homeDirectory, const QString& roamingAppDataDirectory = {});
+      RuntimePlatform platform, const QString& homeDirectory, const QString& configDirectory = {});
   [[nodiscard]] static QString storeFile();
   [[nodiscard]] static QString githubCliDirectory();
   [[nodiscard]] static QString avatarCacheDirectory();

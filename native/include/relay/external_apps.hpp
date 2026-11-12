@@ -7,7 +7,7 @@
 namespace relay {
 
 // An installed editor Relay can open a repository in. program is an .app
-// bundle on macOS and an executable on Windows.
+// bundle on macOS and an executable on Windows and Linux.
 struct ExternalEditor {
   QString id;
   QString name;

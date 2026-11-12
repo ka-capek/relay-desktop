@@ -80,8 +80,10 @@ void MainWindow::buildWorkflowMenus(QMenu* file, QMenu* repositoryMenu) {
       [this] { controller_->openRepositoryIn(ExternalTarget::terminal); })->setShortcut(QKeySequence(tr("Ctrl+`")));
 #if defined(Q_OS_MACOS)
   const auto showText = tr("Show in Finder");
-#else
+#elif defined(Q_OS_WIN)
   const auto showText = tr("Show in Explorer");
+#else
+  const auto showText = tr("Show in file manager");
 #endif
   add(showText, QStringLiteral("showInFileManagerAction"), QStringLiteral("open"),
       [this] { controller_->openRepositoryIn(ExternalTarget::fileManager); })->setShortcut(QKeySequence(tr("Ctrl+Shift+F")));
