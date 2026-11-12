@@ -34,6 +34,40 @@ class AppPathsTest final : public QObject {
         QStringLiteral("C:/Users/example/AppData/Roaming/relay-desktop"));
   }
 
+  void linuxUserDataFollowsTheXdgConfigDirectory() {
+    using relay::AppPaths;
+    using relay::RuntimePlatform;
+    QCOMPARE(AppPaths::legacyUserDataDirectoryFor(RuntimePlatform::linuxX64, QStringLiteral("/home/example")),
+             QStringLiteral("/home/example/.config/relay-desktop"));
+    QCOMPARE(AppPaths::legacyUserDataDirectoryFor(RuntimePlatform::linuxX64, QStringLiteral("/home/example"),
+                                                  QStringLiteral("/data/config")),
+             QStringLiteral("/data/config/relay-desktop"));
+    // A relative XDG_CONFIG_HOME is invalid and ignored.
+    QCOMPARE(AppPaths::legacyUserDataDirectoryFor(RuntimePlatform::linuxX64, QStringLiteral("/home/example"),
+                                                  QStringLiteral("config")),
+             QStringLiteral("/home/example/.config/relay-desktop"));
+  }
+
+  void resolvesLinuxRuntimesBesideTheExecutable() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const auto applicationDirectory = root.filePath(QStringLiteral("relay-native"));
+    const auto sourceDirectory = root.filePath(QStringLiteral("source"));
+    const auto packagedCli = root.filePath(QStringLiteral("relay-native/resources/gh/gh"));
+    const auto developmentCli = root.filePath(QStringLiteral("source/runtime/gh/linux-x64/gh"));
+    createFile(developmentCli);
+    auto paths = relay::AppPaths::resolveRuntimes(
+        applicationDirectory, sourceDirectory, relay::RuntimePlatform::linuxX64);
+    QCOMPARE(paths.githubCliExecutable, developmentCli);
+    // Linux distributions provide Git; nothing is bundled.
+    QCOMPARE(paths.git.executable, QStringLiteral("git"));
+    QVERIFY(!paths.git.isBundled());
+    createFile(packagedCli);
+    paths = relay::AppPaths::resolveRuntimes(
+        applicationDirectory, sourceDirectory, relay::RuntimePlatform::linuxX64);
+    QCOMPARE(paths.githubCliExecutable, packagedCli);
+  }
+
   void prefersPackagedThenDevelopmentRuntimes() {
     QTemporaryDir root;
     QVERIFY(root.isValid());

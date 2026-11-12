@@ -50,6 +50,14 @@ if(Python3_Interpreter_FOUND)
     "${CMAKE_CURRENT_SOURCE_DIR}/test_install_windows.py")
 endif()
 
+# The Linux payload installer is plain shell; its test shims uname, so macOS
+# checks the same safety rules.
+if(UNIX)
+  add_test(NAME linux_installer_safety COMMAND bash
+    "${PROJECT_SOURCE_DIR}/native/tools/test-install-linux.sh")
+  set_tests_properties(linux_installer_safety PROPERTIES TIMEOUT 30)
+endif()
+
 # Mock macOS inspection tools use POSIX shell scripts. Linux and macOS run
 # this verifier regression; Windows still requires native release validation.
 if(UNIX)

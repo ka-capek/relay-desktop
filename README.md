@@ -1,8 +1,8 @@
 # Relay
 
 Relay is a small GitHub Desktop-style client focused on easy multi-account
-switching. It is a native C++26/Qt 6 application for Apple Silicon Macs and
-64-bit Windows.
+switching. It is a native C++26/Qt 6 application for Apple Silicon Macs,
+64-bit Windows and 64-bit (x86_64) Linux.
 
 The earlier Electron client (Relay 0.5.0) is no longer maintained and has been
 removed from this repository. The native client uses the same data folder, so
@@ -11,14 +11,19 @@ accounts, repositories and settings carry over with no new sign-in.
 ## Download
 
 [**Relay 0.6.1**](https://github.com/ka-capek/relay-desktop/releases/tag/v0.6.1)
-adds line-by-line conflict resolution; 0.6.0 was the first full release. The Windows setup includes Git for Windows and the GitHub CLI;
+adds line-by-line conflict resolution and Linux x86_64 support; 0.6.0 was the
+first full release. The Windows setup includes Git for Windows and the GitHub CLI;
 the macOS DMG includes the GitHub CLI and uses the Git from the Xcode Command
-Line Tools or Homebrew. The installers are unsigned (macOS uses ad-hoc
+Line Tools or Homebrew; the Linux archive includes the GitHub CLI and uses
+your distribution's Git. The installers are unsigned (macOS uses ad-hoc
 signing) and not notarized. Real multi-account OAuth, private clone/fetch/push
 and publication still need installed-platform verification.
 
 On macOS, right-click Relay Native in Applications and choose **Open** the
 first time; Windows SmartScreen may also ask for confirmation.
+
+On Linux, extract the archive and run `bash relay-native/install.sh` (see
+below). 0.6.1 is the first release with a Linux build.
 
 ## Installers and upgrades
 
@@ -42,6 +47,17 @@ Applications and confirm **Replace**. If the old native app is in
 Electron `Relay.app`. No uninstall is needed. Account settings, CLI credentials
 and repositories live outside the application and are preserved on both systems.
 There is no background update download: run each new installer yourself.
+
+On Linux, releases provide **Relay-Native-<version>-linux-x64.tar.gz** for
+x86_64 systems with glibc 2.39 or newer (Ubuntu 24.04, Debian 13, Fedora 40).
+Extract it anywhere and run `bash relay-native/install.sh`. It copies the
+folder to `~/.local/share/relay-native`, adds an application menu entry and
+needs no root. Quit Relay Native before updating; the previous installation is
+kept beside the new one as `relay-native.previous-<date>`. The archive contains
+Qt and the GitHub CLI; Git comes from your distribution. X11 sessions need the
+`libxcb-cursor0` package (`xcb-util-cursor` on Fedora and Arch). To uninstall,
+delete that folder and `~/.local/share/applications/dev.relay.gitclient.desktop`;
+accounts and settings stay in `~/.config/relay-desktop`.
 
 ## Install from source on Apple Silicon
 
@@ -95,6 +111,30 @@ installed: they are external dependencies. This is an unsigned local source
 build, not a signed release. See the
 [completion record](docs/native-completion-2026-09-14.md) for verification status.
 
+## Install from source on Linux x86_64
+
+From an existing checkout:
+
+```bash
+bash native/tools/install-linux.sh --source "$PWD"
+```
+
+Without `--source` the script downloads `main`. It never runs `sudo`: if
+clang++ 20 or newer, Git, Python 3 with `venv`, `pkg-config`, or the
+libsecret, OpenGL and xkbcommon development files are missing, it prints the
+`apt`, `dnf` or `pacman` command that installs them and stops. CMake, Ninja,
+Qt 6.11.1 and the pinned GitHub CLI are downloaded into
+`~/.cache/relay-native-installer`; `--qt-dir /path/to/Qt/6.11.1/gcc_64` reuses
+an SDK.
+
+The script builds Release, copies the Qt libraries and plugins beside the
+executable, checks that nothing is loaded from the SDK or the build tree, runs
+a temporary-profile startup check, and then installs
+`~/.local/share/relay-native` with a menu entry, exactly as the release
+archive's `install.sh` does. `--package DIR` also writes the release archive
+there; `--no-install` stops after that; `--no-open` does not start the app.
+This is an unsigned local build.
+
 ## First-run setup
 
 Relay checks Git and GitHub CLI on startup without signing in. Missing or old
@@ -106,6 +146,10 @@ CLI version). Local repositories remain usable without a GitHub account.
 Windows also checks the standard Git and GitHub CLI installation directories
 when an already-running app has an old PATH. A custom installation directory
 must already be on the app's PATH; otherwise restart after updating PATH.
+
+On Linux, distribution packages of the GitHub CLI are often older than 2.98.0.
+The release archive and the source installer include a current one; a build
+run straight from a build directory needs `gh` 2.98.0 or newer on PATH.
 
 ## Sync, diff sizing and SSH selection
 
@@ -163,7 +207,7 @@ with the same name on origin is never replaced. **Delete tag on origin…** list
 origin's tags and removes the chosen one, leaving local tags as they are.
 
 **Repository → Open in editor / Open in Terminal / Show in Finder** (Explorer on
-Windows) open the repository folder in another application. Choose the editor
+Windows, file manager on Linux) open the repository folder in another application. Choose the editor
 in Settings → General; Relay detects Visual Studio Code, Cursor, Zed, Sublime
 Text, JetBrains IDEs and others, or any application you pick.
 
@@ -212,7 +256,8 @@ The API token is used for discovery only; Git operations use SSH identities
 or the existing Git credential configuration. SSH-only servers work through
 normal Git URLs and local repositories without a provider API account.
 
-API tokens are stored in macOS Keychain or Windows Credential Manager, never
+API tokens are stored in macOS Keychain, Windows Credential Manager or the
+Linux Secret Service keyring (GNOME Keyring, KWallet, KeePassXC), never
 in relay-data.json. Disconnecting removes the account and its saved token;
 failed vault cleanup can be retried and is retried on startup. Tokens remain
 bound to their provider/server/account even if public metadata is edited.
@@ -294,6 +339,17 @@ LLVM 20 installed under `%ProgramFiles%/LLVM`, and the Qt MSVC 2022 x64 build.
 directory when changing compilers. Build artifacts stay under ignored
 `build-native/` directories.
 
+The Linux x64 presets are `linux-debug` and `linux-release`. They use
+`clang++-20` with the system libstdc++ and the official Qt `gcc_64` SDK, and
+need the libsecret, OpenGL and xkbcommon development packages:
+
+```bash
+sudo apt install clang-20 g++ pkg-config libsecret-1-dev libgl-dev libxkbcommon-dev
+cmake --preset linux-debug -DCMAKE_PREFIX_PATH=/path/to/Qt/6.11.1/gcc_64
+cmake --build --preset linux-debug --parallel
+QT_QPA_PLATFORM=offscreen ctest --preset linux-debug
+```
+
 Relay keeps the public metadata and GitHub CLI locations used since 0.5.0,
 including `relay-data.json` and the sibling `github-cli/` directory.
 Startup still clears the selected repository, credentials remain in `gh`'s OS
@@ -319,7 +375,8 @@ can be initialized locally or published through an explicit GitHub dialog.
 Production login/publication and installers still require native-platform checks.
 
 A native [CI workflow](.github/workflows/native.yml) builds and tests pinned Qt
-on macOS arm64 and Windows x64. Both platforms and the Apple Silicon source
+on macOS arm64, Windows x64 and Linux x64. The Linux job first passed for
+commit `0a7e197` in [run 43291997133](https://github.com/ka-capek/relay-desktop/actions/runs/43291997133). Both platforms and the Apple Silicon source
 installer passed for commit `ca05c2b` in [run 34118316989](https://github.com/ka-capek/relay-desktop/actions/runs/34118316989).
 The latest local changes extend that workflow to validate the Windows source
 installer and retain downloadable source-build artifacts for both platforms.

@@ -4,14 +4,17 @@ This document is the authoritative engineering guide for coding agents working
 on Relay. Read it before changing code, running release commands, modifying Git
 or GitHub authentication, or publishing anything.
 
-Relay is a native C++26/Qt 6 Widgets application for macOS and Windows. The
+Relay is a native C++26/Qt 6 Widgets application for macOS, Windows and Linux. The
 Electron client (`0.5.0`) has been removed from this repository and is no
 longer maintained. When this document and the code disagree, treat the code as
 the immediate source of truth and update this document in the same change.
 
 For the latest verification record read `docs/native-completion-2026-09-14.md`.
 Commit `ca05c2b` passed the pinned Qt macOS and Windows CI jobs, including the
-macOS source installer, in run 34118316989.
+macOS source installer, in run 34118316989. Linux x64 was added on 2026-11-12
+at the owner's request (section 5.4); its build, tests (including the keyring
+round trip), source installer and archive first passed for commit `0a7e197`
+in run 43291997133. It has not been used on a real desktop session yet.
 
 ## 1. Product Definition
 
@@ -22,6 +25,8 @@ The supported production targets are deliberately narrow:
 
 - macOS on Apple Silicon (`arm64`)
 - Windows 64-bit (`x64`)
+- Linux 64-bit (`x86_64`, glibc 2.39 or newer: Ubuntu 24.04, Debian 13,
+  Fedora 40), on X11 and Wayland
 - GitHub.com for OAuth accounts; Gitea, Forgejo and GitLab (including
   self-hosted HTTPS servers) for API repository discovery; any Git host over
   SSH
@@ -67,7 +72,8 @@ Preserve these behaviors unless the user explicitly requests a product change:
    GitHub CLI OAuth. The owner explicitly authorized API-token fallback for
    Gitea/Forgejo/GitLab discovery on 2026-09-25. Only the one-time password
    input may hold that token; keep it out of account models, JSON and logs,
-   and store it in macOS Keychain / Windows Credential Manager.
+   and store it in macOS Keychain / Windows Credential Manager / the Linux
+   Secret Service keyring.
 3. **Never persist an OAuth token in `relay-data.json`, widget or model state,
    logs, or Git configuration.** Tokens may exist only transiently inside a
    controller worker operation and a child process environment.
@@ -82,8 +88,9 @@ Preserve these behaviors unless the user explicitly requests a product change:
    glossy/illuminated icons, or icon gradients.
 9. **Keep the signed-in status visually quiet.** No green status dot and no
    "All systems operational" message.
-10. **macOS and Windows have equivalent menu functionality.** Windows uses the
-    in-window `QMenuBar`; macOS uses the system menu bar with Qt menu roles.
+10. **macOS, Windows and Linux have equivalent menu functionality.** Windows
+    and Linux use the in-window `QMenuBar`; macOS uses the system menu bar
+    with Qt menu roles.
 11. **The presentation layer never receives a token.** Widgets and item models
     receive only sanitized domain values from `RelayController`; tokens stay
     transiently inside the controller/service operation that launches Git or
@@ -106,7 +113,7 @@ must also be checked manually.
   `v0.6.1-rc1` publishes a prerelease. `v0.5.0` was the last Electron release.
 - Release page: <https://github.com/ka-capek/relay-desktop/releases>
 - Product name `Relay`; installed app `Relay Native.app` /
-  `%LOCALAPPDATA%/Programs/Relay Native`
+  `%LOCALAPPDATA%/Programs/Relay Native` / `~/.local/share/relay-native`
 
 Do not push, publish a release, change repository visibility, or modify GitHub
 settings unless the user explicitly authorizes the remote write.
@@ -122,6 +129,8 @@ settings unless the user explicitly authorizes the remote write.
   Qt's MSVC binaries. LLVM 20's implicit linker produced invalid namespace-qualified
   UAC attributes in the merged Qt manifest, preventing process startup;
   CMake 3.31 does not map C++26 for AppleClang, cl.exe or clang-cl.
+  Linux uses `clang++-20` with the system libstdc++ and the official Qt
+  `gcc_64` SDK, and links libsecret (found through pkg-config).
 - Dynamically linked Qt under LGPLv3; Relay's own code remains MIT
 - The same bundled/system Git and official GitHub CLI child-process model
 - The `relay-data.json` and isolated `github-cli/` locations used since 0.5.0
@@ -351,6 +360,80 @@ edges. Dots and reference chips share graph colors, with hollow merge dots.
 Tests cover concurrent tips, compaction, paging, preference persistence,
 malformed themes and screenshots of every preset's graph, diff and settings.
 
+### 5.4 Linux x64 (2026-11-12)
+
+The owner asked for Linux support on 2026-11-12. Linux is a third target with
+the same architecture; only these pieces are platform-specific:
+
+- `RuntimePlatform::linuxX64`. User data is `$XDG_CONFIG_HOME/relay-desktop`
+  (default `~/.config/relay-desktop`; a relative `XDG_CONFIG_HOME` is ignored),
+  the directory Electron would have used, with the same `relay-data.json` and
+  `github-cli/` inside. Resources are `resources/` beside the executable, as
+  on Windows.
+- `credential_store.cpp` stores forge API tokens in the Secret Service through
+  libsecret's synchronous password API (schema `dev.relay.gitclient.forge`,
+  attribute `account`), from controller workers only. Without a running,
+  unlocked keyring the operation fails with an actionable message; there is
+  still no plaintext fallback. `<libsecret/secret.h>` is included before any Qt
+  header because GLib uses `signals` as a member name. GError text is dropped,
+  never surfaced.
+- `external_apps.cpp` finds editors and terminals by command name on PATH plus
+  `~/.local/bin`, `/usr/local/bin`, `/snap/bin`, the Flatpak export
+  directories and JetBrains Toolbox scripts, because a desktop launcher may
+  not have the login shell's PATH. The terminal is the first of
+  `x-terminal-emulator`, `xdg-terminal-exec` and a list of common terminals;
+  the repository is its working directory and, where the terminal has one, a
+  single working-directory argument. The file manager is `xdg-open <folder>`;
+  the menu item reads **Show in file manager**. Nothing goes through a shell.
+- `runtime_check.cpp` also looks in `/usr/local/bin`, `/usr/bin`,
+  `~/.local/bin`, `/snap/bin` and Linuxbrew. Distribution `gh` packages are
+  often older than 2.98.0, so the installer and archive bundle the pinned
+  `gh` (`runtimes.json`, `linux-x64`). Git is never bundled on Linux.
+- Closing the window quits, as on Windows. `setDesktopFileName` already names
+  `dev.relay.gitclient`, which is the installed desktop entry's file name, so
+  Wayland compositors show Relay's icon.
+
+`native/tools/install-linux.sh` is the source installer. It never runs `sudo`
+(missing system packages are listed with the apt/dnf/pacman command), builds
+Release with `CMAKE_INSTALL_RPATH=$ORIGIN/lib`, and stages a self-contained
+folder:
+
+```text
+relay-native/
+  Relay                     RUNPATH $ORIGIN/lib
+  qt.conf                   Prefix = .
+  lib/                      Qt and ICU libraries the binary and plugins resolve to
+  plugins/                  platforms (xcb, wayland, offscreen), themes, image formats, TLS, ...
+  resources/gh/gh
+  licenses/
+  dev.relay.gitclient.png
+  installation.json         {"product": "dev.relay.native", ...}
+  install.sh                native/packaging/preview/linux-install.sh
+```
+
+Official Qt libraries find each other through `$ORIGIN` and plugins through
+`$ORIGIN/../../lib`, so nothing is patched. The script fails if the staged
+executable has an unresolved library, still loads one from the SDK or build
+tree, or if a plugin cannot find a Qt library; then it runs the bundled `gh`
+and a `--smoke-test` (offscreen only when there is no display). `--package`
+writes `Relay-Native-<version>-linux-x64.tar.gz` from that folder.
+
+`install.sh` (the payload installer, also what the source installer runs)
+copies its folder to `$XDG_DATA_HOME/relay-native` through a staging folder
+and renames on the same volume, keeps the previous installation as
+`relay-native.previous-<date>`, restores it if publication fails, and writes
+`applications/dev.relay.gitclient.desktop` with absolute `Exec` and `Icon`
+paths. It refuses root, a running Relay, a destination that is not a Relay
+installation (no `installation.json` marker) or is a symbolic link, and paths
+a desktop entry cannot hold. It never deletes profiles, repositories or
+backups. `native/tools/test-install-linux.sh` (CTest `linux_installer_safety`,
+also run on macOS through a `uname` shim) covers these rules; change both
+together.
+
+The binary is built on Ubuntu 24.04, so it needs glibc 2.39. It is x86_64
+only; arm64, AppImage, Flatpak and distribution packages are not provided.
+X11 needs the system `libxcb-cursor0`.
+
 ## 6. Authoritative File Map
 
 Native source installation now also has `native/tools/install-windows.ps1`
@@ -399,13 +482,14 @@ default locale is C, where Qt otherwise ignores numeric mode.
 | `native/src/git_workflows.cpp`, `native/src/workflow_ui.cpp` | Repository actions (branches, merge, rebase, stash, discard, cherry-pick, tags) and their UI |
 | `native/src/conflict_resolution.cpp`, `native/src/conflict_resolver_dialog.cpp` | Conflict marker parsing and the line-by-line conflict resolver (section 12.9) |
 | `native/src/forge_service.cpp`, `forge_controller.cpp`, `forge_dialog.cpp`, `forge_ui.cpp` | Gitea/Forgejo/GitLab API discovery and account UI |
-| `native/src/credential_store.cpp` | macOS Keychain / Windows Credential Manager access for forge API tokens |
+| `native/src/credential_store.cpp` | macOS Keychain / Windows Credential Manager / Linux Secret Service access for forge API tokens |
+| `native/tools/install-linux.sh`, `native/packaging/preview/linux-install.sh`, `native/tools/test-install-linux.sh` | Linux source installer, payload installer shipped as `install.sh`, and its safety test |
 | `native/src/runtime_check.cpp` | Startup Git and GitHub CLI version checks |
 | `native/src/theme.cpp`, `native/resources/themes/` | Semantic palette, QSS, and bundled theme JSON |
 | `native/src/main_window.cpp`, `native/src/dialogs.cpp` | Main window, menus, and dialogs |
 | `native/tools/` | Source installers, preview DMG, Windows installer tests, release verification |
 | `native/packaging/` | Strict packaging guide, notices, and the Inno Setup preview script |
-| `.github/workflows/native.yml` | macOS arm64 and Windows x64 build, test, installer and artifact CI |
+| `.github/workflows/native.yml` | macOS arm64, Windows x64 and Linux x64 build, test, installer and artifact CI |
 | `build/icon.svg`, `build/icon-small.svg` | Icon masters (64px and above; 48px and below) |
 | `build/icon.icns`, `build/icon.ico`, `build/icon.png` | Generated icons used by the bundle, `.rc`, CPack and Inno Setup |
 | `PLAN.md`, `docs/` | Rewrite plan, reviews, completion records and measurements |
@@ -432,7 +516,8 @@ default locale is C, where Qt otherwise ignores numeric mode.
 
 On macOS the app stays alive when its window closes
 (`setQuitOnLastWindowClosed(false)`) and shows the window again on application
-activation; Quit exits explicitly. On Windows closing the window quits.
+activation; Quit exits explicitly. On Windows and Linux closing the window
+quits.
 
 When the window is activated, Relay refreshes the open repository if
 `preferences.refreshOnFocus` is on and no operation is busy.
@@ -449,6 +534,8 @@ Typical locations are:
 
 - macOS: `~/Library/Application Support/relay-desktop/relay-data.json`
 - Windows: `%APPDATA%\relay-desktop\relay-data.json`
+- Linux: `$XDG_CONFIG_HOME/relay-desktop/relay-data.json` (default
+  `~/.config/relay-desktop/relay-data.json`)
 
 The GitHub CLI config for Relay lives beside it:
 
@@ -746,6 +833,7 @@ runtime/
   gh/
     mac-arm64/gh
     win-x64/gh.exe
+    linux-x64/gh
 ```
 
 Packaged locations are under `process.resourcesPath`:
@@ -755,6 +843,7 @@ Resources/git/...
 Resources/gh/gh              # macOS
 resources/git/...
 resources/gh/gh.exe          # Windows
+resources/gh/gh              # Linux (no bundled Git)
 ```
 
 Git selection order:
@@ -911,7 +1000,8 @@ configuration decides.
   repository folder as a single argument and working directory, never through
   a shell. macOS uses `/usr/bin/open -a <app|Terminal>` and `open <folder>`;
   Windows uses the editor executable, Windows Terminal (`wt.exe -d`) or
-  `%ComSpec% /K` in the folder, and `explorer.exe`. Editors are detected in
+  `%ComSpec% /K` in the folder, and `explorer.exe`; Linux is described in
+  section 5.4. Editors are detected in
   standard install locations; `preferences.editorId` (detected id, `custom`,
   or empty for the first detected) and `preferences.editorPath` (custom
   absolute `.app` or executable) persist the choice. Widgets receive only
@@ -1066,7 +1156,7 @@ The scanner must remain non-destructive.
 
 `MainWindow::buildMenus()` builds one `QMenuBar`. On macOS Qt places it in the
 system menu bar and moves role-tagged actions (Settings, Quit) into the
-application menu; on Windows it is the window's own menu bar. Workflow actions
+application menu; on Windows and Linux it is the window's own menu bar. Workflow actions
 add further Repository menu items from `workflow_ui.cpp`.
 
 - **File:** Add Local Repository… (`QKeySequence::Open`), Clone Repository…
@@ -1081,7 +1171,7 @@ add further Repository menu items from `workflow_ui.cpp`.
 - **Help:** Check Git and GitHub CLI.
 
 When adding a menu item, add it once, route it to a controller slot, and check
-labels and shortcuts on both platforms.
+labels and shortcuts on every platform.
 
 ## 15. Visual and Interaction System
 
@@ -1131,8 +1221,18 @@ cmake --build --preset windows-debug --parallel
 ctest --preset windows-debug
 ```
 
-Local source installers: `native/tools/install-macos.sh` and
-`native/tools/install-windows.ps1` (see section 6 and README).
+Linux x64 (`clang-20`, `g++`, `pkg-config`, `libsecret-1-dev`, `libgl-dev`,
+`libxkbcommon-dev`, and the official Qt `gcc_64` SDK):
+
+```bash
+cmake --preset linux-debug -DCMAKE_PREFIX_PATH=/path/to/Qt/6.11.1/gcc_64
+cmake --build --preset linux-debug --parallel
+QT_QPA_PLATFORM=offscreen ctest --preset linux-debug
+```
+
+Local source installers: `native/tools/install-macos.sh`,
+`native/tools/install-windows.ps1` and `native/tools/install-linux.sh` (see
+sections 5.4 and 6 and README).
 
 Homebrew Qt is acceptable for development but not the final packaging baseline
 because its frameworks carry Homebrew-specific transitive library paths.
@@ -1156,6 +1256,9 @@ Bundled runtimes for installers or a development `runtime/`:
 python native/tools/fetch_runtimes.py --platform win-x64 --output runtime
 ```
 
+Platforms are `win-x64`, `mac-arm64` and `linux-x64` (GitHub CLI only on the
+last two).
+
 Versions and SHA-256 digests are pinned in `native/packaging/runtimes.json`.
 
 ## 17. Testing and Verification Strategy
@@ -1170,11 +1273,14 @@ Match verification effort to risk.
 - UI changes: extend `tst_main_window.cpp` or `tst_dialogs.cpp`, and launch the
   built app to exercise the click sequence.
 - Installer changes: `test_install_windows.py`, `test-preview-windows.ps1`,
-  and the CI installer steps.
+  `test-install-linux.sh`, and the CI installer steps.
 - Pushing a pull request that touches `native/**`, `CMakeLists.txt`,
   `CMakePresets.json` or the workflow runs `.github/workflows/native.yml` on
-  macOS arm64 and Windows x64 with Qt 6.11.1. That is the authoritative check;
-  Linux builds only supplement it. CI runs suites with `ctest --parallel 4`
+  macOS arm64, Windows x64 and Linux x64 (Ubuntu 24.04) with Qt 6.11.1. That
+  is the authoritative check. The Linux job runs the suites inside
+  `dbus-run-session` with a gnome-keyring unlocked by a throwaway password and
+  `RELAY_TEST_SECRET_SERVICE=1`; without that variable the keyring round trip
+  is skipped on Linux, so a developer's own keyring is never touched. CI runs suites with `ctest --parallel 4`
   and disables Defender real-time scanning on the disposable Windows runner,
   so every test must keep using its own temporary directories and profiles.
   `git_workflows` and `main_window` each run as two tests (`git_workflows_1`
@@ -1203,7 +1309,10 @@ Packaging verification:
 - Windows: `Relay.exe` is PE x86-64 with a valid manifest; the MSVC runtime and
   Qt plugins are deployed; Setup upgrades in place and preserves unrelated and
   Electron folders.
-- Both: the installed app starts with no repository open and the Git/gh check
+- Linux: the staged folder loads no library from the Qt SDK or build tree;
+  the installed copy and the extracted archive pass `--smoke-test` on an X
+  server (`xvfb-run`); the desktop entry passes `desktop-file-validate`.
+- All: the installed app starts with no repository open and the Git/gh check
   passes with external tools.
 
 ## 18. Packaging and Release Model
@@ -1212,8 +1321,9 @@ There are two packaging paths:
 
 - **Preview installers (current releases).** CI builds the source install,
   then packages an Inno Setup `Relay-Native-Setup-<version>-x64.exe` and an
-  ad-hoc signed `Relay-Native-<version>-arm64.dmg`. They require external Git
-  and gh. Details below.
+  ad-hoc signed `Relay-Native-<version>-arm64.dmg`, and on Linux the
+  `Relay-Native-<version>-linux-x64.tar.gz` folder archive with its
+  `install.sh` (section 5.4). Details below.
 - **Strict release packaging.** `RELAY_ENABLE_PACKAGING=ON` with CPack bundles
   Git and gh from `runtime/` and verifies the stage. See
   `native/packaging/README.md`. Not used for a release yet.
@@ -1314,20 +1424,20 @@ location without an uninstall. CI verifies the DMG and launches its copied app.
 1. Set the version in `CMakeLists.txt` (`project(RelayNative VERSION ...)`).
 2. Update the version mentioned in README's Download section and section 3.
 3. Merge to `main` through a pull request and wait for the native CI run on
-   both platforms to pass.
+   every platform to pass.
 4. Push the tag: `git tag v<version> && git push origin v<version>`. The
-   workflow builds and tests both platforms again, checks the tag matches
+   workflow builds and tests every platform again, checks the tag matches
    `CMakeLists.txt` (ignoring a `-suffix`), and publishes a release with the
-   DMG, the Windows setup and `SHA256SUMS.txt`; a suffixed tag is a
+   DMG, the Windows setup, the Linux archive and `SHA256SUMS.txt`; a suffixed tag is a
    prerelease.
 5. Install each installer on a real machine and smoke-test: startup, Git/gh
    check, sign-in, a clone, a commit, fetch/pull/push.
 6. Edit the generated release notes if needed.
 
-Installers bundle the GitHub CLI on both platforms and Git for Windows on
+Installers bundle the GitHub CLI on every platform and Git for Windows on
 Windows (`native/tools/fetch_runtimes.py`). macOS has no official
 relocatable Git build; Git comes from the Xcode Command Line Tools or
-Homebrew there.
+Homebrew there, and from the distribution on Linux.
 
 Builds are not Developer ID signed, notarized, or Authenticode signed. Ad-hoc
 signing stops Apple Silicon from calling the app damaged but is not
@@ -1412,7 +1522,10 @@ Do not swallow errors that make an operation look successful.
 - SSH identities cover the transport only. Relay does not create keys, edit
   `~/.ssh/config`, or handle passphrases.
 - Scanning and recents are capped at 5,000 repositories.
-- macOS installers bundle gh but not Git. The strict CPack pipeline is not
+- Linux is x86_64 with glibc 2.39 or newer only, distributed as a folder
+  archive: no arm64 build, AppImage, Flatpak or distribution package. Forge
+  API tokens need a running Secret Service keyring.
+- macOS and Linux installers bundle gh but not Git. The strict CPack pipeline is not
   used for releases yet.
 - Real OAuth, private repositories, forge servers and OS credential stores are
   not covered by automated tests.
@@ -1442,9 +1555,9 @@ Treat this list as context, not authorization to expand scope.
 - No invariant regressed.
 - Credentials stay out of the UI, logs, disk metadata, and Git.
 - The project builds with the applicable preset and `ctest` passes, including
-  `app_smoke`; for anything merged, native CI is green on both platforms.
+  `app_smoke`; for anything merged, native CI is green on every platform.
 - Relevant Git or provider integration was exercised safely.
-- Both macOS and Windows implications were considered.
+- macOS, Windows and Linux implications were considered.
 - Visual behavior was inspected if UI changed.
 - `AGENTS.md` and `README.md` remain accurate.
 - Only requested local or remote state was changed.

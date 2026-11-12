@@ -127,7 +127,13 @@ class ForgeServiceTest final : public QObject {
     catch (const std::exception& error) { QVERIFY(!QString::fromUtf8(error.what()).contains(QStringLiteral("secret"))); }
   }
   void operatingSystemVaultRoundTrip() {
-#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+#if defined(Q_OS_LINUX)
+    // The Secret Service needs a session bus and an unlocked keyring; CI
+    // starts both and sets this variable.
+    if (qEnvironmentVariableIsEmpty("RELAY_TEST_SECRET_SERVICE"))
+      QSKIP("Set RELAY_TEST_SECRET_SERVICE=1 in a session with an unlocked keyring to test the system keyring.");
+#endif
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN) || defined(Q_OS_LINUX)
     // A fresh opaque name confines every operation to this disposable fixture.
     // Never enumerate existing credentials or read a user account's token.
     const auto id = QStringLiteral("test-forge-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -147,7 +153,7 @@ class ForgeServiceTest final : public QObject {
     // Removal is idempotent, including after an interrupted disconnect cleanup.
     vault.remove(id);
 #else
-    QSKIP("The operating system vault is implemented for the macOS and Windows production targets.");
+    QSKIP("The operating system vault is implemented for the macOS, Windows and Linux production targets.");
 #endif
   }
   void vaultRejectsUnsafeReferenceBeforeAccess() {

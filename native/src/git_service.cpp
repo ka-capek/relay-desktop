@@ -242,10 +242,14 @@ QString GitService::gitExecutable() const {
   const auto packaged = QDir(resourcesPath_).absoluteFilePath(QStringLiteral("git/cmd/git.exe"));
   const auto development =
       QDir(sourceRoot_).absoluteFilePath(QStringLiteral("runtime/git/win-x64/cmd/git.exe"));
-#else
+#elif defined(Q_OS_MACOS)
   const auto packaged = QDir(resourcesPath_).absoluteFilePath(QStringLiteral("git/bin/git"));
   const auto development =
       QDir(sourceRoot_).absoluteFilePath(QStringLiteral("runtime/git/mac-arm64/bin/git"));
+#else
+  const auto packaged = QDir(resourcesPath_).absoluteFilePath(QStringLiteral("git/bin/git"));
+  const auto development =
+      QDir(sourceRoot_).absoluteFilePath(QStringLiteral("runtime/git/linux-x64/bin/git"));
 #endif
   if (QFileInfo::exists(packaged)) return packaged;
   if (QFileInfo::exists(development)) return development;

@@ -12,7 +12,7 @@ namespace {
 struct KnownEditor {
   const char* id;
   const char* name;
-  QStringList locations;  // macOS bundle names or Windows paths with %VAR%
+  QStringList locations;  // macOS bundle names, Windows paths with %VAR%, or Linux command names
 };
 
 QString expanded(QString path) {
@@ -48,9 +48,52 @@ QList<KnownEditor> knownEditors() {
           {"notepadpp", "Notepad++", {QStringLiteral("%ProgramFiles%/Notepad++/notepad++.exe"),
                                       QStringLiteral("%ProgramFiles(x86)%/Notepad++/notepad++.exe")}}};
 #else
-  return {};
+  // Command names, including the launchers Flatpak exports under its app ids.
+  return {{"vscode", "Visual Studio Code", {QStringLiteral("code"), QStringLiteral("com.visualstudio.code")}},
+          {"vscodium", "VSCodium", {QStringLiteral("codium"), QStringLiteral("com.vscodium.codium")}},
+          {"cursor", "Cursor", {QStringLiteral("cursor")}},
+          {"zed", "Zed", {QStringLiteral("zed"), QStringLiteral("zeditor"), QStringLiteral("dev.zed.Zed")}},
+          {"sublime", "Sublime Text", {QStringLiteral("subl")}},
+          {"kate", "Kate", {QStringLiteral("kate")}},
+          {"intellij", "IntelliJ IDEA", {QStringLiteral("idea"), QStringLiteral("intellij-idea-ultimate"),
+                                         QStringLiteral("intellij-idea-community")}},
+          {"pycharm", "PyCharm", {QStringLiteral("pycharm"), QStringLiteral("pycharm-professional"),
+                                  QStringLiteral("pycharm-community")}},
+          {"webstorm", "WebStorm", {QStringLiteral("webstorm")}},
+          {"clion", "CLion", {QStringLiteral("clion")}}};
 #endif
 }
+
+#if !defined(Q_OS_MACOS) && !defined(Q_OS_WIN)
+// A desktop launcher may start Relay without the login shell's PATH, so the
+// usual per-user and packaging locations are searched as well.
+QString findCommand(const QString& name) {
+  if (const auto found = QStandardPaths::findExecutable(name); !found.isEmpty()) return found;
+  const auto home = QDir::home();
+  return QStandardPaths::findExecutable(name, {home.filePath(QStringLiteral(".local/bin")),
+      QStringLiteral("/usr/local/bin"), QStringLiteral("/snap/bin"),
+      QStringLiteral("/var/lib/flatpak/exports/bin"),
+      home.filePath(QStringLiteral(".local/share/flatpak/exports/bin")),
+      home.filePath(QStringLiteral(".local/share/JetBrains/Toolbox/scripts"))});
+}
+
+struct KnownTerminal {
+  const char* command;
+  const char* directoryOption;  // nullptr: the terminal starts in its working directory
+  bool joined;                  // --option=DIR rather than --option DIR
+};
+
+// The Debian alternative and the XDG default-terminal launcher first, then
+// common terminals. Each one also starts with the repository as its working
+// directory; the option covers terminals that hand the window to a server.
+constexpr KnownTerminal knownTerminals[] = {
+    {"x-terminal-emulator", nullptr, false}, {"xdg-terminal-exec", nullptr, false},
+    {"gnome-terminal", "--working-directory", true}, {"kgx", nullptr, false}, {"ptyxis", nullptr, false},
+    {"konsole", "--workdir", false}, {"xfce4-terminal", "--working-directory", true},
+    {"kitty", "--directory", false}, {"alacritty", "--working-directory", false},
+    {"foot", "--working-directory", true}, {"wezterm", nullptr, false}, {"tilix", nullptr, false},
+    {"xterm", nullptr, false}};
+#endif
 
 void requireDirectory(const QString& directory) {
   const QFileInfo info(directory);
@@ -70,9 +113,11 @@ QList<ExternalEditor> ExternalApps::detectEditors() {
       QString found;
       for (const auto& root : roots)
         if (const auto candidate = QDir(root).filePath(location); QFileInfo(candidate).isDir()) { found = candidate; break; }
-#else
+#elif defined(Q_OS_WIN)
       const auto candidate = expanded(location);
       const auto found = !candidate.isEmpty() && QFileInfo(candidate).isFile() ? candidate : QString{};
+#else
+      const auto found = findCommand(location);
 #endif
       if (found.isEmpty()) continue;
       editors.append({QString::fromLatin1(known.id), QString::fromLatin1(known.name), found});
@@ -119,6 +164,18 @@ ExternalLaunch ExternalApps::terminalLaunch(const QString& directory) {
   const auto system = qEnvironmentVariable("ComSpec", QStringLiteral("cmd.exe"));
   return {system, {QStringLiteral("/K")}, directory};
 #else
+  for (const auto& terminal : knownTerminals) {
+    const auto program = findCommand(QString::fromLatin1(terminal.command));
+    if (program.isEmpty()) continue;
+    QStringList arguments;
+    if (terminal.directoryOption) {
+      const auto option = QString::fromLatin1(terminal.directoryOption);
+      if (terminal.joined) arguments = {option + u'=' + directory};
+      else arguments = {option, directory};
+    }
+    return {program, arguments, directory};
+  }
+  // start() then reports that it could not be started.
   return {QStringLiteral("x-terminal-emulator"), {}, directory};
 #endif
 }
