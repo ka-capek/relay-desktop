@@ -1394,7 +1394,8 @@ platforms, connect/browse/restart/disconnect UI, failed metadata/vault writes,
 controller shutdown, stale requests, branch browsing without checkout and
 multi-commit conflict continuation. Private real-server authentication remains
 an installed-platform manual check; do not claim fixtures prove it.
-Windows Git service/workflow suite budgets are 180/300 seconds (per workflow shard), and the
+Windows Git service/workflow suite budgets are 300/300 seconds (per workflow shard; the
+service suite hit its former 180 seconds on the v0.6.1 tag build, run 43297198632), and the
 controller suite has 180 seconds (the v0.5.5 tag build hit its 60-second default): run
 36154921968 passed the new cases but exhausted the former total suite limits
 near the final fixtures. Individual process limits remain unchanged. Gitea PAT
